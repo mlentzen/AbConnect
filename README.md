@@ -2,34 +2,60 @@
 
 Audiobookshelf als Connect IQ Audio Provider für Garmin-Musikuhren.
 
-Die App synchronisiert Hörbücher aus einer selbst gehosteten
-[Audiobookshelf](https://www.audiobookshelf.org/)-Instanz auf die Uhr, spielt sie
-offline über den System-Mediaplayer ab und schreibt den Hörfortschritt zurück.
-
-Status: **Planung**. Der Umsetzungsplan steht in [docs/PLAN.md](docs/PLAN.md).
+Hörbücher aus einer selbst gehosteten
+[Audiobookshelf](https://www.audiobookshelf.org/)-Instanz landen auf der Uhr,
+laufen offline über den System-Mediaplayer und der Hörfortschritt geht zurück
+an den Server.
 
 ## Aufbau
 
-AbConnect besteht aus zwei Teilen:
+```
+Audiobookshelf  <--API-Key--  abconnect-proxy  <--Token--  fēnix 7X Pro
+                (lädt die m4b)                 (lädt Segmente)
+```
 
-- **`abconnect-proxy`** — Container neben Audiobookshelf, betrieben als
-  Podman-Quadlet. Lädt eine `.m4b` über die ABS-API, schneidet sie verlustfrei
-  kapitelweise in Segmente, die die Uhr abspielen kann, und löscht die Quelldatei
-  direkt danach wieder. Liefert der Uhr schlanke JSON-Antworten und hält den
-  ABS-API-Key serverseitig.
-- **Connect-IQ-App** — App vom Typ `audio-content-provider-app`, die Segmente
-  herunterlädt, abspielt und den Fortschritt puffert.
+**[`proxy/`](proxy/README.md)** — Container neben Audiobookshelf, betrieben als
+Podman-Quadlet. Lädt eine `.m4b` über die ABS-API, schneidet sie verlustfrei
+kapitelweise in Segmente von 10–20 Minuten, löscht die Quelldatei sofort wieder
+und hält den ABS-API-Key serverseitig.
+
+**[`app/`](app/README.md)** — Connect-IQ-App vom Typ
+`audio-content-provider-app`, die Segmente lädt, abspielt und den Fortschritt
+puffert.
+
+Warum ein Proxy dazwischen: eine einzelne `.m4b` wäre auf der Uhr ein Track über
+zwölf Stunden ohne Kapitelnavigation, und Connect IQ bricht große
+JSON-Antworten ohnehin ab. Die Begründungen im Einzelnen stehen in
+[docs/PLAN.md](docs/PLAN.md).
+
+## Stand
+
+| Teil | Zustand |
+|---|---|
+| `abconnect-proxy` | funktionsfähig, 140 Tests grün (inkl. echtem ffmpeg-Schnitt) |
+| Connect-IQ-App | übersetzt sauber, **noch nie auf Hardware gelaufen** |
+| Hardware-Spike (M0) | **offen** — die entscheidende offene Frage |
+
+Der Spike aus M0 steht noch aus: ein per Stream-Copy geschnittenes Segment auf
+der fēnix 7X Pro abspielen. Lehnt das Gerät solche Dateien ab, trägt der ganze
+Ansatz nicht — das gehört vor jede weitere Arbeit.
+
+## Loslegen
+
+```sh
+# Proxy: Tests
+python3 -m venv .venv && .venv/bin/pip install -e './proxy[dev]'
+.venv/bin/python -m pytest proxy/tests
+
+# Proxy: bauen und betreiben -> deploy/README.md
+podman build -t abconnect-proxy:latest ./proxy
+
+# App bauen -> app/README.md
+CIQ_HOME=/pfad/zum/sdk ./app/build.sh
+```
 
 ## Voraussetzungen
 
 - Audiobookshelf ≥ 2.26 mit API-Key
 - `abconnect-proxy` per HTTPS erreichbar
 - Garmin-Uhr mit Musikspeicher und WLAN — Zielgerät zunächst fēnix 7X Pro
-
-## Konfiguration des Proxy
-
-Ausschließlich zur Laufzeit, nichts ist im Image hinterlegt. Pflichtvariablen:
-`ABS_URL`, `ABS_API_KEY` (Podman-Secret), `ABCONNECT_TOKEN` (Uhr → Proxy).
-Optional: `CACHE_DIR`, `WORK_DIR`, `CACHE_MAX_BYTES`, `SEGMENT_TARGET_SECONDS`.
-Fehlt eine Pflichtvariable, startet der Container nicht. Beispiel-Quadlet in
-[docs/PLAN.md](docs/PLAN.md#e3--konfiguration-ausschließlich-zur-laufzeit).

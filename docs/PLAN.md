@@ -2,6 +2,10 @@
 
 Planungsdokument. Stand: 2026-09-08.
 
+> **Umsetzungsstand:** M1 (`abconnect-proxy`) ist gebaut und getestet, das
+> Gerüst der App aus M0 übersetzt sauber gegen SDK 9.2. Der Hardware-Spike aus
+> M0 steht aus und bleibt die entscheidende offene Frage — siehe R1.
+
 Ziel: eine Monkey-C-App vom Typ `audio-content-provider-app`, die Hörbücher aus
 einer selbst gehosteten [Audiobookshelf](https://www.audiobookshelf.org/)-Instanz
 auf die Garmin-Uhr synchronisiert, offline abspielt und den Hörfortschritt
@@ -397,13 +401,13 @@ Playback:      Store -> ContentIterator -> ActiveContent(ref, meta, startPos)
 
 ## 5. Roadmap
 
-**M0 — Machbarkeits-Spike (zuerst, klein, entscheidet alles)**
+**M0 — Machbarkeits-Spike (zuerst, klein, entscheidet alles)** — *App-Gerüst steht, Spike offen*
 Ein Buch der echten Bibliothek von Hand mit ffmpeg `-c copy` schneiden, per
 Mini-HTTP-Server ausliefern, mit einer Wegwerf-App auf der fēnix 7X Pro laden und
 abspielen. Beantwortet R1 und R6, bevor Code entsteht. Parallel: App-Gerüst mit
 allen vier Delegates als Stubs, Build für `fenix7xpro` grün, CI kompiliert.
 
-**M1 — `abconnect-proxy` v1**
+**M1 — `abconnect-proxy` v1** — *umgesetzt*
 Env-Validierung und `/healthz`, ABS-Client mit API-Key, Kapitelvalidierung und
 Segmentnormalisierung inkl. 15-min-Fallback, Prepare-Job mit Download → Schnitt →
 sofortiges Löschen der `.m4b`, Cache mit LRU und Pinning, `/v1/books`,
