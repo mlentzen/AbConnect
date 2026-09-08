@@ -12,7 +12,7 @@
     <string id="menuPlaybackTitle">Play</string>
     <string id="loading">Loading…</string>
     <string id="noBooks">No books found</string>
-    <string id="notConfigured">Enter proxy URL and token in the phone app first</string>
+    <string id="notConfigured">Settings needed</string>
     <string id="statusPreparing">preparing</string>
     <string id="statusReady">on watch</string>
     <string id="statusPending">not prepared</string>

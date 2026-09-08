@@ -47,6 +47,8 @@ class AbSyncDelegate extends Communications.SyncDelegate {
     //! Ein Sync lohnt sich, wenn ein ausgewähltes Buch fehlt, ein abgewähltes
     //! noch liegt oder Hörfortschritt auf dem Weg nach oben ist.
     function isSyncNeeded() as Boolean {
+        Log.code("Sync: ausgewählt", Store.selection().size());
+        Log.code("Sync: bekannt", Store.knownBooks().size());
         if (Store.progress().size() > 0) {
             return true;
         }
@@ -60,6 +62,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
     }
 
     function onStartSync() as Void {
+        Log.line("Sync: onStartSync");
         if (!_client.isConfigured()) {
             Communications.notifySyncComplete("Proxy nicht konfiguriert");
             return;
@@ -67,10 +70,13 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         _releaseQueue = orphans();
         _bookQueue = Store.selection();
         _booksTotal = _bookQueue.size();
+        Log.code("Sync: freizugeben", _releaseQueue.size());
+        Log.code("Sync: zu holen", _booksTotal);
         releaseNext();
     }
 
     function onStopSync() as Void {
+        Log.line("Sync: onStopSync");
         _stopped = true;
         Communications.cancelAllRequests();
         Communications.notifySyncComplete(null);
@@ -114,6 +120,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
     }
 
     function onReleased(code as Number, data as Dictionary or String or Null) as Void {
+        Log.code("Sync: release", code);
         // Ein fehlgeschlagenes release kostet nur Cache auf dem Server.
         releaseNext();
     }
@@ -125,6 +132,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
             return;
         }
         var bookIds = Store.progress().keys();
+        Log.code("Sync: Fortschritte", bookIds.size());
         if (bookIds.size() == 0) {
             nextBook();
             return;
@@ -149,6 +157,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
     }
 
     function onProgressPushed(code as Number, data as Dictionary or String or Null) as Void {
+        Log.code("Sync: progress", code);
         if (code == 200) {
             // Erst nach bestätigter Übernahme verwerfen — bei einem Abbruch
             // wäre der Hörfortschritt sonst weg.
@@ -190,16 +199,19 @@ class AbSyncDelegate extends Communications.SyncDelegate {
             return;
         }
         if (_bookQueue.size() == 0) {
+            Log.line("Sync: fertig, Fehler=" + ((_failure == null) ? "keiner" : _failure));
             Communications.notifySyncComplete(_failure);
             return;
         }
         var bookId = _bookQueue[0];
         _bookQueue.remove(bookId);
         _currentBook = bookId;
+        Log.line("Sync: segments für " + bookId);
         _client.segments(bookId, method(:onSegments));
     }
 
     function onSegments(code as Number, data as Dictionary or String or Null) as Void {
+        Log.code("Sync: segments", code);
         if (_stopped) {
             return;
         }
@@ -243,6 +255,8 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         }
         _downloadsTotal = _downloads.size();
         _downloadsDone = 0;
+        Log.code("Sync: Segmente gesamt", segments.size());
+        Log.code("Sync: davon zu laden", _downloadsTotal);
         downloadNext();
     }
 
@@ -274,6 +288,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
             return;
         }
         _pending = segment;
+        Log.line("Sync: lade " + path);
         _client.downloadSegment(
             path,
             SyncConfigView.stringOr(segment["encoding"], "m4a"),
@@ -282,6 +297,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
     }
 
     function onSegmentDownloaded(code as Number, data as Object?) as Void {
+        Log.code("Sync: Segment geladen", code);
         if (_stopped) {
             return;
         }

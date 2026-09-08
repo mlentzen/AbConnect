@@ -35,6 +35,7 @@ class SyncConfigView extends WatchUi.View {
             );
             return;
         }
+        Log.line("Konfig: hole Bücher");
         _client.books(1, PER_PAGE, method(:onBooks));
     }
 
@@ -51,6 +52,7 @@ class SyncConfigView extends WatchUi.View {
     }
 
     function onBooks(code as Number, data as Dictionary or String or Null) as Void {
+        Log.code("Konfig: books", code);
         if (code != 200 || !(data instanceof Dictionary)) {
             WatchUi.switchToView(new MessageView(errorText(code)), null, WatchUi.SLIDE_IMMEDIATE);
             return;
@@ -144,20 +146,26 @@ class SyncConfigDelegate extends WatchUi.Menu2InputDelegate {
         }
         var checkbox = item as WatchUi.CheckboxMenuItem;
         if (checkbox.isChecked()) {
+            Log.line("Konfig: gewählt " + id);
             Store.select(id);
             // Sofort vorbereiten lassen; das Ergebnis interessiert hier nicht,
             // der Sync fragt später ohnehin den Status ab.
             _client.prepare(id, method(:onIgnored));
         } else {
+            Log.line("Konfig: abgewählt " + id);
             Store.deselect(id);
             _client.release(id, method(:onIgnored));
         }
     }
 
+    //! Das Ergebnis ändert hier nichts mehr — für die Fehlersuche zählt aber,
+    //! ob der Proxy das Vorbereiten überhaupt angenommen hat.
     function onIgnored(code as Number, data as Dictionary or String or Null) as Void {
+        Log.code("Konfig: prepare/release", code);
     }
 
     function onBack() as Void {
+        Log.line("Konfig: zurück, Auswahl=" + Store.selection().size().toString());
         WatchUi.popView(WatchUi.SLIDE_IMMEDIATE);
     }
 }

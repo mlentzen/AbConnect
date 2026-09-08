@@ -32,6 +32,12 @@ CIQ_HOME=/pfad/zum/sdk ./build.sh
 Nötig sind das Connect-IQ-SDK, ein Entwicklerschlüssel (`CIQ_KEY`, Standard
 `~/.ciq/developer_key`) und ein Geräteprofil für `fenix7xpro`.
 
+`build.sh` liest eine `.env` neben dem Skript. Stehen dort `PROXY_URL` und
+`PROXY_TOKEN`, landen sie als `source/BuildDefaults.mc` im Build und die App
+läuft ohne weiteres Zutun los. Die Datei wird bei jedem Build neu erzeugt und
+ist nicht eingecheckt — sie enthält das Token. Was in den Einstellungen der
+Telefon-App steht, hat weiterhin Vorrang.
+
 Die echten Geräteprofile lädt nur der SDK-Manager nach einem Garmin-Login. Wer
 den nicht hat, kann mit `python3 ../tools/stub_device.py` ein **Ersatzprofil**
 erzeugen. Damit lässt sich übersetzen und typprüfen — Speicherlimits, Layout und
