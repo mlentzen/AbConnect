@@ -334,13 +334,15 @@ class AbContentIterator extends Media.ContentIterator {
 
     //! Part of the ContentIterator contract and never implemented here.
     //!
-    //! The one working third-party provider implements it and returns null on
-    //! purpose. Ours inherited whatever the base class does, which is not
-    //! written down anywhere — so it was a silent unknown sitting directly in
-    //! the path the player walks before it starts a track.
+    //! Reverted to null (the system default) as a diagnostic step: pressing
+    //! play or skip-forward produced no onSong/onCustomButton and no
+    //! Iterator.next() call at all, on-device, with content resolving fine and
+    //! the profile the only other thing standing between the player and a
+    //! track actually starting. The one working third-party provider also
+    //! returns null here.
     function repeatMode() as Media.RepeatMode? {
-        Log.line("Iterator: repeatMode -> off");
-        return Media.REPEAT_MODE_OFF;
+        Log.line("Iterator: repeatMode -> null");
+        return null;
     }
 
     function canSkip() as Boolean {
@@ -348,31 +350,15 @@ class AbContentIterator extends Media.ContentIterator {
         return true;
     }
 
+    //! Also reverted to null for the same reason as repeatMode() above — see
+    //! that comment. The custom profile (control list, skip deltas, playback
+    //! notification requirement) is the one remaining thing between content
+    //! resolving successfully and the player never calling back into us at
+    //! all. Null is what the working reference runs; if this fixes it, the
+    //! custom values come back one at a time to find which one the player
+    //! actually rejects.
     function getPlaybackProfile() as Media.PlaybackProfile? {
-        Log.line("Iterator: getPlaybackProfile");
-        var profile = new Media.PlaybackProfile();
-        // Order matters, and membership matters more. The SDK says this array
-        // "determines which native media player control options are rendered
-        // and available", and separately that "the first entry in the array may
-        // be used as a hotkey". So PLAYBACK_CONTROL_PLAYBACK has to stay — drop
-        // it and the player renders no play/pause at all — but putting it first
-        // is what bound a second play button to the hotkey next to the one on
-        // START. Skip forward is the hotkey worth having in an audiobook.
-        profile.playbackControls = [
-            Media.PLAYBACK_CONTROL_SKIP_FORWARD,
-            Media.PLAYBACK_CONTROL_PLAYBACK,
-            Media.PLAYBACK_CONTROL_SKIP_BACKWARD,
-            Media.PLAYBACK_CONTROL_PREVIOUS,
-            Media.PLAYBACK_CONTROL_NEXT
-        ] as Array<Media.PlaybackControl>;
-        // Audiobook values instead of the music default of two times 30 seconds.
-        profile.skipForwardTimeDelta = 30;
-        profile.skipBackwardTimeDelta = 15;
-        profile.attemptSkipAfterThumbsDown = false;
-        // Without these notifications the app would never learn where the listener is.
-        profile.requirePlaybackNotification = true;
-        profile.playbackNotificationThreshold = 30;
-        profile.skipPreviousThreshold = 4;
-        return profile;
+        Log.line("Iterator: getPlaybackProfile -> null");
+        return null;
     }
 }
