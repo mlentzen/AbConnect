@@ -128,19 +128,41 @@ class AbContentIterator extends Media.ContentIterator {
         var count = 0;
         var iterator = Media.getContentRefIter({ :contentType => Media.CONTENT_TYPE_AUDIO });
         var ref = iterator.next();
-        var first = null as Object?;
         while (ref != null) {
-            if (count == 0) {
-                first = ref.getId();
-            }
             count += 1;
             ref = iterator.next();
         }
         Log.code("Cache: audio entries", count);
-        Log.line("Cache: first cache ID " + describe(first));
-        if (_refs.size() > 0) {
-            Log.line("Cache: first store ID " + describe(_refs[0]));
+        Log.code("Iterator: resolvable", resolvableCount());
+    }
+
+    //! How many of our segments the cache actually hands back.
+    //!
+    //! This one number decides where the fault lies. Zero means the player was
+    //! never given anything to play and the ref IDs did not survive the round
+    //! trip through the object store; a full count means the player was handed
+    //! content and refused to decode it — a question about the audio, not
+    //! about this app.
+    private function resolvableCount() as Number {
+        var found = 0;
+        for (var i = 0; i < _refs.size(); ++i) {
+            var content = null as Media.Content?;
+            try {
+                content = Media.getCachedContentObj(
+                    new Media.ContentRef(_refs[i], Media.CONTENT_TYPE_AUDIO)
+                );
+            } catch (ex) {
+                content = null;
+            }
+            if (content != null) {
+                found += 1;
+            } else {
+                // The type is worth having: it is what a broken round trip
+                // through the store would show up as.
+                Log.line("Iterator: unresolved " + describe(_refs[i]));
+            }
         }
+        return found;
     }
 
     //! The docs say getCachedContentObj() wants a String ID for audio. On the
@@ -206,6 +228,7 @@ class AbContentIterator extends Media.ContentIterator {
             Log.code("Iterator: nothing in cache for", position);
             return null;
         }
+        Log.line("Iterator: resolved " + position.toString() + " as " + describe(_refs[position]));
         // The titles stay ours: the file holds the chapter name, but only the
         // store knows book, author and ordering.
         content.setMetadata(metadataFor(position));
@@ -274,12 +297,16 @@ class AbContentIterator extends Media.ContentIterator {
     function getPlaybackProfile() as Media.PlaybackProfile? {
         Log.line("Iterator: getPlaybackProfile");
         var profile = new Media.PlaybackProfile();
+        // PLAYBACK_CONTROL_PLAYBACK is deliberately absent. The player carries
+        // play/pause on START either way, and the docs note the first entry of
+        // this list may be bound as the device hotkey — listing it here put a
+        // second play button on DOWN. Skip forward is the one worth having
+        // there in an audiobook.
         profile.playbackControls = [
-            Media.PLAYBACK_CONTROL_PLAYBACK,
-            Media.PLAYBACK_CONTROL_PREVIOUS,
-            Media.PLAYBACK_CONTROL_NEXT,
             Media.PLAYBACK_CONTROL_SKIP_FORWARD,
-            Media.PLAYBACK_CONTROL_SKIP_BACKWARD
+            Media.PLAYBACK_CONTROL_SKIP_BACKWARD,
+            Media.PLAYBACK_CONTROL_PREVIOUS,
+            Media.PLAYBACK_CONTROL_NEXT
         ] as Array<Media.PlaybackControl>;
         // Audiobook values instead of the music default of two times 30 seconds.
         profile.skipForwardTimeDelta = 30;
