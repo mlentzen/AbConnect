@@ -42,11 +42,7 @@ class ProgressPush {
             play();
             return;
         }
-        if (!connected()) {
-            Log.line("Push: nothing to reach the server on, playing the local position");
-            play();
-            return;
-        }
+        logConnection();
         show(Rez.Strings.loading);
         _client.pushProgress(entriesIncluding(bookId), method(:onSyncedForPlay));
     }
@@ -113,11 +109,7 @@ class ProgressPush {
             show(Rez.Strings.syncNothingToDo);
             return;
         }
-        if (!connected()) {
-            Log.line("Push: nothing to reach the server on");
-            show(Rez.Strings.noPhone);
-            return;
-        }
+        logConnection();
         show(Rez.Strings.loading);
         _client.pushProgress(entries, method(:onPushed));
     }
@@ -125,9 +117,16 @@ class ProgressPush {
     function onPushed(code as Number, data as Dictionary or String or Null) as Void {
         Log.code("Push: progress", code);
         if (code != 200) {
-            WatchUi.switchToView(
-                new MessageView("HTTP " + code.toString()), null, WatchUi.SLIDE_IMMEDIATE
-            );
+            // A negative code is the radio's, not the server's: no route out.
+            // Only then is "no connection" the honest thing to say — before the
+            // attempt it was a guess, and twice it was a wrong one.
+            if (code < 0) {
+                show(Rez.Strings.noPhone);
+            } else {
+                WatchUi.switchToView(
+                    new MessageView("HTTP " + code.toString()), null, WatchUi.SLIDE_IMMEDIATE
+                );
+            }
             return;
         }
         // Only discard after confirmed acceptance — on a failure the listening
@@ -137,22 +136,25 @@ class ProgressPush {
         show(Rez.Strings.progressSent);
     }
 
-    //! Whether there is any way out at all.
+    //! What the device claims about its connections — recorded, never obeyed.
     //!
-    //! phoneConnected answers a different question — "is a phone paired to this
-    //! device" — and answered it with no in the simulator, and on a watch that
-    //! reports the link late, while a web request would have gone through
-    //! perfectly well. The SDK defines connectionAvailable as "any
-    //! communication channel is connected and available for use", which is
-    //! exactly what a request needs to know. Nothing here brings a channel up;
-    //! it only declines to guess that a working one is broken.
-    private static function connected() as Boolean {
+    //! Two flags were tried as a gate and both refused a setup that worked:
+    //! phoneConnected, which answers a different question ("is a phone paired"),
+    //! and connectionAvailable, which is defined as "any communication channel
+    //! is connected and available for use" and still said no on a watch with a
+    //! connected phone. Whatever they mean on this device, they do not mean
+    //! "a request would fail".
+    //!
+    //! So the request goes out and the radio answers. It always answers: a
+    //! callback with a negative code is what no route out looks like. The flags
+    //! stay in the log, because the next person to wonder what they really say
+    //! should be able to read it rather than guess a third time.
+    private static function logConnection() as Void {
         var settings = System.getDeviceSettings();
         Log.line(
             "Push: connection available " + settings.connectionAvailable.toString()
                 + ", phone " + settings.phoneConnected.toString()
         );
-        return settings.connectionAvailable;
     }
 
     private static function show(resource as Lang.ResourceId) as Void {
