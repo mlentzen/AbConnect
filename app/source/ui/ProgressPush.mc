@@ -136,19 +136,18 @@ class ProgressPush {
         show(Rez.Strings.progressSent);
     }
 
-    //! What the device claims about its connections — recorded, never obeyed.
+    //! What the device says about its connections, next to what it then does.
     //!
-    //! Two flags were tried as a gate and both refused a setup that worked:
-    //! phoneConnected, which answers a different question ("is a phone paired"),
-    //! and connectionAvailable, which is defined as "any communication channel
-    //! is connected and available for use" and still said no on a watch with a
-    //! connected phone. Whatever they mean on this device, they do not mean
-    //! "a request would fail".
+    //! Both flags were once used to refuse the attempt, and both turned out to
+    //! be telling the truth: launched from the media player, this watch reports
+    //! connectionAvailable false and phoneConnected false, and the request that
+    //! goes out anyway comes back -104, BLE_CONNECTION_UNAVAILABLE. There is no
+    //! route out of that context, and the flags said so.
     //!
-    //! So the request goes out and the radio answers. It always answers: a
-    //! callback with a negative code is what no route out looks like. The flags
-    //! stay in the log, because the next person to wonder what they really say
-    //! should be able to read it rather than guess a third time.
+    //! The request is sent regardless, because the radio's answer is worth more
+    //! than the prediction: it distinguishes no route (-104) from a server that
+    //! answered badly, and it costs nothing — the failure comes back at once.
+    //! The flags are logged beside it so the two can always be compared.
     private static function logConnection() as Void {
         var settings = System.getDeviceSettings();
         Log.line(
