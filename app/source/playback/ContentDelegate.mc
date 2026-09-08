@@ -2,6 +2,7 @@ import Toybox.Lang;
 import Toybox.Media;
 import Toybox.System;
 import Toybox.Time;
+import Toybox.Timer;
 
 //! Link to the system player.
 //!
@@ -15,12 +16,21 @@ class AbContentDelegate extends Media.ContentDelegate {
     //! Pause and resume come in series; without a throttle the radio would run along.
     private const PUSH_THROTTLE_SECONDS = 30;
 
+    //! How often the position between events is written down.
+    private const TICK_MS = 30000;
+
     private var _iterator as AbContentIterator?;
     private var _bookId as String?;
     private var _client as ProxyClient;
     private var _lastPush as Number;
     private var _pushing as Boolean;
     private var _lastEvent as Number;
+    private var _timer as Timer.Timer?;
+    private var _playing as Boolean;
+    private var _lastSeconds as Number;
+    private var _lastReportMs as Number;
+    private var _segment as Number;
+    private var _segmentDuration as Number;
 
     function initialize() {
         ContentDelegate.initialize();
@@ -35,8 +45,16 @@ class AbContentDelegate extends Media.ContentDelegate {
                 _bookId = books[0];
             }
         }
+        _playing = false;
+        _lastSeconds = 0;
+        _lastReportMs = System.getTimer();
+        _segment = -1;
+        _segmentDuration = 0;
         Log.line("Playback: book " + ((_bookId == null) ? "none" : _bookId));
         resetContentIterator();
+        _timer = new Timer.Timer();
+        _timer.start(method(:onTick), TICK_MS, true);
+        Log.code("Playback: position ticker every ms", TICK_MS);
     }
 
     function getContentIterator() as Media.ContentIterator? {
@@ -87,9 +105,61 @@ class AbContentDelegate extends Media.ContentDelegate {
         }
         Store.rememberPosition(bookId, Store.toNumber(parts[0]), seconds, Time.now().value());
 
+        // The anchor the ticker below counts from. A measured position always
+        // replaces an estimated one.
+        _segment = Store.toNumber(parts[0]);
+        _segmentDuration = Store.toNumber(parts[1]);
+        _lastSeconds = seconds;
+        _lastReportMs = System.getTimer();
+        _playing = stillPlayingAfter(songEvent);
+
         if (songEvent == Media.SONG_EVENT_PAUSE || songEvent == Media.SONG_EVENT_STOP) {
             pushOverPhone();
         }
+    }
+
+    //! Whether sound is still coming out once this event has been handled.
+    private function stillPlayingAfter(event as Media.SongEvent) as Boolean {
+        return !(event == Media.SONG_EVENT_PAUSE
+            || event == Media.SONG_EVENT_STOP
+            || event == Media.SONG_EVENT_COMPLETE);
+    }
+
+    //! Where the listening is between two events.
+    //!
+    //! The player reports its position when a track starts, once more when the
+    //! track passes the notification threshold, and then not again until
+    //! something is pressed — a whole chapter can pass without a word, and a
+    //! book synced in the middle of one would be reported a quarter of an hour
+    //! behind. What is written here is arithmetic rather than measurement: the
+    //! last position the player gave, plus the time that has passed since.
+    //!
+    //! Nothing in the Media API can be asked where playback is, and nothing can
+    //! make it run at other than real time — the PlaybackControl enum has no
+    //! speed entry — so the sum holds until an event says otherwise, and every
+    //! event overwrites it.
+    function onTick() as Void {
+        var bookId = _bookId;
+        if (!_playing || bookId == null || _segment < 0) {
+            return;
+        }
+        var now = System.getTimer();
+        var elapsed = now - _lastReportMs;
+        if (elapsed < 0) {
+            // System.getTimer() counts from device start and wraps. One tick is
+            // not worth a position from the far side of the wrap.
+            Log.line("Playback: the timer wrapped, waiting for the next event");
+            _lastReportMs = now;
+            return;
+        }
+        var seconds = _lastSeconds + elapsed / 1000;
+        // Never the full duration: skipFinishedSegment() reads that as a
+        // chapter listened to the end and would open the next one instead.
+        if (_segmentDuration > 0 && seconds >= _segmentDuration) {
+            seconds = _segmentDuration - 1;
+        }
+        Log.code("Playback: estimated position", seconds);
+        Store.rememberPosition(bookId, _segment, seconds, Time.now().value());
     }
 
     //! Event numbers alone are unreadable, and reading them wrong sends the
