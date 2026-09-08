@@ -3,12 +3,17 @@ import Toybox.Media;
 import Toybox.Time;
 import Toybox.WatchUi;
 
-//! The chapters of one book, and the one the listening stopped in.
+//! Identifiers of the two rows that are not chapters. Symbols, so they can
+//! never collide with a segment number — those are always numbers.
+const RESUME_ITEM = :resumeBook;
+const FROM_START_ITEM = :fromStart;
+
+//! What to do with a book: carry on, begin again, or go to a chapter.
 //!
-//! The titles are the proxy's: it cuts on the book's own chapter marks and
-//! falls back to a 15-minute grid where a book has none. Either way the store
-//! already holds the title and the duration of every segment, so this menu
-//! needs nothing from the network.
+//! The chapter titles are the proxy's: it cuts on the book's own chapter marks
+//! and falls back to a 15-minute grid where a book has none. Either way the
+//! store already holds the title and the duration of every segment, so this
+//! menu needs nothing from the network to be drawn.
 class ChapterMenu extends WatchUi.Menu2 {
 
     function initialize(bookId as String) {
@@ -17,28 +22,70 @@ class ChapterMenu extends WatchUi.Menu2 {
 
         var refs = Store.orderedRefs(bookId);
         var position = Store.position(bookId);
-        var remembered = (position == null) ? -1 : position[0];
         Log.code("Chapters: building for segments", refs.size());
 
-        // The start of a chapter is where all the ones before it end. The store
-        // knows durations, not offsets — an audiobook is cut into pieces and
-        // nobody writes down where each piece sits in the whole.
+        // Resuming comes first, and only when there is something to resume. Its
+        // subtitle says where it will land, which is worth more than a mark
+        // buried somewhere in the list below.
+        if (position != null) {
+            addItem(
+                new WatchUi.MenuItem(
+                    WatchUi.loadResource(Rez.Strings.resume) as String,
+                    landingPoint(bookId, refs, position),
+                    $.RESUME_ITEM,
+                    null
+                )
+            );
+        }
+        addItem(
+            new WatchUi.MenuItem(
+                WatchUi.loadResource(Rez.Strings.fromStart) as String,
+                null,
+                $.FROM_START_ITEM,
+                null
+            )
+        );
+
+        // Every chapter row starts its chapter at the beginning. The chapter
+        // last listened to used to be the exception and resumed mid-way — one
+        // row behaving unlike its neighbours, for no reason now that resuming
+        // has a row of its own.
+        //
+        // A chapter starts where all the ones before it end. The store knows
+        // durations, not offsets: a book is cut into pieces and nobody writes
+        // down where each piece sits in the whole.
         var start = 0;
         for (var i = 0; i < refs.size(); ++i) {
             var parts = Store.trackInfo(bookId, refs[i]);
             if (parts == null) {
                 continue;
             }
-            var segment = Store.toNumber(parts[0]);
-            var sublabel = clock(start);
-            if (segment == remembered) {
-                // The row that continues instead of restarting, and the only
-                // one that says so.
-                sublabel = sublabel + "  " + (WatchUi.loadResource(Rez.Strings.resume) as String);
-            }
-            addItem(new WatchUi.MenuItem(parts[2], sublabel, segment, null));
+            addItem(
+                new WatchUi.MenuItem(parts[2], clock(start), Store.toNumber(parts[0]), null)
+            );
             start += Store.toNumber(parts[1]);
         }
+    }
+
+    //! "Section 3 - 0:29:10": the chapter the resume lands in, and where in the
+    //! whole book that is.
+    private static function landingPoint(
+        bookId as String, refs as Array, position as Array<Number>
+    ) as String {
+        var start = 0;
+        for (var i = 0; i < refs.size(); ++i) {
+            var parts = Store.trackInfo(bookId, refs[i]);
+            if (parts == null) {
+                continue;
+            }
+            if (Store.toNumber(parts[0]) == position[0]) {
+                return parts[2] + " - " + clock(start + position[1]);
+            }
+            start += Store.toNumber(parts[1]);
+        }
+        // The remembered segment is not on the watch any more. The offset alone
+        // is still true, and saying nothing would be worse.
+        return clock(position[1]);
     }
 
     //! h:mm:ss — a chapter can begin ten hours into a book.
@@ -49,36 +96,61 @@ class ChapterMenu extends WatchUi.Menu2 {
     }
 }
 
-//! Picking a chapter is picking a starting point.
+//! Picking a row is picking a starting point.
 //!
 //! The player is never told where to begin: AbContentIterator starts wherever
 //! Store.position() points, so writing the position and starting playback is
-//! the whole mechanism. The remembered chapter is the exception — it is left
-//! alone, and so keeps the offset inside the chapter instead of restarting it.
+//! the whole mechanism. Resuming is the one row that first asks the server
+//! whether it knows better.
 class ChapterMenuDelegate extends WatchUi.Menu2InputDelegate {
 
     private var _bookId as String;
+    private var _push as ProgressPush;
 
     function initialize(bookId as String) {
         Menu2InputDelegate.initialize();
         _bookId = bookId;
+        // Held rather than made on demand: the push outlives the press, and a
+        // local one could be collected while its response is still in flight.
+        _push = new ProgressPush();
     }
 
     function onSelect(item as WatchUi.MenuItem) as Void {
-        var segment = item.getId();
-        if (!(segment instanceof Number)) {
+        var id = item.getId();
+        if (id == $.RESUME_ITEM) {
+            Log.line("Chapters: agreeing with the server before playing");
+            _push.syncThenPlay(_bookId);
             return;
         }
-        var position = Store.position(_bookId);
-        var remembered = (position == null) ? -1 : position[0];
-        if (segment != remembered) {
-            // A jump is progress too. It goes out with the next push, so the
-            // phone and the server follow the watch instead of pulling it back.
-            Log.code("Chapters: jumping to segment", segment);
-            Store.rememberPosition(_bookId, segment, 0, Time.now().value());
-        } else {
-            Log.code("Chapters: resuming segment", segment);
+        if (id == $.FROM_START_ITEM) {
+            startAt(firstSegment());
+            return;
         }
+        if (id instanceof Number) {
+            startAt(id);
+        }
+    }
+
+    //! The first segment that is really on the watch.
+    //!
+    //! A gap in the numbering would otherwise send "from the start" to a
+    //! segment that was never downloaded.
+    private function firstSegment() as Number {
+        var refs = Store.orderedRefs(_bookId);
+        for (var i = 0; i < refs.size(); ++i) {
+            var parts = Store.trackInfo(_bookId, refs[i]);
+            if (parts != null) {
+                return Store.toNumber(parts[0]);
+            }
+        }
+        return 0;
+    }
+
+    private function startAt(segment as Number) as Void {
+        // A jump is progress too. It goes out with the next push, so the phone
+        // and the server follow the watch instead of pulling it back.
+        Log.code("Chapters: starting segment", segment);
+        Store.rememberPosition(_bookId, segment, 0, Time.now().value());
         Current.set(_bookId);
         // startPlayback() ends the app and restarts it in playback mode;
         // anything after it would no longer run.
