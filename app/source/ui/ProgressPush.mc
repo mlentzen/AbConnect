@@ -42,8 +42,8 @@ class ProgressPush {
             play();
             return;
         }
-        if (!System.getDeviceSettings().phoneConnected) {
-            Log.line("Push: no phone, playing the local position");
+        if (!connected()) {
+            Log.line("Push: nothing to reach the server on, playing the local position");
             play();
             return;
         }
@@ -113,8 +113,8 @@ class ProgressPush {
             show(Rez.Strings.syncNothingToDo);
             return;
         }
-        if (!System.getDeviceSettings().phoneConnected) {
-            Log.line("Push: no phone connection");
+        if (!connected()) {
+            Log.line("Push: nothing to reach the server on");
             show(Rez.Strings.noPhone);
             return;
         }
@@ -135,6 +135,24 @@ class ProgressPush {
         Store.clearProgress();
         Progress.adopt(data);
         show(Rez.Strings.progressSent);
+    }
+
+    //! Whether there is any way out at all.
+    //!
+    //! phoneConnected answers a different question — "is a phone paired to this
+    //! device" — and answered it with no in the simulator, and on a watch that
+    //! reports the link late, while a web request would have gone through
+    //! perfectly well. The SDK defines connectionAvailable as "any
+    //! communication channel is connected and available for use", which is
+    //! exactly what a request needs to know. Nothing here brings a channel up;
+    //! it only declines to guess that a working one is broken.
+    private static function connected() as Boolean {
+        var settings = System.getDeviceSettings();
+        Log.line(
+            "Push: connection available " + settings.connectionAvailable.toString()
+                + ", phone " + settings.phoneConnected.toString()
+        );
+        return settings.connectionAvailable;
     }
 
     private static function show(resource as Lang.ResourceId) as Void {
