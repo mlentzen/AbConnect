@@ -21,11 +21,15 @@ from .abs_client import AbsAuthError, AbsClient, AbsError
 from .cache import Cache, UnsafeBookId
 from .config import Config
 from .preparer import Preparer, Status
+from .reconciler import PlaylistReconciler
 
 log = logging.getLogger(__name__)
 
 SWEEP_INTERVAL_SECONDS = 3600
 COVER_WIDTH = 300
+# Die Uhr bricht große JSON-Antworten ab; eine Sync-Playlist mit mehr als
+# hundert Büchern passt ohnehin nicht auf sie.
+MAX_PLAYLIST_BOOKS = 100
 
 
 class ProgressEntry(BaseModel):
@@ -51,12 +55,22 @@ def create_app(config: Config, *, abs_client: AbsClient | None = None) -> FastAP
             abs_client=app.state.abs, cache=app.state.cache, config=config
         )
         app.state.failures = auth.FailureTracker()
+        app.state.reconciler = PlaylistReconciler(
+            abs_client=app.state.abs,
+            cache=app.state.cache,
+            preparer=app.state.preparer,
+            config=config,
+        )
         sweeper = asyncio.create_task(_sweep_forever(app), name="cache-sweeper")
+        # Läuft im Hintergrund, damit ein neu in die Playlist gelegtes Buch
+        # schon geschnitten bereitliegt, bevor die Uhr das nächste Mal synct.
+        watcher = asyncio.create_task(app.state.reconciler.run_forever(), name="playlist-watcher")
         try:
             yield
         finally:
             sweeper.cancel()
-            await asyncio.gather(sweeper, return_exceptions=True)
+            watcher.cancel()
+            await asyncio.gather(sweeper, watcher, return_exceptions=True)
             await app.state.preparer.shutdown()
             if abs_client is None:
                 await app.state.abs.aclose()
@@ -126,6 +140,7 @@ def _register(app: FastAPI) -> None:
             "cache_bytes": cache.total_bytes(),
             "cache_max_bytes": config.cache_max_bytes,
             "books_cached": len(cache.books()),
+            "playlist": config.abs_playlist,
             "ffmpeg": True,
             "audiobookshelf": "ok",
         }
@@ -138,6 +153,11 @@ def _register(app: FastAPI) -> None:
             await request.app.state.abs.ping()
         except AbsError as error:
             report["audiobookshelf"] = str(error)
+
+        last = request.app.state.reconciler.last
+        report["playlist_found"] = last.found
+        if last.error:
+            report["playlist_error"] = last.error
 
         healthy = report["ffmpeg"] and report["audiobookshelf"] == "ok"
         return JSONResponse(report, status_code=200 if healthy else 503)
@@ -190,6 +210,46 @@ def _register(app: FastAPI) -> None:
             "pages": max(1, math.ceil(total / per_page)),
             "total": total,
         }
+
+    @app.get("/v1/playlist", dependencies=guarded)
+    async def playlist(request: Request):
+        """Die Sollvorgabe für die Uhr.
+
+        Der Abgleich läuft bei jedem Aufruf, damit ein gerade hinzugefügtes Buch
+        sofort vorbereitet wird statt erst beim nächsten Hintergrunddurchlauf.
+        """
+        result = await request.app.state.reconciler.reconcile()
+        preparer: Preparer = request.app.state.preparer
+
+        books = []
+        for book in result.books[:MAX_PLAYLIST_BOOKS]:
+            state = preparer.status(book["id"])
+            entry = {
+                "id": book["id"],
+                "title": book["title"],
+                "author": book["author"],
+                "duration": book["duration"],
+                "status": state.status.value,
+            }
+            if state.status is Status.PREPARING:
+                entry["percent"] = state.percent
+            if state.status is Status.READY:
+                entry["segments"] = state.segment_count
+            if state.status is Status.ERROR:
+                entry["error"] = state.error
+            books.append(entry)
+
+        payload = {
+            "playlist": request.app.state.config.abs_playlist,
+            "found": result.found,
+            "books": books,
+            "total": len(result.books),
+        }
+        if result.error:
+            payload["error"] = result.error
+        # Eine unauffindbare Playlist ist ein Konfigurationsfehler, kein leerer
+        # Wunsch — die Uhr darf daraufhin nichts löschen.
+        return JSONResponse(payload, status_code=200 if result.found else 409)
 
     @app.post("/v1/books/{book_id}/prepare", dependencies=guarded)
     async def prepare(request: Request, book_id: str):

@@ -145,3 +145,56 @@ def parse_book_libraries(payload: dict) -> list[str]:
         for library in (libraries or [])
         if isinstance(library, dict) and library.get("id") and library.get("mediaType", "book") == "book"
     ]
+
+
+@dataclass
+class Playlist:
+    id: str
+    name: str
+    book_ids: list[str] = field(default_factory=list)
+    #! Titel und Autor gleich mitnehmen: die eingebetteten libraryItem-Objekte
+    #! sparen der Uhr einen zweiten Aufruf pro Buch.
+    books: list[dict] = field(default_factory=list)
+
+
+def parse_playlists(payload) -> list[Playlist]:
+    """GET /api/playlists -> Playlists mit ihren Buch-IDs."""
+    entries = payload.get("playlists") if isinstance(payload, dict) else payload
+    result: list[Playlist] = []
+    for entry in entries or []:
+        if not isinstance(entry, dict) or not entry.get("id"):
+            continue
+        playlist = Playlist(id=str(entry["id"]), name=str(entry.get("name") or ""))
+        for item in entry.get("items") or []:
+            if not isinstance(item, dict):
+                continue
+            # Podcast-Folgen tragen eine episodeId; die kann die Uhr nicht
+            # adressieren, weil ein Segment immer zu einem Item gehört.
+            if item.get("episodeId"):
+                continue
+            book_id = item.get("libraryItemId")
+            if not book_id:
+                continue
+            book_id = str(book_id)
+            playlist.book_ids.append(book_id)
+            library_item = item.get("libraryItem")
+            metadata = _metadata((library_item or {}).get("media") or {})
+            playlist.books.append(
+                {
+                    "id": book_id,
+                    "title": str(metadata.get("title") or book_id),
+                    "author": _author(metadata),
+                    "duration": round(_number(((library_item or {}).get("media") or {}).get("duration")), 1),
+                }
+            )
+        result.append(playlist)
+    return result
+
+
+def find_playlist(playlists: list[Playlist], name: str) -> Playlist | None:
+    """Auflösung über den Namen — ABS kennt keine Suche danach."""
+    wanted = name.casefold().strip()
+    for playlist in playlists:
+        if playlist.name.casefold().strip() == wanted:
+            return playlist
+    return None

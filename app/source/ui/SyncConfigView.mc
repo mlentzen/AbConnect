@@ -3,14 +3,12 @@ import Toybox.Graphics;
 import Toybox.Lang;
 import Toybox.WatchUi;
 
-//! Buchauswahl.
+//! Zeigt, was laut Playlist auf die Uhr gehört und wie weit es ist.
 //!
-//! Das Ankreuzen stößt beim Proxy sofort die Vorbereitung an, statt damit bis
-//! zum Sync zu warten: bis die Uhr am Ladegerät hängt, ist das Buch dann in
-//! aller Regel geschnitten.
+//! Ausgewählt wird nicht mehr hier, sondern in Audiobookshelf: die Playlist ist
+//! die Sollvorgabe. Diese Ansicht beantwortet nur die Frage, warum ein Buch
+//! noch nicht auf der Uhr ist.
 class SyncConfigView extends WatchUi.View {
-
-    private const PER_PAGE = 40;
 
     private var _client as ProxyClient;
     private var _menuShown as Boolean;
@@ -23,19 +21,14 @@ class SyncConfigView extends WatchUi.View {
 
     function onShow() as Void {
         if (_menuShown) {
-            // Rückkehr aus dem Menü: die Ansicht hat ihren Zweck erfüllt.
             WatchUi.popView(WatchUi.SLIDE_IMMEDIATE);
             return;
         }
         if (!_client.isConfigured()) {
-            WatchUi.switchToView(
-                new MessageView(WatchUi.loadResource(Rez.Strings.notConfigured) as String),
-                null,
-                WatchUi.SLIDE_IMMEDIATE
-            );
+            showMessage(Rez.Strings.notConfigured);
             return;
         }
-        _client.books(1, PER_PAGE, method(:onBooks));
+        _client.playlist(method(:onPlaylist));
     }
 
     function onUpdate(dc as Graphics.Dc) as Void {
@@ -50,73 +43,79 @@ class SyncConfigView extends WatchUi.View {
         );
     }
 
-    function onBooks(code as Number, data as Dictionary or String or Null) as Void {
+    function onPlaylist(code as Number, data as Dictionary or String or Null) as Void {
+        if (code == 409) {
+            showMessage(Rez.Strings.syncNoPlaylist);
+            return;
+        }
+        if (code == 401 || code == 403) {
+            showMessage(Rez.Strings.notConfigured);
+            return;
+        }
         if (code != 200 || !(data instanceof Dictionary)) {
-            WatchUi.switchToView(new MessageView(errorText(code)), null, WatchUi.SLIDE_IMMEDIATE);
+            WatchUi.switchToView(new MessageView("HTTP " + code.toString()), null, WatchUi.SLIDE_IMMEDIATE);
             return;
         }
         var books = data["books"];
         if (!(books instanceof Array) || books.size() == 0) {
-            WatchUi.switchToView(
-                new MessageView(WatchUi.loadResource(Rez.Strings.noBooks) as String),
-                null,
-                WatchUi.SLIDE_IMMEDIATE
-            );
+            showMessage(Rez.Strings.playlistEmpty);
             return;
         }
-        showMenu(books as Array<Dictionary>);
-    }
 
-    private function showMenu(books as Array<Dictionary>) as Void {
-        var menu = new WatchUi.CheckboxMenu({ :title => Rez.Strings.menuSyncTitle });
+        var title = stringOr(data["playlist"], "");
+        var menu = new WatchUi.Menu2({ :title => title.length() > 0 ? title : Rez.Strings.menuSyncTitle });
         for (var i = 0; i < books.size(); ++i) {
             var book = books[i];
-            var id = book["id"];
-            if (!(id instanceof String)) {
+            if (!(book instanceof Dictionary)) {
                 continue;
             }
+            var id = book["id"];
             menu.addItem(
-                new WatchUi.CheckboxMenuItem(
-                    stringOr(book["title"], id),
-                    subLabel(book),
+                new WatchUi.MenuItem(
+                    stringOr(book["title"], stringOr(id, "?")),
+                    statusLine(book),
                     id,
-                    Store.isSelected(id),
                     null
                 )
             );
         }
         _menuShown = true;
-        WatchUi.pushView(menu, new SyncConfigDelegate(_client, books), WatchUi.SLIDE_IMMEDIATE);
+        WatchUi.pushView(menu, new SyncConfigDelegate(), WatchUi.SLIDE_IMMEDIATE);
     }
 
-    //! Autor plus Zustand — der Nutzer soll sehen, was noch vorbereitet wird.
-    private function subLabel(book as Dictionary) as String {
-        var author = stringOr(book["author"], "");
+    //! Zustand im Klartext — der Nutzer soll nicht raten, warum ein Buch fehlt.
+    private function statusLine(book as Dictionary) as String {
         var status = book["status"];
-        var note = "";
-        if (status instanceof String) {
-            if (status.equals("ready")) {
-                note = WatchUi.loadResource(Rez.Strings.statusReady) as String;
-            } else if (status.equals("preparing")) {
-                note = WatchUi.loadResource(Rez.Strings.statusPreparing) as String;
-            } else if (status.equals("error")) {
-                note = WatchUi.loadResource(Rez.Strings.statusError) as String;
+        if (!(status instanceof String)) {
+            return "";
+        }
+        if (status.equals("ready")) {
+            var local = (book["id"] instanceof String) && Store.localTracks(book["id"] as String).size() > 0;
+            if (local) {
+                return WatchUi.loadResource(Rez.Strings.statusReady) as String;
             }
+            return WatchUi.loadResource(Rez.Strings.statusWaitingForSync) as String;
         }
-        if (note.length() == 0) {
-            return author;
+        if (status.equals("preparing")) {
+            var percent = book["percent"];
+            var text = WatchUi.loadResource(Rez.Strings.statusPreparing) as String;
+            if (percent instanceof Number) {
+                return text + " " + percent.toString() + " %";
+            }
+            return text;
         }
-        if (author.length() == 0) {
-            return note;
+        if (status.equals("error")) {
+            return stringOr(book["error"], WatchUi.loadResource(Rez.Strings.statusError) as String);
         }
-        return author + " · " + note;
+        return WatchUi.loadResource(Rez.Strings.statusPending) as String;
     }
 
-    private function errorText(code as Number) as String {
-        if (code == 401 || code == 403) {
-            return WatchUi.loadResource(Rez.Strings.notConfigured) as String;
-        }
-        return "HTTP " + code.toString();
+    private function showMessage(resource as Lang.ResourceId) as Void {
+        WatchUi.switchToView(
+            new MessageView(WatchUi.loadResource(resource) as String),
+            null,
+            WatchUi.SLIDE_IMMEDIATE
+        );
     }
 
     static function stringOr(value as Object?, fallback as String) as String {
@@ -127,34 +126,14 @@ class SyncConfigView extends WatchUi.View {
     }
 }
 
-//! Nimmt die Häkchen entgegen und stößt das Vorbereiten an.
+//! Die Liste ist reine Anzeige — es gibt nichts auszuwählen.
 class SyncConfigDelegate extends WatchUi.Menu2InputDelegate {
 
-    private var _client as ProxyClient;
-
-    function initialize(client as ProxyClient, books as Array<Dictionary>) {
+    function initialize() {
         Menu2InputDelegate.initialize();
-        _client = client;
     }
 
     function onSelect(item as WatchUi.MenuItem) as Void {
-        var id = item.getId();
-        if (!(id instanceof String)) {
-            return;
-        }
-        var checkbox = item as WatchUi.CheckboxMenuItem;
-        if (checkbox.isChecked()) {
-            Store.select(id);
-            // Sofort vorbereiten lassen; das Ergebnis interessiert hier nicht,
-            // der Sync fragt später ohnehin den Status ab.
-            _client.prepare(id, method(:onIgnored));
-        } else {
-            Store.deselect(id);
-            _client.release(id, method(:onIgnored));
-        }
-    }
-
-    function onIgnored(code as Number, data as Dictionary or String or Null) as Void {
     }
 
     function onBack() as Void {

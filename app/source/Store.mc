@@ -1,5 +1,6 @@
 import Toybox.Application;
 import Toybox.Lang;
+import Toybox.Time;
 
 //! Zugriff auf den Object Store.
 //!
@@ -16,39 +17,31 @@ module Store {
         }
     }
 
-    // --- Auswahl -------------------------------------------------------------
+    // --- Sollvorgabe aus der Playlist ----------------------------------------
 
-    function selection() as Array<String> {
-        var stored = Application.Storage.getValue(Keys.SELECTION);
+    //! Letzter bekannter Stand der Playlist.
+    function desired() as Array<String> {
+        var stored = Application.Storage.getValue(Keys.DESIRED);
         if (stored instanceof Array) {
             return stored as Array<String>;
         }
         return [] as Array<String>;
     }
 
-    function setSelection(ids as Array<String>) as Void {
-        Application.Storage.setValue(Keys.SELECTION, ids);
+    //! Nur nach einer *erfolgreichen* Abfrage aufrufen. Eine nicht erreichbare
+    //! oder unauffindbare Playlist darf nie als leere Vorgabe durchgehen —
+    //! sonst räumt der nächste Sync die Uhr leer.
+    function setDesired(ids as Array<String>) as Void {
+        Application.Storage.setValue(Keys.DESIRED, ids);
+        Application.Storage.setValue(Keys.LAST_CHECK, Time.now().value());
     }
 
-    function isSelected(bookId as String) as Boolean {
-        return selection().indexOf(bookId) >= 0;
-    }
-
-    function select(bookId as String) as Void {
-        var ids = selection();
-        if (ids.indexOf(bookId) < 0) {
-            ids.add(bookId);
-            setSelection(ids);
+    function lastCheck() as Number {
+        var stored = Application.Storage.getValue(Keys.LAST_CHECK);
+        if (stored instanceof Number) {
+            return stored;
         }
-    }
-
-    function deselect(bookId as String) as Void {
-        var ids = selection();
-        var index = ids.indexOf(bookId);
-        if (index >= 0) {
-            ids.remove(bookId);
-            setSelection(ids);
-        }
+        return 0;
     }
 
     // --- Lokaler Bestand -----------------------------------------------------
@@ -167,6 +160,30 @@ module Store {
             return null;
         }
         return [toNumber(parts[0]), toNumber(parts[1]), toNumber(parts[2])] as Array<Number>;
+    }
+
+    //! Der gepufferte Fortschritt in der Form, die /v1/progress erwartet.
+    //! Sync und Pausen-Push schicken dieselben Daten — deshalb hier und nicht
+    //! zweimal an den Aufrufstellen.
+    function progressEntries() as Array<Dictionary> {
+        var entries = [] as Array<Dictionary>;
+        var bookIds = progress().keys();
+        for (var i = 0; i < bookIds.size(); ++i) {
+            var bookId = bookIds[i];
+            if (!(bookId instanceof String)) {
+                continue;
+            }
+            var spot = position(bookId);
+            if (spot != null) {
+                entries.add({
+                    "book_id" => bookId,
+                    "segment" => spot[0],
+                    "offset" => spot[1],
+                    "ts" => spot[2]
+                });
+            }
+        }
+        return entries;
     }
 
     function clearProgress() as Void {

@@ -1,6 +1,8 @@
 import Toybox.Communications;
 import Toybox.Lang;
 import Toybox.Media;
+import Toybox.Time;
+import Toybox.WatchUi;
 
 //! Der Sync selbst.
 //!
@@ -14,7 +16,6 @@ import Toybox.Media;
 class AbSyncDelegate extends Communications.SyncDelegate {
 
     private var _client as ProxyClient;
-    private var _releaseQueue as Array<String>;
     private var _bookQueue as Array<String>;
     private var _downloads as Array<Dictionary>;
     private var _pending as Dictionary?;
@@ -30,7 +31,6 @@ class AbSyncDelegate extends Communications.SyncDelegate {
     function initialize() {
         SyncDelegate.initialize();
         _client = new ProxyClient();
-        _releaseQueue = [] as Array<String>;
         _bookQueue = [] as Array<String>;
         _downloads = [] as Array<Dictionary>;
         _pending = null;
@@ -44,19 +44,26 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         _stopped = false;
     }
 
-    //! Ein Sync lohnt sich, wenn ein ausgewähltes Buch fehlt, ein abgewähltes
-    //! noch liegt oder Hörfortschritt auf dem Weg nach oben ist.
+    //! Ein Sync lohnt sich, wenn Fortschritt aussteht, der letzte bekannte
+    //! Stand der Playlist nicht zum lokalen Bestand passt — oder wenn dieser
+    //! Stand schlicht zu alt ist.
+    //!
+    //! Der letzte Punkt ist der wichtige: ohne ihn bliebe ein neu in die
+    //! Playlist gelegtes Buch unbemerkt, weil die Uhr offline nichts davon weiß.
     function isSyncNeeded() as Boolean {
         if (Store.progress().size() > 0) {
             return true;
         }
-        var selected = Store.selection();
-        for (var i = 0; i < selected.size(); ++i) {
-            if (Store.localTracks(selected[i]).size() == 0) {
+        if (Time.now().value() - Store.lastCheck() > Keys.PLAYLIST_MAX_AGE_SECONDS) {
+            return true;
+        }
+        var wanted = Store.desired();
+        for (var i = 0; i < wanted.size(); ++i) {
+            if (Store.localTracks(wanted[i]).size() == 0) {
                 return true;
             }
         }
-        return orphans().size() > 0;
+        return orphans(wanted).size() > 0;
     }
 
     function onStartSync() as Void {
@@ -64,10 +71,9 @@ class AbSyncDelegate extends Communications.SyncDelegate {
             Communications.notifySyncComplete("Proxy nicht konfiguriert");
             return;
         }
-        _releaseQueue = orphans();
-        _bookQueue = Store.selection();
-        _booksTotal = _bookQueue.size();
-        releaseNext();
+        // Fortschritt zuerst: er ist klein und darf nicht an einem
+        // abbrechenden Download hängen bleiben.
+        pushProgress();
     }
 
     function onStopSync() as Void {
@@ -76,33 +82,19 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         Communications.notifySyncComplete(null);
     }
 
-    // --- Phase 1: abgewählte Bücher entfernen --------------------------------
+    // --- Aufräumen ------------------------------------------------------------
 
-    //! Bücher, von denen Segmente liegen, die aber nicht mehr gewählt sind.
-    private function orphans() as Array<String> {
+    //! Bücher, von denen Segmente liegen, die aber nicht mehr in der Playlist
+    //! stehen.
+    private function orphans(wanted as Array<String>) as Array<String> {
         var result = [] as Array<String>;
-        var selected = Store.selection();
         var known = Store.knownBooks();
         for (var i = 0; i < known.size(); ++i) {
-            if (selected.indexOf(known[i]) < 0) {
+            if (wanted.indexOf(known[i]) < 0) {
                 result.add(known[i]);
             }
         }
         return result;
-    }
-
-    private function releaseNext() as Void {
-        if (_stopped) {
-            return;
-        }
-        if (_releaseQueue.size() == 0) {
-            pushProgress();
-            return;
-        }
-        var bookId = _releaseQueue[0];
-        _releaseQueue.remove(bookId);
-        deleteLocal(bookId);
-        _client.release(bookId, method(:onReleased));
     }
 
     private function deleteLocal(bookId as String) as Void {
@@ -113,37 +105,16 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         Store.forgetBook(bookId);
     }
 
-    function onReleased(code as Number, data as Dictionary or String or Null) as Void {
-        // Ein fehlgeschlagenes release kostet nur Cache auf dem Server.
-        releaseNext();
-    }
-
-    // --- Phase 2: Hörfortschritt melden --------------------------------------
+    // --- Phase 1: Hörfortschritt melden --------------------------------------
 
     private function pushProgress() as Void {
         if (_stopped) {
             return;
         }
-        var bookIds = Store.progress().keys();
-        if (bookIds.size() == 0) {
-            nextBook();
+        var entries = Store.progressEntries();
+        if (entries.size() == 0) {
+            fetchPlaylist();
             return;
-        }
-        var entries = [] as Array<Dictionary>;
-        for (var i = 0; i < bookIds.size(); ++i) {
-            var bookId = bookIds[i];
-            if (!(bookId instanceof String)) {
-                continue;
-            }
-            var position = Store.position(bookId);
-            if (position != null) {
-                entries.add({
-                    "book_id" => bookId,
-                    "segment" => position[0],
-                    "offset" => position[1],
-                    "ts" => position[2]
-                });
-            }
         }
         _client.pushProgress(entries, method(:onProgressPushed));
     }
@@ -155,7 +126,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
             Store.clearProgress();
             adoptServerPositions(data);
         }
-        nextBook();
+        fetchPlaylist();
     }
 
     //! Wo der Server weiter war als die Uhr, springt die Uhr nach.
@@ -181,6 +152,59 @@ class AbSyncDelegate extends Communications.SyncDelegate {
                 }
             }
         }
+    }
+
+    // --- Phase 2: Playlist lesen ---------------------------------------------
+
+    private function fetchPlaylist() as Void {
+        if (_stopped) {
+            return;
+        }
+        _client.playlist(method(:onPlaylist));
+    }
+
+    function onPlaylist(code as Number, data as Dictionary or String or Null) as Void {
+        if (_stopped) {
+            return;
+        }
+        if (code == 409) {
+            // Playlist nicht gefunden. Das ist ein Konfigurationsfehler, kein
+            // leerer Wunsch — hier wird nichts gelöscht.
+            Communications.notifySyncComplete(
+                WatchUi.loadResource(Rez.Strings.syncNoPlaylist) as String
+            );
+            return;
+        }
+        if (code != 200 || !(data instanceof Dictionary)) {
+            // Ohne frische Vorgabe bleibt alles, wie es ist.
+            Communications.notifySyncComplete("HTTP " + code.toString());
+            return;
+        }
+
+        var books = data["books"];
+        if (!(books instanceof Array)) {
+            Communications.notifySyncComplete(null);
+            return;
+        }
+
+        var wanted = [] as Array<String>;
+        for (var i = 0; i < books.size(); ++i) {
+            var book = books[i];
+            if (book instanceof Dictionary && book["id"] instanceof String) {
+                wanted.add(book["id"] as String);
+            }
+        }
+        Store.setDesired(wanted);
+
+        // Was nicht mehr in der Playlist steht, verschwindet auch von der Uhr.
+        var gone = orphans(wanted);
+        for (var i = 0; i < gone.size(); ++i) {
+            deleteLocal(gone[i]);
+        }
+
+        _bookQueue = wanted;
+        _booksTotal = _bookQueue.size();
+        nextBook();
     }
 
     // --- Phase 3: Bücher holen -----------------------------------------------

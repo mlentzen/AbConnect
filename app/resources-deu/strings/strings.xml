@@ -3,8 +3,6 @@
     <string id="settingProxyUrlPrompt">Basis-URL des abconnect-proxy, z. B. https://abconnect.example</string>
     <string id="settingProxyTokenTitle">Proxy-Token</string>
     <string id="settingProxyTokenPrompt">Der ABCONNECT_TOKEN des Proxy</string>
-    <string id="settingDeleteFinishedTitle">Gehörte Bücher löschen</string>
-    <string id="settingDeleteFinishedPrompt">Buch von der Uhr entfernen, sobald es zu Ende gehört ist</string>
 
     <string id="menuSyncTitle">Bücher</string>
     <string id="menuPlaybackTitle">Abspielen</string>
@@ -20,4 +18,7 @@
     <string id="nothingOnWatch">Noch kein Buch auf der Uhr</string>
     <string id="syncNothingToDo">Nichts zu synchronisieren</string>
     <string id="syncStillPreparing">Wird auf dem Server noch vorbereitet</string>
+    <string id="syncNoPlaylist">Playlist auf dem Server nicht gefunden</string>
+    <string id="playlistEmpty">Die Playlist ist leer</string>
+    <string id="statusWaitingForSync">bereit, wartet auf Sync</string>
 </strings>

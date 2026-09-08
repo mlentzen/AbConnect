@@ -12,10 +12,14 @@ Object Store — flach, weil jeder Wert dort auf 8 KB begrenzt ist.
 
 | Datei | Modus |
 |---|---|
-| `ui/SyncConfigView.mc` | Sync-Konfiguration: Buchauswahl, stößt `prepare` an |
-| `sync/SyncDelegate.mc` | Sync: freigeben, Fortschritt melden, Segmente laden |
+| `ui/SyncConfigView.mc` | Sync-Konfiguration: zeigt die Playlist und ihren Zustand |
+| `sync/SyncDelegate.mc` | Sync: Fortschritt melden, Playlist lesen, spiegeln |
 | `ui/PlaybackConfigView.mc` | Playback-Konfiguration: welches Buch |
 | `playback/ContentDelegate.mc`, `ContentIterator.mc` | Playback |
+
+Ausgewählt wird nicht auf der Uhr, sondern in Audiobookshelf: die Playlist
+`Garmin` ist die Sollvorgabe, der Sync spiegelt sie. Fehlt die Playlist oder ist
+der Server nicht erreichbar, wird nichts gelöscht.
 
 Zwei Details machen daraus eine Hörbuch- statt einer Musik-App:
 `Media.ContentMetadata` wird selbst gesetzt (die Segmenttitel kommen aus dem
@@ -46,4 +50,6 @@ Offen:
 - Typprüfung Stufe 3 (strict): 27 Meldungen, alle zu generischen Typparametern
   von `Storage`, `Dictionary` und `Method`.
 - Launcher-Icon ist ein transparenter Platzhalter.
-- Buchliste zeigt nur die erste Seite (40 Bücher), kein Blättern.
+- Playlist-Ansicht zeigt bis zu 100 Bücher ohne Blättern.
+- Der Fortschritts-Push beim Pausieren ist ungetestet: ob die Uhr während der
+  Wiedergabe überhaupt eine Telefonverbindung hält, zeigt erst die Hardware.

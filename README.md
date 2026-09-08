@@ -23,6 +23,10 @@ und hält den ABS-API-Key serverseitig.
 `audio-content-provider-app`, die Segmente lädt, abspielt und den Fortschritt
 puffert.
 
+Was auf die Uhr kommt, entscheidet die Audiobookshelf-Playlist **`Garmin`**:
+Buch hineinlegen, es erscheint; herausnehmen, es verschwindet. Der Hörfortschritt
+geht beim Pausieren über Bluetooth und beim Sync über WLAN zurück an den Server.
+
 Warum ein Proxy dazwischen: eine einzelne `.m4b` wäre auf der Uhr ein Track über
 zwölf Stunden ohne Kapitelnavigation, und Connect IQ bricht große
 JSON-Antworten ohnehin ab. Die Begründungen im Einzelnen stehen in
@@ -32,7 +36,7 @@ JSON-Antworten ohnehin ab. Die Begründungen im Einzelnen stehen in
 
 | Teil | Zustand |
 |---|---|
-| `abconnect-proxy` | funktionsfähig, 140 Tests grün (inkl. echtem ffmpeg-Schnitt) |
+| `abconnect-proxy` | funktionsfähig, 155 Tests grün (inkl. echtem ffmpeg-Schnitt) |
 | Connect-IQ-App | übersetzt sauber, **noch nie auf Hardware gelaufen** |
 | Hardware-Spike (M0) | **offen** — die entscheidende offene Frage |
 

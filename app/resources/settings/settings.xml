@@ -5,7 +5,4 @@
     <setting propertyKey="@Properties.proxyToken" title="@Strings.settingProxyTokenTitle" prompt="@Strings.settingProxyTokenPrompt">
         <settingConfig type="alphaNumeric" maxLength="120" required="true"/>
     </setting>
-    <setting propertyKey="@Properties.deleteFinished" title="@Strings.settingDeleteFinishedTitle" prompt="@Strings.settingDeleteFinishedPrompt">
-        <settingConfig type="boolean"/>
-    </setting>
 </settings>

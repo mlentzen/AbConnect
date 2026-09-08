@@ -14,7 +14,15 @@ from pathlib import Path
 
 import httpx
 
-from .parsing import ParsedItem, parse_book_libraries, parse_item, parse_listing
+from .parsing import (
+    ParsedItem,
+    Playlist,
+    find_playlist,
+    parse_book_libraries,
+    parse_item,
+    parse_listing,
+    parse_playlists,
+)
 
 log = logging.getLogger(__name__)
 
@@ -107,6 +115,16 @@ class AbsClient:
             books.sort(key=lambda b: b["title"].casefold())
             self._listing = (now, books)
             return books
+
+    async def playlist(self, name: str) -> Playlist | None:
+        """Playlist über ihren Namen holen.
+
+        ABS kann Playlists nicht nach Namen suchen, also wird die Liste geholt
+        und lokal aufgelöst. Gibt es keine mit diesem Namen, kommt None zurück —
+        und der Aufrufer darf daraus *nicht* auf eine leere Playlist schließen.
+        """
+        payload = await self._json("/api/playlists")
+        return find_playlist(parse_playlists(payload), name)
 
     async def get_item(self, item_id: str) -> ParsedItem:
         return parse_item(await self._json(f"/api/items/{item_id}", params={"expanded": 1}))

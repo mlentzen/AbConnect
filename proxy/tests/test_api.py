@@ -15,6 +15,21 @@ TOKEN = "watch-token-abcdef"
 HEAD = {"Authorization": f"Bearer {TOKEN}"}
 
 LIBRARIES = {"libraries": [{"id": "lib1", "mediaType": "book"}]}
+PLAYLISTS = {
+    "playlists": [
+        {
+            "id": "pl1",
+            "name": "Garmin",
+            "items": [
+                {
+                    "libraryItemId": "li_a",
+                    "libraryItem": {"media": {"duration": 3600, "metadata": {"title": "Amerika", "authorName": "Kafka"}}},
+                }
+            ],
+        },
+        {"id": "pl2", "name": "Andere", "items": []},
+    ]
+}
 LISTING = {
     "total": 2,
     "results": [
@@ -24,9 +39,11 @@ LISTING = {
 }
 
 
-def abs_handler(progress_payload=None, on_patch=None):
+def abs_handler(progress_payload=None, on_patch=None, playlists=None):
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
+        if path == "/api/playlists":
+            return httpx.Response(200, json=PLAYLISTS if playlists is None else playlists)
         if path == "/api/libraries":
             return httpx.Response(200, json=LIBRARIES)
         if path.endswith("/items"):
@@ -175,7 +192,9 @@ class TestSegments:
         with build_client(config) as client:
             response = client.get("/v1/books/li_a/segments", headers=HEAD)
         assert response.status_code == 409
-        assert "pending" in response.json()["detail"]
+        # Der genaue Zustand haengt davon ab, ob der Playlist-Abgleich schon
+        # zugeschlagen hat - entscheidend ist, dass "nicht bereit" gemeldet wird.
+        assert "nicht bereit" in response.json()["detail"]
 
     def test_returns_the_segment_list_with_urls(self, config):
         prepared_book(config)
@@ -303,3 +322,58 @@ class TestRelease:
             assert cache.pinned("li_a")
             assert client.post("/v1/books/li_a/release", headers=HEAD).status_code == 200
         assert not cache.pinned("li_a")
+
+
+class TestPlaylist:
+    def test_reports_the_playlist_contents_with_status(self, config):
+        prepared_book(config)
+        with build_client(config) as client:
+            payload = client.get("/v1/playlist", headers=HEAD).json()
+
+        assert payload["playlist"] == "Garmin"
+        assert payload["found"] is True
+        assert [b["id"] for b in payload["books"]] == ["li_a"]
+        assert payload["books"][0]["status"] == "ready"
+        assert payload["books"][0]["title"] == "Amerika"
+
+    def test_a_book_added_to_the_playlist_gets_prepared(self, config):
+        with build_client(config) as client:
+            payload = client.get("/v1/playlist", headers=HEAD).json()
+
+        assert payload["books"][0]["status"] in ("preparing", "error")
+
+    def test_a_book_removed_from_the_playlist_is_released(self, config):
+        cache = prepared_book(config)
+        prepared_book(config, book_id="li_gone")
+        cache.pin("li_gone")
+
+        with build_client(config) as client:
+            client.get("/v1/playlist", headers=HEAD)
+
+        assert not cache.pinned("li_gone")
+        assert cache.pinned("li_a")
+
+    def test_a_missing_playlist_answers_409_and_touches_nothing(self, config):
+        cache = prepared_book(config)
+        cache.pin("li_a")
+        empty = {"playlists": [{"id": "pl2", "name": "Andere", "items": []}]}
+
+        with build_client(config, abs_handler(playlists=empty)) as client:
+            response = client.get("/v1/playlist", headers=HEAD)
+
+        assert response.status_code == 409
+        assert response.json()["found"] is False
+        assert "existiert" in response.json()["error"]
+        # Entscheidend: die Uhr darf daraufhin nichts loeschen.
+        assert cache.pinned("li_a")
+
+    def test_playlist_needs_a_token(self, config):
+        with build_client(config) as client:
+            assert client.get("/v1/playlist").status_code == 401
+
+    def test_healthz_reports_whether_the_playlist_was_found(self, config):
+        with build_client(config) as client:
+            client.get("/v1/playlist", headers=HEAD)
+            report = client.get("/healthz").json()
+        assert report["playlist"] == "Garmin"
+        assert report["playlist_found"] is True

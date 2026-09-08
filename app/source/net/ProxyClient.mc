@@ -60,6 +60,11 @@ class ProxyClient {
 
     // --- Bibliothek ----------------------------------------------------------
 
+    //! Die Sollvorgabe: was in der Playlist auf dem Server liegt.
+    function playlist(callback as Method) as Void {
+        Communications.makeWebRequest(url("/v1/playlist"), null, jsonOptions(), callback);
+    }
+
     function books(page as Number, perPage as Number, callback as Method) as Void {
         Communications.makeWebRequest(
             url("/v1/books"),

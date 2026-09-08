@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULTS = {
+    "ABS_PLAYLIST": "Garmin",
+    "PLAYLIST_POLL_SECONDS": "600",
     "CACHE_DIR": "/var/cache/abconnect",
     "WORK_DIR": "/var/tmp/abconnect",
     "CACHE_MAX_BYTES": str(200 * 1024**3),
@@ -37,7 +39,9 @@ class ConfigError(Exception):
 class Config:
     abs_url: str
     abs_api_key: str
+    abs_playlist: str
     tokens: tuple[str, ...]
+    playlist_poll_seconds: int
     cache_dir: Path
     work_dir: Path
     cache_max_bytes: int
@@ -82,6 +86,11 @@ def load(env: dict[str, str] | None = None) -> Config:
     if not abs_api_key:
         problems.append("ABS_API_KEY fehlt (als Podman-Secret einhängen)")
 
+    # Die Playlist ist die Sollvorgabe: was drin liegt, kommt auf die Uhr.
+    abs_playlist = (env.get("ABS_PLAYLIST") or DEFAULTS["ABS_PLAYLIST"]).strip()
+    if not abs_playlist:
+        problems.append("ABS_PLAYLIST darf nicht leer sein")
+
     # Komma-Liste: der neue Token kann gesetzt werden, bevor der alte aus den
     # Uhreneinstellungen verschwunden ist.
     tokens = tuple(t.strip() for t in (env.get("ABCONNECT_TOKEN") or "").split(",") if t.strip())
@@ -96,6 +105,7 @@ def load(env: dict[str, str] | None = None) -> Config:
     seg_min = _int(env, "SEGMENT_MIN_SECONDS", problems, minimum=1)
     seg_max = _int(env, "SEGMENT_MAX_SECONDS", problems, minimum=60)
     cover_ttl = _int(env, "COVER_URL_TTL_SECONDS", problems, minimum=60)
+    poll = _int(env, "PLAYLIST_POLL_SECONDS", problems, minimum=60)
     timeout = _int(env, "HTTP_TIMEOUT_SECONDS", problems, minimum=5)
 
     if not seg_min <= target <= seg_max:
@@ -109,7 +119,9 @@ def load(env: dict[str, str] | None = None) -> Config:
     return Config(
         abs_url=abs_url,
         abs_api_key=abs_api_key,
+        abs_playlist=abs_playlist,
         tokens=tokens,
+        playlist_poll_seconds=poll,
         cache_dir=Path(env.get("CACHE_DIR") or DEFAULTS["CACHE_DIR"]),
         work_dir=Path(env.get("WORK_DIR") or DEFAULTS["WORK_DIR"]),
         cache_max_bytes=cache_max,

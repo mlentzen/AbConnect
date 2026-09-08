@@ -2,9 +2,9 @@
 
 Planungsdokument. Stand: 2026-09-08.
 
-> **Umsetzungsstand:** M1 (`abconnect-proxy`) ist gebaut und getestet, das
-> Gerüst der App aus M0 übersetzt sauber gegen SDK 9.2. Der Hardware-Spike aus
-> M0 steht aus und bleibt die entscheidende offene Frage — siehe R1.
+> **Umsetzungsstand:** Proxy und App sind gebaut; die Playlist-Spiegelung und
+> der Fortschritts-Push beim Pausieren laufen. Der Hardware-Spike aus M0 steht
+> aus und bleibt die entscheidende offene Frage — siehe R1.
 
 Ziel: eine Monkey-C-App vom Typ `audio-content-provider-app`, die Hörbücher aus
 einer selbst gehosteten [Audiobookshelf](https://www.audiobookshelf.org/)-Instanz
@@ -17,6 +17,8 @@ zurückschreibt.
 * Bibliothek überwiegend Einzeldatei-`.m4b` **mit** Kapitelmarken
 * Testgerät fēnix 7X Pro (`fenix7xpro`, API Level 5.2)
 * HTTPS mit gültigen Zertifikaten ist gegeben
+* Sollvorgabe ist die Audiobookshelf-**Playlist „Garmin"**, nicht eine Auswahl
+  auf der Uhr
 * Companion-Server läuft als **Podman-Quadlet** im bestehenden Stack —
   **ohne gemeinsames Dateisystem mit ABS** und **ohne einkompilierte
   Serveradresse oder Schlüssel**
@@ -155,6 +157,32 @@ Schritt 7 ist bewusst früh: nach dem Schnitt hält der Proxy nur noch die Segme
 deren Gesamtgröße dank Stream-Copy ungefähr der Quelldatei entspricht. Der
 Spitzenbedarf von ~2× Buchgröße besteht nur während des Jobs.
 
+### E2a — Die Playlist ist die Sollvorgabe
+
+Ausgewählt wird in Audiobookshelf, nicht auf der Uhr: was in der Playlist
+`ABS_PLAYLIST` (Default `Garmin`) liegt, gehört auf die Uhr. Kommt ein Buch dazu,
+erscheint es; fliegt es raus, verschwindet es. Das erspart die Auswahl auf einem
+280-Pixel-Display und macht das Handy zur einzigen Stelle, an der entschieden wird.
+
+Der Proxy gleicht selbstständig ab (`PLAYLIST_POLL_SECONDS`, Default 600), damit
+ein frisch hinzugefügtes Buch schon geschnitten bereitliegt, bevor die Uhr das
+nächste Mal synchronisiert. Die Uhr liest die Vorgabe über `GET /v1/playlist`
+und spiegelt sie: fehlende Segmente laden, überzählige Bücher löschen.
+
+**Ein Fehlschlag ist keine leere Playlist.** Ein Tippfehler im Namen, ein kurz
+nicht erreichbares ABS, ein HTTP-Fehler — nichts davon darf die Uhr leerräumen.
+Der Proxy antwortet auf `/v1/playlist` mit 409 statt mit einer leeren Liste, gibt
+im Abgleich nichts frei und meldet den letzten bekannten Stand weiter; die Uhr
+löscht nur, wenn sie eine frische, gültige Vorgabe in der Hand hat.
+
+Die Uhr merkt sich den letzten bekannten Stand und wann sie ihn geholt hat. Ohne
+diesen Zeitstempel bliebe ein neu hinzugefügtes Buch unbemerkt: lokal stimmt ja
+alles, es gäbe keinen Anlass zu synchronisieren. Deshalb gilt eine Vorgabe nach
+`PLAYLIST_MAX_AGE_SECONDS` (6 h) als veraltet und löst einen Sync aus.
+
+Die Endpunkte `/v1/books`, `/prepare` und `/release` bleiben bestehen, werden von
+der Uhr aber nicht mehr aufgerufen — sie sind Werkzeug für `curl` und Fehlersuche.
+
 ### E3 — Konfiguration ausschließlich zur Laufzeit
 
 Im Image steht **keine** ABS-Adresse und kein Schlüssel. Alles kommt aus der
@@ -164,6 +192,8 @@ Umgebung, Geheimnisse über Podman-Secrets:
 |---|---|---|
 | `ABS_URL` | ja | Basis-URL der ABS-Instanz (stackintern erreichbar) |
 | `ABS_API_KEY` | ja | ABS-API-Key, als Podman-Secret eingehängt |
+| `ABS_PLAYLIST` | — | Name der maßgeblichen Playlist, Default `Garmin` |
+| `PLAYLIST_POLL_SECONDS` | — | Abstand des Hintergrund-Abgleichs, Default 600 |
 | `ABCONNECT_TOKEN` | ja | Token für Uhr → Proxy, unabhängig vom ABS-Key; Komma-Liste für Rotation |
 | `CACHE_DIR` | — | Segment-Cache, Default `/var/cache/abconnect` |
 | `WORK_DIR` | — | transienter Platz für die `.m4b` während des Jobs |
@@ -219,13 +249,23 @@ Die Uhr rechnet **nie** in absoluten Buchzeiten. Sie kennt nur
 Proxy anhand der Segmenttabelle. Das hält die Gerätelogik klein und die
 Segmentierung serverseitig änderbar.
 
-### E6 — Fortschritt wird gepuffert, nicht live gepusht
+### E6 — Fortschritt gepuffert, mit zwei Wegen nach draußen
 
-Während der Wiedergabe ist kein WLAN aktiv. `ContentDelegate.onSong()` liefert
-`(refId, event, playbackPosition)`; wir schreiben `(bookId, segIdx, sek, ts)` flach
-in den Object Store und pushen die Queue beim nächsten Sync an `POST /v1/progress`.
-Umgekehrt holt der Sync den Serverstand, damit Weiterhören auf dem Handy auf der
-Uhr ankommt. Konfliktregel: **jüngerer Zeitstempel gewinnt**.
+`ContentDelegate.onSong()` liefert `(refId, event, playbackPosition)`; daraus wird
+`(bookId, segIdx, sek, ts)` flach in den Object Store geschrieben. Von dort geht
+er auf zwei Wegen raus:
+
+1. **Beim Pausieren über Bluetooth.** Pause und Stopp sind die einzigen Momente
+   während der Wiedergabe, in denen ein Funkzugriff niemanden stört. Ist das
+   Telefon verbunden (`DeviceSettings.phoneConnected`), wandert der Puffer sofort
+   an `POST /v1/progress`. Gedrosselt auf einen Versuch je 30 Sekunden, weil
+   Pause und Fortsetzen in Serie kommen.
+2. **Beim Sync über WLAN**, als erster Schritt vor allen Downloads.
+
+Beide Wege schicken dieselben Daten und verwerfen den Puffer erst nach
+bestätigter Übernahme — scheitert der eine, holt der andere es nach. Umgekehrt
+kommt ein auf dem Handy weiter gehörter Stand auf beiden Wegen zurück auf die
+Uhr. Konfliktregel: **jüngerer Zeitstempel gewinnt**.
 
 ### E7 — Sync ist deltabasiert und abbruchfest
 
@@ -288,7 +328,8 @@ deploy/                      Quadlet-Unit, Beispiel-Secrets, Setup-Doku
 
 | Endpunkt | Zweck |
 |---|---|
-| `GET /v1/books?page=&q=` | flache Liste: `id`, Titel, Autor, Dauer, Status, Fortschritt |
+| `GET /v1/playlist` | **die Sollvorgabe**: Bücher der Playlist mit Zustand; 409, wenn die Playlist fehlt |
+| `GET /v1/books?page=&q=` | Bibliothek durchsehen (Werkzeug, von der Uhr nicht genutzt) |
 | `POST /v1/books/{id}/prepare` | Job anstoßen (idempotent), Antwort sofort |
 | `GET /v1/books/{id}/status` | `pending` \| `preparing` (+ Prozent) \| `ready` \| `error` (+ Grund) |
 | `GET /v1/books/{id}/segments` | Segmentliste: Index, Titel, Dauer, Bytes — nur bei `ready` |
@@ -393,6 +434,7 @@ Playback:      Store -> ContentIterator -> ActiveContent(ref, meta, startPos)
 | R6 | Unbekannte `makeWebRequest`-Dateigrenze | Sync bricht auf Hardware ab, im Simulator nicht | 5–10-MB-Segmente halten weit darunter; Grenze im M0-Spike bestimmen |
 | R7 | 8-KB-Property-Limit bei großer Bibliothek | Datenverlust/Absturz | Key-pro-Buch-Layout; Serialisierungstest mit 500 Büchern |
 | R8 | ABS-API-Änderungen (2.26er Auth-Umbau) | Proxy bricht | Versionscheck beim Start, `/healthz`, Smoke-Test im Repo |
+| R9a | Playlist unauffindbar oder ABS kurz weg | Uhr könnte leergeräumt werden | Fehlschlag heißt nie „leer": 409 statt leerer Liste, kein Freigeben im Abgleich, Uhr löscht nur mit frischer Vorgabe; `/healthz` meldet `playlist_found` |
 | R9 | fēnix 7 Pro **ohne WLAN**-Variante | Sync über BLE unpraktikabel langsam | Nur WLAN-Varianten unterstützen, in der Beschreibung nennen |
 | R10 | `ABCONNECT_TOKEN` ist ein geteiltes Geheimnis im Klartext auf der Uhr | kein Geräte-Widerruf, Token in Garmin Connect | bewusst akzeptiert für einen privaten Stack; Rotation über Komma-Liste, vorsignierte Cover-URLs statt Token im Query-String |
 | R11 | Store-Freigabe für Audio-Provider-Apps | Release verzögert | Review-Anforderungen früh prüfen, Sideload-Weg dokumentieren |

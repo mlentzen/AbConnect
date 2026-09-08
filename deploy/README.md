@@ -34,6 +34,8 @@ curl -s localhost:8080/healthz | python3 -m json.tool
 ```
 
 `audiobookshelf: "ok"` heißt: Adresse stimmt und der API-Key wird akzeptiert.
+`playlist_found: true` heißt, dass die Playlist unter ihrem Namen gefunden wurde
+— steht dort `false`, spiegelt der Proxy nichts, löscht aber auch nichts.
 Alles andere ist eine Fehlkonfiguration, die hier auffällt statt erst beim
 ersten Sync der Uhr.
 
@@ -41,11 +43,23 @@ Ein Buch von Hand vorbereiten und ansehen:
 
 ```sh
 TOKEN=$(podman secret inspect --showsecret abconnect-token | python3 -c 'import json,sys;print(json.load(sys.stdin)[0]["SecretData"])')
+curl -s -H "Authorization: Bearer $TOKEN" localhost:8080/v1/playlist | python3 -m json.tool
 curl -s -H "Authorization: Bearer $TOKEN" localhost:8080/v1/books | python3 -m json.tool
 curl -s -X POST -H "Authorization: Bearer $TOKEN" localhost:8080/v1/books/<ID>/prepare
 curl -s -H "Authorization: Bearer $TOKEN" localhost:8080/v1/books/<ID>/status
 curl -s -H "Authorization: Bearer $TOKEN" localhost:8080/v1/books/<ID>/segments | python3 -m json.tool
 ```
+
+## Die Playlist
+
+Was auf der Uhr landen soll, wird in Audiobookshelf entschieden: eine Playlist
+namens `Garmin` anlegen und Bücher hineinlegen. Der Proxy bereitet neue Einträge
+von selbst vor und gibt entfernte wieder frei; die Uhr spiegelt das beim nächsten
+Sync.
+
+Gibt es keine Playlist dieses Namens, meldet `/healthz` das als
+`playlist_found: false` und `/v1/playlist` antwortet mit 409. Die Uhr löscht
+daraufhin nichts — ein Tippfehler im Namen räumt sie also nicht leer.
 
 ## Konfiguration
 
@@ -54,6 +68,8 @@ curl -s -H "Authorization: Bearer $TOKEN" localhost:8080/v1/books/<ID>/segments 
 | `ABS_URL` | ja | — | Basis-URL der ABS-Instanz |
 | `ABS_API_KEY` | ja | — | ABS-API-Key |
 | `ABCONNECT_TOKEN` | ja | — | Token für die Uhr; Komma-Liste für Rotation |
+| `ABS_PLAYLIST` | — | `Garmin` | Playlist, die auf die Uhr gespiegelt wird |
+| `PLAYLIST_POLL_SECONDS` | — | 600 | Abstand des Hintergrund-Abgleichs |
 | `CACHE_DIR` | — | `/var/cache/abconnect` | Segmente und Cover |
 | `WORK_DIR` | — | `/var/tmp/abconnect` | Quelldatei während des Prepare-Jobs |
 | `CACHE_MAX_BYTES` | — | 200 GiB | Notbremse für die Verdrängung |

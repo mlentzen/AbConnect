@@ -6,8 +6,14 @@ import Toybox.Lang;
 //! Buch ein eigener Schlüssel im Store statt einer globalen Struktur, und die
 //! Werte sind flache Strings statt verschachtelter Maps.
 module Keys {
-    //! Array der ausgewählten Buch-IDs.
-    const SELECTION = "SEL";
+    //! Array der Buch-IDs aus der zuletzt gelesenen Playlist.
+    //!
+    //! Die Playlist auf dem Server ist die Sollvorgabe; dies ist nur ihr
+    //! letzter bekannter Stand, damit die Uhr auch ohne Verbindung weiß,
+    //! was auf ihr liegen soll.
+    const DESIRED = "DES";
+    //! Zeitpunkt der letzten erfolgreichen Playlist-Abfrage.
+    const LAST_CHECK = "CHK";
     //! Flache Map bookId -> "segIdx|sekunden|zeitstempel".
     const PROGRESS = "PRG";
     //! Schemaversion; ändert sie sich, wird der Store verworfen.
@@ -27,7 +33,12 @@ module Keys {
     const BOOK_PREFIX = "B_";
 
     //! Beim Erhöhen wird der Store beim nächsten Start geleert.
-    const SCHEMA_VERSION = 1;
+    //! 2: Auswahl einzelner Bücher durch die Playlist ersetzt.
+    const SCHEMA_VERSION = 2;
+
+    //! Spätestens so oft wird die Playlist neu gelesen, auch wenn lokal alles
+    //! stimmt — sonst bliebe ein neu hinzugefügtes Buch unbemerkt.
+    const PLAYLIST_MAX_AGE_SECONDS = 21600;
 
     function local(bookId as String) as String {
         return LOCAL_PREFIX + bookId;
@@ -42,5 +53,4 @@ module Keys {
 module Settings {
     const PROXY_URL = "proxyUrl";
     const PROXY_TOKEN = "proxyToken";
-    const DELETE_FINISHED = "deleteFinished";
 }
