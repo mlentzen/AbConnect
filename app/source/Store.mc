@@ -93,6 +93,71 @@ module Store {
         return parts;
     }
 
+    //! The refIds of a book in segment order, gaps left out.
+    //!
+    //! The Object Store is an unordered map, so entries are placed by their
+    //! segment number instead of being sorted — Monkey C has no Array.sort.
+    //! Both the player and the chapter menu walk the book in this order; it
+    //! lives here so the two can never disagree about what segment 3 is.
+    function orderedRefs(bookId as String) as Array {
+        var refIds = localTracks(bookId).keys();
+        Log.code("Store: entries for the book", refIds.size());
+        var highest = -1;
+        var indices = [] as Array<Number>;
+
+        for (var i = 0; i < refIds.size(); ++i) {
+            var parts = trackInfo(bookId, refIds[i]);
+            var index = (parts == null) ? -1 : toNumber(parts[0]);
+            indices.add(index);
+            // The raw row, before any ordering. If the result comes out shorter
+            // than expected, the reason is one of these lines.
+            Log.detail(
+                "store " + Log.describe(refIds[i])
+                    + " segment " + index.toString()
+                    + " duration " + ((parts == null) ? "?" : parts[1]) + " s"
+                    + " title '" + ((parts == null) ? "" : parts[2]) + "'"
+            );
+            if (parts == null) {
+                Log.line("Store: unreadable entry for " + Log.describe(refIds[i]));
+            }
+            if (index > highest) {
+                highest = index;
+            }
+        }
+
+        var slots = new [highest + 1] as Array;
+        for (var i = 0; i < refIds.size(); ++i) {
+            var slot = indices[i];
+            if (slot >= 0) {
+                if (slots[slot] != null) {
+                    // Two files claiming the same segment: the second wins and
+                    // the first is silently gone. Not silently, now.
+                    Log.line(
+                        "Store: segment " + slot.toString() + " claimed twice, "
+                            + Log.describe(slots[slot]) + " replaced by " + Log.describe(refIds[i])
+                    );
+                }
+                slots[slot] = refIds[i];
+            }
+        }
+
+        var ordered = [] as Array;
+        for (var slot = 0; slot < slots.size(); ++slot) {
+            if (slots[slot] == null) {
+                // A hole in the numbering: that segment never made it onto the
+                // watch. Everything after it moves up without a word otherwise.
+                Log.code("Store: no file for segment", slot);
+            } else {
+                ordered.add(slots[slot]);
+            }
+        }
+        Log.line(
+            "Store: " + ordered.size().toString()
+                + " of " + slots.size().toString() + " segments present"
+        );
+        return ordered;
+    }
+
     function forgetBook(bookId as String) as Void {
         Application.Storage.deleteValue(Keys.local(bookId));
         Application.Storage.deleteValue(Keys.book(bookId));

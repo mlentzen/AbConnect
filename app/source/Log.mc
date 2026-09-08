@@ -39,4 +39,26 @@ module Log {
             System.println("    " + message);
         }
     }
+
+    //! A media ref ID with its type.
+    //!
+    //! The docs say getCachedContentObj() wants a String ID for audio. On the
+    //! fēnix they are numbers, and they resolve cleanly — the type is logged
+    //! anyway, because it travels through the object store and could change on
+    //! the way. A broken round trip shows up here and nowhere else.
+    function describe(id as Object?) as String {
+        if (id == null) {
+            return "none";
+        }
+        if (id instanceof String) {
+            return "String '" + id + "'";
+        }
+        if (id instanceof Number) {
+            return "Number " + id.toString();
+        }
+        if (id instanceof Long) {
+            return "Long " + id.toString();
+        }
+        return "other type";
+    }
 }

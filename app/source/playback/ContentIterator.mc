@@ -109,81 +109,24 @@ class AbContentIterator extends Media.ContentIterator {
         if (parts == null) {
             // The playlist was built from the same store, so this means the
             // entry changed shape underneath us — worth a line of its own.
-            Log.line("Iterator: no store entry for " + describe(_refs[position]));
+            Log.line("Iterator: no store entry for " + Log.describe(_refs[position]));
             return 0;
         }
         return Store.toNumber(parts[1]);
     }
 
-    //! Put the segments into their order.
+    //! The playlist, and the titles that go with it.
     //!
-    //! The Object Store is an unordered map, so entries are placed by a field
-    //! instead of being sorted — Monkey C has no Array.sort.
+    //! The ordering itself lives in Store.orderedRefs(): the chapter menu walks
+    //! the same book and the two must never disagree about what segment 3 is.
     private function buildPlaylist() as Void {
-        var tracks = Store.localTracks(_bookId);
-        var refIds = tracks.keys();
-        Log.code("Iterator: store entries", refIds.size());
-        var highest = -1;
-        var indices = [] as Array<Number>;
-        var titles = [] as Array<String>;
-
-        for (var i = 0; i < refIds.size(); ++i) {
-            var parts = Store.trackInfo(_bookId, refIds[i]);
-            var index = (parts == null) ? -1 : Store.toNumber(parts[0]);
-            indices.add(index);
-            titles.add((parts == null) ? "" : parts[2]);
-            // The raw store row, before any ordering. If the playlist comes out
-            // shorter than expected, the reason is one of these lines.
-            Log.detail(
-                "store " + describe(refIds[i])
-                    + " segment " + index.toString()
-                    + " duration " + ((parts == null) ? "?" : parts[1]) + " s"
-                    + " title '" + ((parts == null) ? "" : parts[2]) + "'"
-            );
-            if (parts == null) {
-                Log.line("Iterator: unreadable store entry for " + describe(refIds[i]));
-            }
-            if (index > highest) {
-                highest = index;
-            }
-        }
-        Log.code("Iterator: highest segment number", highest);
-
-        var slots = new [highest + 1] as Array;
-        var slotTitles = new [highest + 1] as Array<String>;
-        for (var i = 0; i < refIds.size(); ++i) {
-            var slot = indices[i];
-            if (slot >= 0) {
-                if (slots[slot] != null) {
-                    // Two files claiming the same segment: the second wins and
-                    // the first is silently gone. Not silently, now.
-                    Log.line(
-                        "Iterator: segment " + slot.toString() + " claimed twice, "
-                            + describe(slots[slot]) + " replaced by " + describe(refIds[i])
-                    );
-                }
-                slots[slot] = refIds[i];
-                slotTitles[slot] = titles[i];
-            }
-        }
-        for (var slot = 0; slot < slots.size(); ++slot) {
-            if (slots[slot] != null) {
-                _refs.add(slots[slot]);
-                _titles.add(slotTitles[slot] == null ? "" : slotTitles[slot]);
-            } else {
-                // A hole in the numbering: that segment never made it onto the
-                // watch. Playback jumps over it without a word otherwise.
-                Log.code("Iterator: no file for segment", slot);
-            }
-        }
-        Log.line(
-            "Iterator: playlist holds " + _refs.size().toString()
-                + " of " + slots.size().toString() + " segments"
-        );
+        _refs = Store.orderedRefs(_bookId);
         for (var i = 0; i < _refs.size(); ++i) {
+            var parts = Store.trackInfo(_bookId, _refs[i]);
+            _titles.add((parts == null) ? "" : parts[2]);
             Log.detail(
                 "playlist " + i.toString()
-                    + " " + describe(_refs[i])
+                    + " " + Log.describe(_refs[i])
                     + " '" + _titles[i] + "'"
             );
         }
@@ -218,7 +161,7 @@ class AbContentIterator extends Media.ContentIterator {
             // store knows no ID for looks, from the player's side, exactly like
             // an empty one.
             Log.detail(
-                "cache " + describe(id)
+                "cache " + Log.describe(id)
                     + ((mine >= 0) ? (" = playlist " + mine.toString()) : " (not this book)")
             );
             ref = iterator.next();
@@ -259,40 +202,21 @@ class AbContentIterator extends Media.ContentIterator {
             } catch (ex) {
                 var message = ex.getErrorMessage();
                 Log.line(
-                    "Iterator: cache threw for " + describe(_refs[i])
+                    "Iterator: cache threw for " + Log.describe(_refs[i])
                         + ": " + ((message == null) ? "?" : message)
                 );
                 content = null;
             }
             if (content != null) {
                 found += 1;
-                Log.detail("segment " + i.toString() + " " + describe(_refs[i]) + " resolves");
+                Log.detail("segment " + i.toString() + " " + Log.describe(_refs[i]) + " resolves");
             } else {
                 // The type is worth having: it is what a broken round trip
                 // through the store would show up as.
-                Log.line("Iterator: unresolved " + describe(_refs[i]));
+                Log.line("Iterator: unresolved " + Log.describe(_refs[i]));
             }
         }
         return found;
-    }
-
-    //! The docs say getCachedContentObj() wants a String ID for audio. On the
-    //! fēnix they are numbers, and they resolve cleanly — the type is logged
-    //! anyway, because it travels through the store and could change on the way.
-    private function describe(id as Object?) as String {
-        if (id == null) {
-            return "none";
-        }
-        if (id instanceof String) {
-            return "String '" + id + "'";
-        }
-        if (id instanceof Number) {
-            return "Number " + id.toString();
-        }
-        if (id instanceof Long) {
-            return "Long " + id.toString();
-        }
-        return "other type";
     }
 
     private function indexOfSegment(segment as Number) as Number {
@@ -396,8 +320,8 @@ class AbContentIterator extends Media.ContentIterator {
         }
         Log.line(
             "Iterator: resolved " + position.toString()
-                + " asked " + describe(_refs[position])
-                + " carries " + describe(carried)
+                + " asked " + Log.describe(_refs[position])
+                + " carries " + Log.describe(carried)
                 + " start " + startAt
                 + " kind " + kind
         );
@@ -567,7 +491,10 @@ class AbContentIterator extends Media.ContentIterator {
             Media.PLAYBACK_CONTROL_PREVIOUS,
             Media.PLAYBACK_CONTROL_NEXT
         ] as Array<Media.PlaybackControl>;
-        // Audiobook values instead of the music default of two times 30 seconds.
+        // Symmetric on purpose. The SDK warns that a custom delta needs custom
+        // artwork, because the stock skip icons say 30 — at 30 both ways the
+        // stock icons are simply correct, and an audiobook is skipped by equal
+        // steps in both directions anyway.
         profile.skipForwardTimeDelta = 30;
         profile.skipBackwardTimeDelta = 30;
         profile.attemptSkipAfterThumbsDown = false;

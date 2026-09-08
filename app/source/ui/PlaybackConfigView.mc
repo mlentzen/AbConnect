@@ -90,13 +90,16 @@ class PlaybackConfigDelegate extends WatchUi.Menu2InputDelegate {
     function onSelect(item as WatchUi.MenuItem) as Void {
         var id = item.getId();
         if (id instanceof String) {
-            Current.set(id);
-            // Choosing a book used to mean only remembering it — the watch fell
-            // back into the menu afterwards and nobody ever started playback.
-            // startPlayback() ends the app and restarts it in playback mode;
-            // anything after it would no longer run.
-            Log.line("Config: startPlayback " + id);
-            Media.startPlayback(id);
+            // A book opens its chapters instead of starting straight away. The
+            // chapter marked "Resume" carries on exactly where the listening
+            // stopped, so the extra press buys the way into the rest of the
+            // book without costing the way back into the middle of it.
+            Log.line("Config: chapters of " + id);
+            WatchUi.pushView(
+                new ChapterMenu(id),
+                new ChapterMenuDelegate(id),
+                WatchUi.SLIDE_IMMEDIATE
+            );
             return;
         }
         if (id == $.RESET_ITEM) {
