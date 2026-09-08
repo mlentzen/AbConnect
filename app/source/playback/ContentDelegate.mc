@@ -63,7 +63,8 @@ class AbContentDelegate extends Media.ContentDelegate {
         // milliseconds after START, the player only passed the file through
         // instead of playing it.
         Log.line(
-            "Playback: onSong " + songEvent.toString()
+            "Playback: onSong " + eventName(songEvent)
+                + " ref " + ((contentRefId instanceof Number) ? contentRefId.toString() : "?")
                 + " at " + ((playbackPosition instanceof Number) ? playbackPosition.toString() : "?")
                 + " after " + sinceLastEvent().toString() + " ms"
         );
@@ -89,6 +90,19 @@ class AbContentDelegate extends Media.ContentDelegate {
         if (songEvent == Media.SONG_EVENT_PAUSE || songEvent == Media.SONG_EVENT_STOP) {
             pushOverPhone();
         }
+    }
+
+    //! Event numbers alone are unreadable, and reading them wrong sends the
+    //! search off in the wrong direction. Values from the SDK docs.
+    private function eventName(event as Media.SongEvent) as String {
+        var names = [
+            "START", "SKIP_NEXT", "SKIP_PREVIOUS", "PLAYBACK_NOTIFY", "COMPLETE",
+            "STOP", "PAUSE", "RESUME", "SKIP_FORWARD", "SKIP_BACKWARD"
+        ] as Array<String>;
+        if (event instanceof Number && event >= 0 && event < names.size()) {
+            return names[event] + "(" + event.toString() + ")";
+        }
+        return "?(" + event.toString() + ")";
     }
 
     //! Milliseconds since the previous playback event.
@@ -161,5 +175,33 @@ class AbContentDelegate extends Media.ContentDelegate {
 
     function onShuffle() as Void {
         // Audiobooks are not shuffled.
+        Log.line("Playback: onShuffle");
+    }
+
+    // --- Remaining ContentDelegate contract ----------------------------------
+    //
+    // None of these carried an implementation before. They are here to be seen
+    // in the log: an unimplemented callback the player invokes on its way to
+    // starting a track is exactly the kind of thing that produces silence and
+    // leaves no trace.
+
+    function onRepeat() as Void {
+        Log.line("Playback: onRepeat");
+    }
+
+    function onThumbsUp(contentRefId as Object) as Void {
+        Log.line("Playback: onThumbsUp");
+    }
+
+    function onThumbsDown(contentRefId as Object) as Void {
+        Log.line("Playback: onThumbsDown");
+    }
+
+    function onCustomButton(button as Media.CustomButton) as Void {
+        Log.line("Playback: onCustomButton");
+    }
+
+    function onAdAction(adContext as Object) as Void {
+        Log.line("Playback: onAdAction");
     }
 }

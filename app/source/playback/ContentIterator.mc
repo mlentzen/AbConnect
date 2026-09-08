@@ -228,17 +228,54 @@ class AbContentIterator extends Media.ContentIterator {
             Log.code("Iterator: nothing in cache for", position);
             return null;
         }
-        Log.line("Iterator: resolved " + position.toString() + " as " + describe(_refs[position]));
+        // Full account of the object handed to the player. If the ref it
+        // carries is not the one we asked for, everything after this is built
+        // on sand — and that is invisible without saying so out loud.
+        var carried = null as Object?;
+        var startAt = "?";
+        try {
+            carried = content.getContentRef().getId();
+            // Declared as Number, but a plain Content need not carry one, and a
+            // crash in the diagnostic build would cost us the whole run.
+            var where = content.getPlaybackStartPosition();
+            startAt = (where == null) ? "null" : where.toString();
+        } catch (ex) {
+            Log.line("Iterator: inspecting the content threw");
+        }
+        Log.line(
+            "Iterator: resolved " + position.toString()
+                + " asked " + describe(_refs[position])
+                + " carries " + describe(carried)
+                + " start " + startAt
+        );
+        describeMetadata("before", content);
         // The titles stay ours: the file holds the chapter name, but only the
         // store knows book, author and ordering.
         content.setMetadata(metadataFor(position));
+        describeMetadata("after", content);
         return content;
+    }
+
+    //! What the player will show — and proof that metadata survives our write.
+    private function describeMetadata(when as String, content as Media.Content) as Void {
+        var meta = content.getMetadata();
+        if (meta == null) {
+            Log.line("Iterator: metadata " + when + " is null");
+            return;
+        }
+        Log.line(
+            "Iterator: metadata " + when
+                + " title=" + ((meta.title == null) ? "null" : meta.title)
+                + " album=" + ((meta.album == null) ? "null" : meta.album)
+                + " track=" + ((meta.trackNumber == null) ? "null" : meta.trackNumber.toString())
+        );
     }
 
     function get() as Media.Content? {
         Log.code("Iterator: get at", _index);
         var content = contentAt(_index);
         if (content == null) {
+            Log.line("Iterator: get returns null");
             return null;
         }
         // ActiveContent only when there really is a mid-segment point to
@@ -260,6 +297,7 @@ class AbContentIterator extends Media.ContentIterator {
     function next() as Media.Content? {
         Log.code("Iterator: next from", _index);
         if (_index + 1 >= _refs.size()) {
+            Log.line("Iterator: next returns null (end of book)");
             return null;
         }
         _index += 1;
@@ -268,7 +306,9 @@ class AbContentIterator extends Media.ContentIterator {
     }
 
     function previous() as Media.Content? {
+        Log.code("Iterator: previous from", _index);
         if (_index - 1 < 0) {
+            Log.line("Iterator: previous returns null (start of book)");
             return null;
         }
         _index -= 1;
@@ -282,15 +322,29 @@ class AbContentIterator extends Media.ContentIterator {
     }
 
     function peekPrevious() as Media.Content? {
+        Log.code("Iterator: peekPrevious before", _index);
         return contentAt(_index - 1);
     }
 
     function shuffling() as Boolean {
         // An audiobook in random order is no longer an audiobook.
+        Log.line("Iterator: shuffling -> false");
         return false;
     }
 
+    //! Part of the ContentIterator contract and never implemented here.
+    //!
+    //! The one working third-party provider implements it and returns null on
+    //! purpose. Ours inherited whatever the base class does, which is not
+    //! written down anywhere — so it was a silent unknown sitting directly in
+    //! the path the player walks before it starts a track.
+    function repeatMode() as Media.RepeatMode? {
+        Log.line("Iterator: repeatMode -> off");
+        return Media.REPEAT_MODE_OFF;
+    }
+
     function canSkip() as Boolean {
+        Log.line("Iterator: canSkip -> true");
         return true;
     }
 
