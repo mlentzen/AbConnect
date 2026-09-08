@@ -33,16 +33,34 @@ class AbConnectApp extends Application.AudioContentProviderApp {
     //! Mode 3: the user selects what is played.
     function getPlaybackConfigurationView() as [WatchUi.Views] or [WatchUi.Views, WatchUi.InputDelegates] {
         Log.line("Mode: playback configuration");
-        return [new PlaybackConfigView()];
+        logStore();
+        var view = new PlaybackConfigView();
+        Log.line("Config: view built");
+        return [view];
     }
 
     //! Mode 4: the system player asks us for the tracks.
     function getContentDelegate(args as Application.PersistableType) as Media.ContentDelegate {
         Log.line("Mode: playback");
-        return new AbContentDelegate();
+        logStore();
+        var delegate = new AbContentDelegate();
+        Log.line("Playback: delegate built");
+        return delegate;
     }
 
     function getProviderIconInfo() as Media.ProviderIconInfo? {
+        Log.line("Icon: requested");
         return new Media.ProviderIconInfo(Rez.Drawables.LauncherIcon, Graphics.COLOR_BLUE);
+    }
+
+    //! What every mode hangs on: what is on the watch at all.
+    //!
+    //! As long as no sync has run, the store is empty — and the empty paths are
+    //! exactly the least travelled ones.
+    private function logStore() as Void {
+        Log.code("Store: known", Store.knownBooks().size());
+        Log.code("Store: playable", Store.localBooks().size());
+        var current = Current.bookId();
+        Log.line("Store: current " + ((current == null) ? "none" : current));
     }
 }

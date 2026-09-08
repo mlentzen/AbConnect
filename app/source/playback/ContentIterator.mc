@@ -16,6 +16,7 @@ class AbContentIterator extends Media.ContentIterator {
     private var _artist as String;
     private var _index as Number;
     private var _startPosition as Number;
+    private var _startApplied as Boolean;
 
     function initialize(bookId as String) {
         ContentIterator.initialize();
@@ -28,17 +29,53 @@ class AbContentIterator extends Media.ContentIterator {
         _artist = info[1];
 
         buildPlaylist();
+        Log.code("Iterator: segments", _refs.size());
+        probeCache();
 
         _index = 0;
         _startPosition = 0;
+        _startApplied = false;
         var position = Store.position(bookId);
         if (position != null) {
             var wanted = indexOfSegment(position[0]);
             if (wanted >= 0) {
                 _index = wanted;
                 _startPosition = position[1];
+                skipFinishedSegment();
             }
         }
+        Log.code("Iterator: starting at", _index);
+        Log.code("Iterator: start position", _startPosition);
+    }
+
+    //! A segment listened to the end is not a starting point.
+    //!
+    //! When a segment completes, its full duration is remembered as the
+    //! position — right for reporting to the server, but as a starting point
+    //! exactly the end. Without this step playback would begin past the last
+    //! sound of the segment and be over immediately.
+    private function skipFinishedSegment() as Void {
+        var duration = durationAt(_index);
+        if (duration <= 0 || _startPosition < duration) {
+            return;
+        }
+        if (_index + 1 < _refs.size()) {
+            _index += 1;
+            _startPosition = 0;
+            return;
+        }
+        // The last segment was listened through: the book is finished.
+        // Starting over is the only choice that does not end in silence.
+        _index = 0;
+        _startPosition = 0;
+    }
+
+    private function durationAt(position as Number) as Number {
+        if (position < 0 || position >= _refs.size()) {
+            return 0;
+        }
+        var parts = Store.trackInfo(_bookId, _refs[position]);
+        return (parts == null) ? 0 : Store.toNumber(parts[1]);
     }
 
     //! Put the segments into their order.
@@ -79,6 +116,52 @@ class AbContentIterator extends Media.ContentIterator {
         }
     }
 
+    //! What is really in the media cache.
+    //!
+    //! The object store only remembers IDs. Whether a file still stands behind
+    //! one is something only the cache can say — and without that cross-check,
+    //! "the player does nothing" cannot be told apart from "the file is not
+    //! there at all".
+    private function probeCache() as Void {
+        var stats = Media.getCacheStatistics();
+        Log.line("Cache: " + stats.size.toString() + " of " + stats.capacity.toString() + " bytes");
+        var count = 0;
+        var iterator = Media.getContentRefIter({ :contentType => Media.CONTENT_TYPE_AUDIO });
+        var ref = iterator.next();
+        var first = null as Object?;
+        while (ref != null) {
+            if (count == 0) {
+                first = ref.getId();
+            }
+            count += 1;
+            ref = iterator.next();
+        }
+        Log.code("Cache: audio entries", count);
+        Log.line("Cache: first cache ID " + describe(first));
+        if (_refs.size() > 0) {
+            Log.line("Cache: first store ID " + describe(_refs[0]));
+        }
+    }
+
+    //! The docs say getCachedContentObj() wants a String ID for audio. On the
+    //! fēnix they are numbers, and they resolve cleanly — the type is logged
+    //! anyway, because it travels through the store and could change on the way.
+    private function describe(id as Object?) as String {
+        if (id == null) {
+            return "none";
+        }
+        if (id instanceof String) {
+            return "String '" + id + "'";
+        }
+        if (id instanceof Number) {
+            return "Number " + id.toString();
+        }
+        if (id instanceof Long) {
+            return "Long " + id.toString();
+        }
+        return "other type";
+    }
+
     private function indexOfSegment(segment as Number) as Number {
         for (var i = 0; i < _refs.size(); ++i) {
             var parts = Store.trackInfo(_bookId, _refs[i]);
@@ -98,25 +181,61 @@ class AbContentIterator extends Media.ContentIterator {
         return metadata;
     }
 
+    //! The content object comes from the cache — it is not built by hand.
+    //!
+    //! A hand-made `new Media.Content(ref, metadata)` carries the same
+    //! ContentRef and still cannot be played: the player accepts it, asks for
+    //! the profile, draws its screen and never starts decoding — without a
+    //! single SONG_EVENT. Only the object from getCachedContentObj() carries
+    //! what it needs to play the file.
     private function contentAt(position as Number) as Media.Content? {
         if (position < 0 || position >= _refs.size()) {
             return null;
         }
-        var ref = new Media.ContentRef(_refs[position], Media.CONTENT_TYPE_AUDIO);
-        return new Media.Content(ref, metadataFor(position));
+        var content = null as Media.Content?;
+        try {
+            content = Media.getCachedContentObj(
+                new Media.ContentRef(_refs[position], Media.CONTENT_TYPE_AUDIO)
+            );
+        } catch (ex) {
+            var message = ex.getErrorMessage();
+            Log.line("Iterator: cache threw " + ((message == null) ? "?" : message));
+            return null;
+        }
+        if (content == null) {
+            Log.code("Iterator: nothing in cache for", position);
+            return null;
+        }
+        // The titles stay ours: the file holds the chapter name, but only the
+        // store knows book, author and ordering.
+        content.setMetadata(metadataFor(position));
+        return content;
     }
 
     function get() as Media.Content? {
-        if (_index < 0 || _index >= _refs.size()) {
+        Log.code("Iterator: get at", _index);
+        var content = contentAt(_index);
+        if (content == null) {
             return null;
         }
-        // Only the current segment carries a start position — all following
-        // ones begin from the start.
-        var ref = new Media.ContentRef(_refs[_index], Media.CONTENT_TYPE_AUDIO);
-        return new Media.ActiveContent(ref, metadataFor(_index), _startPosition);
+        // ActiveContent only when there really is a mid-segment point to
+        // resume from, and only once: otherwise a later jump back to the same
+        // segment would land on the old spot again instead of at its start.
+        // At position 0 the plain Content from the cache is the right thing.
+        if (_startPosition > 0 && !_startApplied) {
+            _startApplied = true;
+            Log.code("Iterator: ActiveContent from", _startPosition);
+            return new Media.ActiveContent(
+                new Media.ContentRef(_refs[_index], Media.CONTENT_TYPE_AUDIO),
+                content.getMetadata(),
+                _startPosition
+            );
+        }
+        return content;
     }
 
     function next() as Media.Content? {
+        Log.code("Iterator: next from", _index);
         if (_index + 1 >= _refs.size()) {
             return null;
         }
@@ -135,6 +254,7 @@ class AbContentIterator extends Media.ContentIterator {
     }
 
     function peekNext() as Media.Content? {
+        Log.code("Iterator: peekNext after", _index);
         return contentAt(_index + 1);
     }
 
@@ -152,6 +272,7 @@ class AbContentIterator extends Media.ContentIterator {
     }
 
     function getPlaybackProfile() as Media.PlaybackProfile? {
+        Log.line("Iterator: getPlaybackProfile");
         var profile = new Media.PlaybackProfile();
         profile.playbackControls = [
             Media.PLAYBACK_CONTROL_PLAYBACK,

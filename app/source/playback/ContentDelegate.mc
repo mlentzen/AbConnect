@@ -20,12 +20,14 @@ class AbContentDelegate extends Media.ContentDelegate {
     private var _client as ProxyClient;
     private var _lastPush as Number;
     private var _pushing as Boolean;
+    private var _lastEvent as Number;
 
     function initialize() {
         ContentDelegate.initialize();
         _client = new ProxyClient();
         _lastPush = 0;
         _pushing = false;
+        _lastEvent = System.getTimer();
         _bookId = Current.bookId();
         if (_bookId == null) {
             var books = Store.localBooks();
@@ -33,23 +35,38 @@ class AbContentDelegate extends Media.ContentDelegate {
                 _bookId = books[0];
             }
         }
+        Log.line("Playback: book " + ((_bookId == null) ? "none" : _bookId));
         resetContentIterator();
     }
 
     function getContentIterator() as Media.ContentIterator? {
+        // A null iterator goes back to the system as soon as there is no book.
+        // Whether it can cope with that, only the watch will tell.
+        Log.line("Playback: getContentIterator " + ((_iterator == null) ? "null" : "present"));
         return _iterator;
     }
 
     function resetContentIterator() as Media.ContentIterator? {
+        Log.line("Playback: resetContentIterator");
         if (_bookId != null) {
             _iterator = new AbContentIterator(_bookId);
         }
+        Log.line("Playback: iterator " + ((_iterator == null) ? "null" : "present"));
         return _iterator;
     }
 
     function onSong(
         contentRefId as Object, songEvent as Media.SongEvent, playbackPosition as Number or Media.PlaybackPosition
     ) as Void {
+        // The gap between events is the proof of whether sound actually
+        // played: a segment lasts minutes. If COMPLETE arrives a few
+        // milliseconds after START, the player only passed the file through
+        // instead of playing it.
+        Log.line(
+            "Playback: onSong " + songEvent.toString()
+                + " at " + ((playbackPosition instanceof Number) ? playbackPosition.toString() : "?")
+                + " after " + sinceLastEvent().toString() + " ms"
+        );
         var bookId = _bookId;
         if (bookId == null) {
             return;
@@ -72,6 +89,14 @@ class AbContentDelegate extends Media.ContentDelegate {
         if (songEvent == Media.SONG_EVENT_PAUSE || songEvent == Media.SONG_EVENT_STOP) {
             pushOverPhone();
         }
+    }
+
+    //! Milliseconds since the previous playback event.
+    private function sinceLastEvent() as Number {
+        var now = System.getTimer();
+        var delta = now - _lastEvent;
+        _lastEvent = now;
+        return delta;
     }
 
     //! Attempt to get the position out immediately — over the phone connection.

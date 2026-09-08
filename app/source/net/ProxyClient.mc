@@ -17,6 +17,10 @@ class ProxyClient {
         _base = readSetting(Settings.PROXY_URL, BuildDefaults.PROXY_URL);
         _token = readSetting(Settings.PROXY_TOKEN, BuildDefaults.PROXY_TOKEN);
         _base = withoutTrailingSlash(_base);
+        Log.line("Net: proxy " + ((_base.length() == 0) ? "not set" : _base));
+        // Only the length: it tells "no token" from "token present" without
+        // giving the token away.
+        Log.code("Net: token length", _token.length());
     }
 
     //! substring() returns null when the bounds do not fit — without this
@@ -55,6 +59,25 @@ class ProxyClient {
         return { "Authorization" => "Bearer " + _token };
     }
 
+    //! Every outgoing request once in the trace.
+    //!
+    //! Without it the log holds only the response — and for a response that
+    //! never comes, nothing at all. The token is never included: the log file
+    //! sits in the open on the watch and travels on while debugging.
+    private static function trace(verb as String, path as String) as Void {
+        Log.line("Net: " + verb + " " + withoutQuery(path));
+    }
+
+    //! The query string stays out: the cover URL carries a signature.
+    private static function withoutQuery(path as String) as String {
+        var cut = path.find("?");
+        if (cut == null) {
+            return path;
+        }
+        var head = path.substring(0, cut);
+        return (head == null) ? path : head;
+    }
+
     private function jsonOptions() as Dictionary {
         return {
             :method => Communications.HTTP_REQUEST_METHOD_GET,
@@ -67,10 +90,12 @@ class ProxyClient {
 
     //! The target: what is in the playlist on the server.
     function playlist(callback as Method) as Void {
+        trace("GET", "/v1/playlist");
         Communications.makeWebRequest(url("/v1/playlist"), null, jsonOptions(), callback);
     }
 
     function books(page as Number, perPage as Number, callback as Method) as Void {
+        trace("GET", "/v1/books?page=" + page.toString());
         Communications.makeWebRequest(
             url("/v1/books"),
             { "page" => page, "per_page" => perPage },
@@ -80,6 +105,7 @@ class ProxyClient {
     }
 
     function prepare(bookId as String, callback as Method) as Void {
+        trace("POST", "/v1/books/" + bookId + "/prepare");
         Communications.makeWebRequest(
             url("/v1/books/" + bookId + "/prepare"),
             null,
@@ -93,10 +119,12 @@ class ProxyClient {
     }
 
     function segments(bookId as String, callback as Method) as Void {
+        trace("GET", "/v1/books/" + bookId + "/segments");
         Communications.makeWebRequest(url("/v1/books/" + bookId + "/segments"), null, jsonOptions(), callback);
     }
 
     function release(bookId as String, callback as Method) as Void {
+        trace("POST", "/v1/books/" + bookId + "/release");
         Communications.makeWebRequest(
             url("/v1/books/" + bookId + "/release"),
             null,
@@ -113,7 +141,15 @@ class ProxyClient {
 
     //! Downloads a segment into the watch's encrypted media cache.
     //! The callback's response is a Media.ContentRef.
-    function downloadSegment(path as String, encoding as String, callback as Method) as Void {
+    //!
+    //! `onBytes` reports the byte count during the transfer. On the watch that
+    //! is the only trace by which a slow connection can be told apart from a
+    //! stalled one — a segment is several megabytes, and over Bluetooth that
+    //! takes minutes to hours.
+    function downloadSegment(
+        path as String, encoding as String, callback as Method, onBytes as Method
+    ) as Void {
+        trace("GET", path + " (" + encoding + ")");
         Communications.makeWebRequest(
             url(path),
             null,
@@ -121,7 +157,8 @@ class ProxyClient {
                 :method => Communications.HTTP_REQUEST_METHOD_GET,
                 :headers => authHeaders(),
                 :responseType => Communications.HTTP_RESPONSE_CONTENT_TYPE_AUDIO,
-                :mediaEncoding => mediaEncoding(encoding)
+                :mediaEncoding => mediaEncoding(encoding),
+                :fileDownloadProgressCallback => onBytes
             },
             callback
         );
@@ -130,6 +167,7 @@ class ProxyClient {
     //! The cover goes through a pre-signed URL: makeImageRequest cannot set
     //! headers, and the token has no business being in a query string.
     function downloadCover(signedPath as String, callback as Method) as Void {
+        trace("GET", signedPath);
         Communications.makeImageRequest(
             url(signedPath),
             null,
@@ -145,6 +183,8 @@ class ProxyClient {
     // --- Progress ---------------------------------------------------------
 
     function pushProgress(entries as Array, callback as Method) as Void {
+        trace("POST", "/v1/progress");
+        Log.code("Net: entries", entries.size());
         Communications.makeWebRequest(
             url("/v1/progress"),
             { "entries" => entries },

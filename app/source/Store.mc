@@ -1,5 +1,6 @@
 import Toybox.Application;
 import Toybox.Lang;
+import Toybox.Media;
 import Toybox.Time;
 
 //! Access to the Object Store.
@@ -15,6 +16,21 @@ module Store {
             Application.Storage.clearValues();
             Application.Storage.setValue(Keys.SCHEMA, Keys.SCHEMA_VERSION);
         }
+    }
+
+    //! Discard everything the app has put on the watch.
+    //!
+    //! The media cache cannot be cleaned selectively: resetContentCache()
+    //! throws it away along with its encryption key. That is exactly what is
+    //! wanted here — orphaned segments the store no longer knows an ID for
+    //! cannot be got rid of any other way.
+    //!
+    //! The buffered listening progress is lost with it. Whoever resets wants
+    //! precisely that.
+    function reset() as Void {
+        Media.resetContentCache();
+        Application.Storage.clearValues();
+        Application.Storage.setValue(Keys.SCHEMA, Keys.SCHEMA_VERSION);
     }
 
     // --- Target from the playlist ----------------------------------------

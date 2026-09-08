@@ -23,4 +23,7 @@
     <string id="syncNoPlaylist">Playlist auf dem Server nicht gefunden</string>
     <string id="playlistEmpty">Die Playlist ist leer</string>
     <string id="statusWaitingForSync">bereit, wartet auf Sync</string>
+    <string id="syncNow">Jetzt synchronisieren</string>
+    <string id="resetAll">Alles zurücksetzen</string>
+    <string id="resetConfirm">Alle Bücher und den Hörfortschritt löschen?</string>
 </strings>

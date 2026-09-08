@@ -1,7 +1,9 @@
 import Toybox.Communications;
 import Toybox.Lang;
 import Toybox.Media;
+import Toybox.System;
 import Toybox.Time;
+import Toybox.Timer;
 import Toybox.WatchUi;
 
 //! The sync itself.
@@ -13,6 +15,25 @@ import Toybox.WatchUi;
 //! Order: release, report progress, fetch books. Progress goes out first so it
 //! arrives even when the downloads abort later.
 class AbSyncDelegate extends Communications.SyncDelegate {
+
+    //! The first few percent belong to the preparation steps.
+    //!
+    //! On the watch the progress ring is the only feedback there is. Without
+    //! these marks it would sit at 0 % until the first finished segment — and
+    //! 0 % then means either "running" or "stuck for an hour".
+    const PHASE_START = 1;
+    const PHASE_PROGRESS_PUSHED = 2;
+    const PHASE_PLAYLIST = 3;
+    const PHASE_SEGMENTS = 4;
+    //! From here on the downloads count.
+    const PHASE_DOWNLOAD = 5;
+
+    //! Watchdog tick, and the number of ticks without any stirring after which
+    //! it ends the sync. Generous, because a segment really does take many
+    //! minutes over Bluetooth — the point is only that the watch eventually
+    //! shows a message instead of sitting in the sync screen forever.
+    const WATCHDOG_TICK_MS = 30000;
+    const WATCHDOG_MAX_IDLE_TICKS = 20;
 
     private var _client as ProxyClient;
     private var _bookQueue as Array<String>;
@@ -26,6 +47,13 @@ class AbSyncDelegate extends Communications.SyncDelegate {
     private var _stillPreparing as Number;
     private var _failure as String?;
     private var _stopped as Boolean;
+    private var _phase as Number;
+    private var _reported as Number;
+    private var _segmentBytes as Number;
+    private var _segmentSize as Number;
+    private var _watchdog as Timer.Timer?;
+    private var _activity as Number;
+    private var _idleTicks as Number;
 
     function initialize() {
         SyncDelegate.initialize();
@@ -41,6 +69,13 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         _stillPreparing = 0;
         _failure = null;
         _stopped = false;
+        _phase = 0;
+        _reported = -1;
+        _segmentBytes = 0;
+        _segmentSize = 0;
+        _watchdog = null;
+        _activity = 0;
+        _idleTicks = 0;
     }
 
     //! A sync is worthwhile when progress is pending, the last known state of
@@ -70,8 +105,11 @@ class AbSyncDelegate extends Communications.SyncDelegate {
 
     function onStartSync() as Void {
         Log.line("Sync: onStartSync");
+        logEnvironment();
+        enterPhase(PHASE_START);
+        startWatchdog();
         if (!_client.isConfigured()) {
-            Communications.notifySyncComplete("Proxy not configured");
+            finish("Proxy not configured");
             return;
         }
         // Progress first: it is small and must not get stuck behind an
@@ -83,7 +121,96 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         Log.line("Sync: onStopSync");
         _stopped = true;
         Communications.cancelAllRequests();
-        Communications.notifySyncComplete(null);
+        finish(null);
+    }
+
+    // --- Visibility -----------------------------------------------------------
+
+    //! What the watch actually has available during a sync.
+    //!
+    //! The difference from the simulator almost always sits here: there the
+    //! line is the computer's internet, on the watch it is either Wi-Fi or —
+    //! far slower — Bluetooth by way of the phone.
+    private function logEnvironment() as Void {
+        var connections = System.getDeviceSettings().connectionInfo;
+        Log.code("Sync: Wi-Fi", stateOf(connections, :wifi));
+        Log.code("Sync: Bluetooth", stateOf(connections, :bluetooth));
+        Log.code("Sync: LTE", stateOf(connections, :lte));
+        var stats = System.getSystemStats();
+        Log.code("Sync: free memory", stats.freeMemory);
+    }
+
+    //! -1 means: this path does not exist on the device.
+    private function stateOf(connections as Dictionary, key as Symbol) as Number {
+        var info = connections[key];
+        if (info instanceof System.ConnectionInfo) {
+            return info.state;
+        }
+        return -1;
+    }
+
+    //! Every preparation step gets its own mark on the ring.
+    private function enterPhase(phase as Number) as Void {
+        _phase = phase;
+        Log.code("Sync: phase", phase);
+        report();
+    }
+
+    //! Ends the sync by exactly one route — otherwise the watchdog keeps running.
+    private function finish(error as String?) as Void {
+        stopWatchdog();
+        Log.line("Sync: end, error=" + ((error == null) ? "none" : error));
+        Communications.notifySyncComplete(error);
+    }
+
+    // --- Watchdog -------------------------------------------------------------
+
+    //! Without it every unanswered request ends in a sync screen that never
+    //! closes: Connect IQ simply does not call the callback, and the app is
+    //! left with no place at which it could notice.
+    private function startWatchdog() as Void {
+        try {
+            var timer = new Timer.Timer();
+            timer.start(method(:onWatchdogTick), WATCHDOG_TICK_MS, true);
+            _watchdog = timer;
+        } catch (ex) {
+            // No timer in sync mode: then without one. That is the state as it
+            // was before, not worse.
+            Log.line("Sync: no watchdog available");
+            _watchdog = null;
+        }
+    }
+
+    private function stopWatchdog() as Void {
+        var timer = _watchdog;
+        if (timer != null) {
+            timer.stop();
+            _watchdog = null;
+        }
+    }
+
+    function onWatchdogTick() as Void {
+        if (_stopped) {
+            return;
+        }
+        if (_activity > 0) {
+            _activity = 0;
+            _idleTicks = 0;
+            return;
+        }
+        _idleTicks += 1;
+        Log.code("Sync: quiet in phase " + _phase.toString() + ", ticks", _idleTicks);
+        if (_idleTicks < WATCHDOG_MAX_IDLE_TICKS) {
+            return;
+        }
+        _stopped = true;
+        Communications.cancelAllRequests();
+        finish("No response in phase " + _phase.toString());
+    }
+
+    //! Every stirring from outside — a response or a byte — counts.
+    private function stirred() as Void {
+        _activity += 1;
     }
 
     // --- Cleanup ------------------------------------------------------------
@@ -117,6 +244,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         var entries = Store.progressEntries();
         Log.code("Sync: progress entries", entries.size());
         if (entries.size() == 0) {
+            enterPhase(PHASE_PROGRESS_PUSHED);
             fetchPlaylist();
             return;
         }
@@ -124,6 +252,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
     }
 
     function onProgressPushed(code as Number, data as Dictionary or String or Null) as Void {
+        stirred();
         Log.code("Sync: progress", code);
         if (code == 200) {
             // Only discard after confirmed acceptance — on an abort the
@@ -131,6 +260,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
             Store.clearProgress();
             adoptServerPositions(data);
         }
+        enterPhase(PHASE_PROGRESS_PUSHED);
         fetchPlaylist();
     }
 
@@ -165,10 +295,12 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         if (_stopped) {
             return;
         }
+        Log.line("Sync: fetching playlist");
         _client.playlist(method(:onPlaylist));
     }
 
     function onPlaylist(code as Number, data as Dictionary or String or Null) as Void {
+        stirred();
         Log.code("Sync: playlist", code);
         if (_stopped) {
             return;
@@ -176,20 +308,18 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         if (code == 409) {
             // Playlist not found. This is a configuration error, not an empty
             // wish — nothing is deleted here.
-            Communications.notifySyncComplete(
-                WatchUi.loadResource(Rez.Strings.syncNoPlaylist) as String
-            );
+            finish(WatchUi.loadResource(Rez.Strings.syncNoPlaylist) as String);
             return;
         }
         if (code != 200 || !(data instanceof Dictionary)) {
             // Without a fresh target, everything stays as it is.
-            Communications.notifySyncComplete("HTTP " + code.toString());
+            finish("HTTP " + code.toString());
             return;
         }
 
         var books = data["books"];
         if (!(books instanceof Array)) {
-            Communications.notifySyncComplete(null);
+            finish(null);
             return;
         }
 
@@ -212,6 +342,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         _booksTotal = _bookQueue.size();
         Log.code("Sync: per playlist", _booksTotal);
         Log.code("Sync: removed", gone.size());
+        enterPhase(PHASE_PLAYLIST);
         nextBook();
     }
 
@@ -222,8 +353,8 @@ class AbSyncDelegate extends Communications.SyncDelegate {
             return;
         }
         if (_bookQueue.size() == 0) {
-            Log.line("Sync: done, error=" + ((_failure == null) ? "none" : _failure));
-            Communications.notifySyncComplete(_failure);
+            Log.code("Sync: done, still preparing", _stillPreparing);
+            finish(_failure);
             return;
         }
         var bookId = _bookQueue[0];
@@ -234,6 +365,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
     }
 
     function onSegments(code as Number, data as Dictionary or String or Null) as Void {
+        stirred();
         Log.code("Sync: segments", code);
         if (_stopped) {
             return;
@@ -280,6 +412,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         _downloadsDone = 0;
         Log.code("Sync: segments total", segments.size());
         Log.code("Sync: of those to download", _downloadsTotal);
+        enterPhase(PHASE_SEGMENTS);
         downloadNext();
     }
 
@@ -311,16 +444,35 @@ class AbSyncDelegate extends Communications.SyncDelegate {
             return;
         }
         _pending = segment;
+        _segmentBytes = 0;
+        _segmentSize = 0;
         Log.line("Sync: downloading " + path);
         _client.downloadSegment(
             path,
             SyncConfigView.stringOr(segment["encoding"], "m4a"),
-            method(:onSegmentDownloaded)
+            method(:onSegmentDownloaded),
+            method(:onSegmentBytes)
         );
     }
 
+    //! Byte count during a segment.
+    //!
+    //! Without this report the ring stands still from the start of a segment to
+    //! its end — with several megabytes over Bluetooth that is minutes to
+    //! hours in which the watch looks like it has hung.
+    function onSegmentBytes(transferred as Number, size as Number?) as Void {
+        stirred();
+        _segmentBytes = transferred;
+        if (size != null) {
+            _segmentSize = size;
+        }
+        report();
+    }
+
     function onSegmentDownloaded(code as Number, data as Object?) as Void {
+        stirred();
         Log.code("Sync: segment downloaded", code);
+        Log.code("Sync: bytes", _segmentBytes);
         if (_stopped) {
             return;
         }
@@ -340,6 +492,8 @@ class AbSyncDelegate extends Communications.SyncDelegate {
             _failure = "HTTP " + code.toString();
         }
         _downloadsDone += 1;
+        _segmentBytes = 0;
+        _segmentSize = 0;
         report();
         downloadNext();
     }
@@ -348,23 +502,44 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         _booksDone += 1;
         _downloadsTotal = 0;
         _downloadsDone = 0;
+        _segmentBytes = 0;
+        _segmentSize = 0;
         report();
         nextBook();
     }
 
     private function report() as Void {
-        if (_booksTotal <= 0) {
+        var percent = _phase;
+        if (_booksTotal > 0) {
+            var withinBook = 0.0;
+            if (_downloadsTotal > 0) {
+                withinBook = (_downloadsDone.toFloat() + segmentShare()) / _downloadsTotal.toFloat();
+            }
+            var share = (_booksDone.toFloat() + withinBook) / _booksTotal.toFloat();
+            if (share > 1.0) {
+                share = 1.0;
+            }
+            percent = PHASE_DOWNLOAD + ((100 - PHASE_DOWNLOAD) * share).toNumber();
+        }
+        if (percent == _reported) {
             return;
         }
-        var withinBook = 0.0;
-        if (_downloadsTotal > 0) {
-            withinBook = _downloadsDone.toFloat() / _downloadsTotal.toFloat();
+        _reported = percent;
+        // The reported number belongs in the log: if the watch shows 0 % while
+        // this says 6 %, the fault is not in this calculation.
+        Log.code("Sync: reported", percent);
+        Communications.notifySyncProgress(percent);
+    }
+
+    //! Share of the segment currently in flight.
+    private function segmentShare() as Float {
+        if (_segmentSize <= 0 || _segmentBytes <= 0) {
+            return 0.0;
         }
-        var share = (_booksDone.toFloat() + withinBook) / _booksTotal.toFloat();
-        if (share > 1.0) {
-            share = 1.0;
+        if (_segmentBytes >= _segmentSize) {
+            return 1.0;
         }
-        Communications.notifySyncProgress((share * 100).toNumber());
+        return _segmentBytes.toFloat() / _segmentSize.toFloat();
     }
 
     static function numberOf(value as Object?) as Number {
