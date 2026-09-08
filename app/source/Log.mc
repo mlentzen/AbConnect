@@ -12,6 +12,14 @@ module Log {
     //! Set to false once the app runs on the watch.
     const ENABLED = true;
 
+    //! Per-item traces: every segment, every cache entry, every metadata field.
+    //!
+    //! Far too loud for normal operation — one line per file in the cache — and
+    //! exactly what is needed while the player still refuses to say why it
+    //! plays nothing. Kept apart from ENABLED so the flood can go without the
+    //! structure going with it.
+    const VERBOSE = true;
+
     function line(message as String) as Void {
         if (ENABLED) {
             System.println(message);
@@ -21,6 +29,14 @@ module Log {
     function code(message as String, value as Number) as Void {
         if (ENABLED) {
             System.println(message + " -> " + value.toString());
+        }
+    }
+
+    //! One item out of a list. Indented, so that the structural lines above
+    //! still stand out in a console full of them.
+    function detail(message as String) as Void {
+        if (ENABLED && VERBOSE) {
+            System.println("    " + message);
         }
     }
 }
