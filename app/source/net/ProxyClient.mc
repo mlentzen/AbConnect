@@ -3,11 +3,11 @@ import Toybox.Communications;
 import Toybox.Lang;
 import Toybox.Media;
 
-//! Aufrufe gegen abconnect-proxy.
+//! Calls against abconnect-proxy.
 //!
-//! Die Uhr kennt nur Proxy-URL und Token — der Audiobookshelf-Schlüssel bleibt
-//! serverseitig. Antworten sind bewusst schmal gehalten, weil Connect IQ große
-//! JSON-Antworten mit -402 beziehungsweise -403 abbricht.
+//! The watch only knows the proxy URL and token — the Audiobookshelf key stays
+//! server-side. Responses are deliberately kept small, because Connect IQ
+//! aborts large JSON responses with -402 or -403.
 class ProxyClient {
 
     private var _base as String;
@@ -19,8 +19,8 @@ class ProxyClient {
         _base = withoutTrailingSlash(_base);
     }
 
-    //! substring() liefert null, wenn die Grenzen nicht passen — ohne diese
-    //! Prüfung stürzt die App an einer URL mit Schrägstrich am Ende ab.
+    //! substring() returns null when the bounds do not fit — without this
+    //! check the app crashes on a URL with a trailing slash.
     private static function withoutTrailingSlash(value as String) as String {
         var result = value;
         while (result.length() > 0) {
@@ -37,7 +37,7 @@ class ProxyClient {
         return result;
     }
 
-    //! Ohne URL und Token hat kein Aufruf Aussicht auf Erfolg.
+    //! Without a URL and token, no call has any chance of success.
     function isConfigured() as Boolean {
         return _base.length() > 0 && _token.length() > 0;
     }
@@ -46,11 +46,11 @@ class ProxyClient {
         return _base + path;
     }
 
-    //! Nicht `headers` nennen: der Name kollidiert mit dem Options-Schlüssel
-    //! `:headers` von makeWebRequest. Der Compiler liest das Symbol dann als
-    //! indirekten Verweis auf diese private Methode und warnt, dass er sie zur
-    //! Laufzeit nicht findet — im schlechtesten Fall geht der Request ohne
-    //! Authorization-Kopfzeile raus.
+    //! Do not name it `headers`: the name collides with makeWebRequest's
+    //! `:headers` option key. The compiler then reads the symbol as an
+    //! indirect reference to this private method and warns that it cannot find
+    //! it at runtime — in the worst case the request goes out without an
+    //! Authorization header.
     private function authHeaders() as Dictionary {
         return { "Authorization" => "Bearer " + _token };
     }
@@ -63,9 +63,9 @@ class ProxyClient {
         };
     }
 
-    // --- Bibliothek ----------------------------------------------------------
+    // --- Library ----------------------------------------------------------
 
-    //! Die Sollvorgabe: was in der Playlist auf dem Server liegt.
+    //! The target: what is in the playlist on the server.
     function playlist(callback as Method) as Void {
         Communications.makeWebRequest(url("/v1/playlist"), null, jsonOptions(), callback);
     }
@@ -109,10 +109,10 @@ class ProxyClient {
         );
     }
 
-    // --- Medien --------------------------------------------------------------
+    // --- Media --------------------------------------------------------------
 
-    //! Lädt ein Segment in den verschlüsselten Media-Cache der Uhr.
-    //! Die Antwort der Callback ist eine Media.ContentRef.
+    //! Downloads a segment into the watch's encrypted media cache.
+    //! The callback's response is a Media.ContentRef.
     function downloadSegment(path as String, encoding as String, callback as Method) as Void {
         Communications.makeWebRequest(
             url(path),
@@ -127,8 +127,8 @@ class ProxyClient {
         );
     }
 
-    //! Das Cover läuft über eine vorsignierte URL: makeImageRequest kann keine
-    //! Header setzen, und der Token hätte in einem Query-String nichts verloren.
+    //! The cover goes through a pre-signed URL: makeImageRequest cannot set
+    //! headers, and the token has no business being in a query string.
     function downloadCover(signedPath as String, callback as Method) as Void {
         Communications.makeImageRequest(
             url(signedPath),
@@ -142,7 +142,7 @@ class ProxyClient {
         );
     }
 
-    // --- Fortschritt ---------------------------------------------------------
+    // --- Progress ---------------------------------------------------------
 
     function pushProgress(entries as Array, callback as Method) as Void {
         Communications.makeWebRequest(
@@ -160,7 +160,7 @@ class ProxyClient {
         );
     }
 
-    // --- Hilfen --------------------------------------------------------------
+    // --- Helpers --------------------------------------------------------------
 
     static function mediaEncoding(encoding as String) as Number {
         if (encoding.equals("mp3")) {
@@ -169,11 +169,10 @@ class ProxyClient {
         return Media.ENCODING_M4A;
     }
 
-    //! Die Telefon-Einstellung sticht die beim Bauen eingebackene Vorgabe.
+    //! The phone setting overrides the default baked in at build time.
     //!
-    //! Ein leerer Wert zählt dabei wie keiner: Eine sideloadete App bekommt in
-    //! Garmin Connect keine Einstellungsmaske, sonst bliebe die Vorgabe
-    //! wirkungslos.
+    //! An empty value counts as none here: a side-loaded app gets no settings
+    //! screen in Garmin Connect, otherwise the default would have no effect.
     private static function readSetting(key as String, fallback as String) as String {
         var value = Application.Properties.getValue(key);
         if (value instanceof String && value.length() > 0) {

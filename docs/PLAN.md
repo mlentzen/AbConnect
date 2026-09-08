@@ -1,213 +1,213 @@
-# AbConnect — Audiobookshelf als Connect IQ Audio Provider
+# AbConnect — Audiobookshelf as a Connect IQ audio provider
 
-Planungsdokument. Stand: 2026-09-08.
+Planning document. As of: 2026-09-08.
 
-> **Umsetzungsstand:** Proxy und App sind gebaut; die Playlist-Spiegelung und
-> der Fortschritts-Push beim Pausieren laufen. Der Hardware-Spike aus M0 steht
-> aus und bleibt die entscheidende offene Frage — siehe R1.
+> **Implementation status:** proxy and app are built; the playlist mirroring and
+> the progress push on pause work. The hardware spike from M0 is outstanding
+> and remains the decisive open question — see R1.
 
-Ziel: eine Monkey-C-App vom Typ `audio-content-provider-app`, die Hörbücher aus
-einer selbst gehosteten [Audiobookshelf](https://www.audiobookshelf.org/)-Instanz
-auf die Garmin-Uhr synchronisiert, offline abspielt und den Hörfortschritt
-zurückschreibt.
+Goal: a Monkey C app of type `audio-content-provider-app` that syncs audiobooks
+from a self-hosted [Audiobookshelf](https://www.audiobookshelf.org/) instance
+to the Garmin watch, plays them offline and writes listening progress back.
 
-**Zielumgebung (festgelegt):**
+**Target environment (fixed):**
 
-* Aktuelle ABS-Version (≥ 2.26, API-Keys verfügbar)
-* Bibliothek überwiegend Einzeldatei-`.m4b` **mit** Kapitelmarken
-* Testgerät fēnix 7X Pro (`fenix7xpro`, API Level 5.2)
-* HTTPS mit gültigen Zertifikaten ist gegeben
-* Sollvorgabe ist die Audiobookshelf-**Playlist „Garmin"**, nicht eine Auswahl
-  auf der Uhr
-* Companion-Server läuft als **Podman-Quadlet** im bestehenden Stack —
-  **ohne gemeinsames Dateisystem mit ABS** und **ohne einkompilierte
-  Serveradresse oder Schlüssel**
+* Current ABS version (≥ 2.26, API keys available)
+* Library predominantly single-file `.m4b` **with** chapter markers
+* Test device fēnix 7X Pro (`fenix7xpro`, API level 5.2)
+* HTTPS with valid certificates is a given
+* The target is the Audiobookshelf **playlist "Garmin"**, not a selection on
+  the watch
+* Companion server runs as a **Podman quadlet** in the existing stack —
+  **without a shared filesystem with ABS** and **without a compiled-in server
+  address or key**
 
 ---
 
-## 1. Rahmenbedingungen
+## 1. Constraints
 
-### 1.1 Wie ein Audio Content Provider funktioniert
+### 1.1 How an audio content provider works
 
-Connect IQ startet die App in **vier getrennten Modi** (jeder Modus ist ein
-eigener App-Start, es gibt keinen gemeinsamen Laufzeitzustand):
+Connect IQ starts the app in **four separate modes** (each mode is its own app
+start, there is no shared runtime state):
 
-| Modus | Einstieg | Aufgabe |
+| Mode | Entry point | Task |
 |---|---|---|
-| Sync-Konfiguration | `getSyncConfigurationView()` | Nutzer wählt aus, was heruntergeladen werden soll |
-| Sync | `getSyncDelegate()` | System aktiviert WLAN, App lädt Dateien herunter |
-| Playback-Konfiguration | `getPlaybackConfigurationView()` | Nutzer wählt aus, was abgespielt wird |
-| Playback | `getContentDelegate()` | System-Mediaplayer spielt ab, App liefert Iterator + Events |
+| Sync configuration | `getSyncConfigurationView()` | user selects what should be downloaded |
+| Sync | `getSyncDelegate()` | system enables Wi-Fi, app downloads files |
+| Playback configuration | `getPlaybackConfigurationView()` | user selects what is played |
+| Playback | `getContentDelegate()` | system media player plays, app supplies iterator + events |
 
-App-Klasse erbt von `Application.AudioContentProviderApp`. Manifest:
-`type="audio-content-provider-app"`, Permission `Communications`.
+App class inherits from `Application.AudioContentProviderApp`. Manifest:
+`type="audio-content-provider-app"`, permission `Communications`.
 
-Referenzimplementierung: `garmin/connectiq-apps` → `audio-provider/monkeymusic`.
+Reference implementation: `garmin/connectiq-apps` → `audio-provider/monkeymusic`.
 
-### 1.2 Harte Plattform-Constraints
+### 1.2 Hard platform constraints
 
-1. **Kein Streaming.** Der Mediaplayer spielt ausschließlich Dateien, die vorher
-   über `Communications.makeWebRequest(..., {:responseType => HTTP_RESPONSE_CONTENT_TYPE_AUDIO,
-   :mediaEncoding => ...})` in den verschlüsselten Media-Cache geschrieben wurden.
-   AbConnect ist eine Download-App, kein Streaming-Client.
-2. **Codecs:** nur `ENCODING_MP3`, `ENCODING_M4A`, `ENCODING_WAV`, `ENCODING_ADTS`.
-   Kein Opus, kein FLAC, kein HLS.
-3. **JSON-Antworten sind eng limitiert.** `makeWebRequest` bricht bei großen
-   Antworten mit `-402` (zu groß) bzw. `-403` (Speicher) ab; kritisch wird es schon
-   im niedrigen zweistelligen KB-Bereich. Eine ungefilterte ABS-Bibliotheksantwort
-   ist damit nicht verarbeitbar.
-4. **Object Store: 8 KB pro Wert.** Flache Maps, kurze Schlüssel, ein Key pro Buch
-   statt einer globalen Struktur.
-5. **App-Größe** möglichst unter 128 KB.
+1. **No streaming.** The media player only plays files that were previously
+   written into the encrypted media cache via
+   `Communications.makeWebRequest(..., {:responseType => HTTP_RESPONSE_CONTENT_TYPE_AUDIO,
+   :mediaEncoding => ...})`.
+   AbConnect is a download app, not a streaming client.
+2. **Codecs:** only `ENCODING_MP3`, `ENCODING_M4A`, `ENCODING_WAV`, `ENCODING_ADTS`.
+   No Opus, no FLAC, no HLS.
+3. **JSON responses are tightly limited.** `makeWebRequest` aborts on large
+   responses with `-402` (too large) or `-403` (memory); it gets critical
+   already in the low double-digit KB range. An unfiltered ABS library response
+   is therefore not processable.
+4. **Object Store: 8 KB per value.** Flat maps, short keys, one key per book
+   instead of one global structure.
+5. **App size** ideally under 128 KB.
 
-TLS ist in dieser Umgebung kein Thema — Zertifikate sind gültig, die
-Geräteanforderung (Kette von bekannter CA) ist erfüllt.
+TLS is not an issue in this environment — certificates are valid and the device
+requirement (chain from a known CA) is met.
 
-### 1.3 Relevante API-Details (verifiziert in den Toybox-Docs)
+### 1.3 Relevant API details (verified in the Toybox docs)
 
-* **`Media.Content(contentRef, contentMetadata)`** — Metadaten (title, artist,
-  album, genre, trackNumber) sind vom App-Code setzbar. Wir sind *nicht* auf Tags
-  in den Audiodateien angewiesen.
-* **`Media.ActiveContent(contentRef, metadata, playbackStartPos)`** — Subklasse von
-  `Media.Content` mit Startposition in Sekunden. Ermöglicht echtes Resume mitten im
-  Segment: der `ContentIterator` gibt für den aktuellen Track ein `ActiveContent`
-  mit gespeicherter Position zurück.
-* **`PlaybackProfile.skipForwardTimeDelta` / `skipBackwardTimeDelta`** — Standard 30 s,
-  für Hörbücher auf 30 s vor / 15 s zurück gesetzt.
+* **`Media.Content(contentRef, contentMetadata)`** — metadata (title, artist,
+  album, genre, trackNumber) can be set by app code. We do *not* depend on tags
+  in the audio files.
+* **`Media.ActiveContent(contentRef, metadata, playbackStartPos)`** — subclass of
+  `Media.Content` with a start position in seconds. Enables real resume in the
+  middle of a segment: the `ContentIterator` returns an `ActiveContent` with a
+  stored position for the current track.
+* **`PlaybackProfile.skipForwardTimeDelta` / `skipBackwardTimeDelta`** — default 30 s,
+  set to 30 s forward / 15 s back for audiobooks.
 
-Weiteres: `Media.setAlbumArt()`, `Media.getCacheStatistics()`,
+Also: `Media.setAlbumArt()`, `Media.getCacheStatistics()`,
 `Media.deleteCachedItem(ref)`, `Media.resetContentCache()`.
 
-`Media.SyncDelegate` ist deprecated (Entfernung nach System 9). Da die fēnix 7X Pro
-API Level 5.2 bietet, setzen wir `minSdkVersion` auf 5.0 und implementieren
-ausschließlich gegen **`Communications.SyncDelegate`** (ab API 3.1.0).
+`Media.SyncDelegate` is deprecated (removal after System 9). Since the fēnix 7X Pro
+offers API level 5.2, we set `minSdkVersion` to 5.0 and implement exclusively
+against **`Communications.SyncDelegate`** (from API 3.1.0).
 
-### 1.4 Audiobookshelf-API
+### 1.4 Audiobookshelf API
 
-Auth: **API-Key** (ABS ≥ 2.26), Header `Authorization: Bearer <key>`. Erzeugt unter
-Settings → Users → API Keys, erbt die Rechte des zugeordneten Users. Der Key liegt
-ausschließlich im Proxy, nie auf der Uhr.
+Auth: **API key** (ABS ≥ 2.26), header `Authorization: Bearer <key>`. Created
+under Settings → Users → API Keys, inherits the rights of the assigned user.
+The key lives exclusively in the proxy, never on the watch.
 
-Genutzte Endpunkte (vom Proxy, nicht von der Uhr):
+Endpoints used (by the proxy, not the watch):
 
-| Zweck | Endpunkt |
+| Purpose | Endpoint |
 |---|---|
-| Bibliotheken | `GET /api/libraries` |
-| Buchliste | `GET /api/libraries/{id}/items?limit&page&sort&minified=1` |
-| Buchdetails inkl. `media.audioFiles[]`, `media.chapters[]` | `GET /api/items/{id}?expanded=1&include=progress` |
-| Laufende Bücher | `GET /api/me/items-in-progress` |
-| **Datei-Download** | `GET /api/items/{id}/file/{ino}/download` |
+| Libraries | `GET /api/libraries` |
+| Book list | `GET /api/libraries/{id}/items?limit&page&sort&minified=1` |
+| Book details incl. `media.audioFiles[]`, `media.chapters[]` | `GET /api/items/{id}?expanded=1&include=progress` |
+| Books in progress | `GET /api/me/items-in-progress` |
+| **File download** | `GET /api/items/{id}/file/{ino}/download` |
 | Cover | `GET /api/items/{id}/cover?width=...&format=jpeg` |
-| Fortschritt schreiben / lesen | `PATCH` bzw. `GET /api/me/progress/{libraryItemId}` |
+| Write / read progress | `PATCH` or `GET /api/me/progress/{libraryItemId}` |
 
-> Exakte Pfade und Feldnamen sind gegen die Zielinstanz zu verifizieren — ABS hat
-> Auth und Sessions in 2.26 umgebaut. Ein Smoke-Test-Skript ist Teil von M1.
+> Exact paths and field names are to be verified against the target instance —
+> ABS reworked auth and sessions in 2.26. A smoke-test script is part of M1.
 
-Bewusst **nicht** genutzt: `POST /api/items/{id}/play` und die Session-/HLS-Endpunkte.
-Die liefern Transcoding-Streams, die das Gerät nicht abspielen kann.
+Deliberately **not** used: `POST /api/items/{id}/play` and the session/HLS
+endpoints. Those deliver transcoding streams the device cannot play.
 
 ---
 
-## 2. Zentrale Designentscheidungen
+## 2. Central design decisions
 
-### E1 — `abconnect-proxy` ist Kernkomponente
+### E1 — `abconnect-proxy` is a core component
 
-Eine Einzeldatei-`.m4b` ist auf der Uhr direkt nicht nutzbar: ein Track über zwölf
-Stunden, keine Kapitelnavigation, ein einziger mehrere hundert MB großer Download,
-dessen Abbruch alles kostet. Da die Bibliothek überwiegend aus `.m4b` besteht, ist
-der Proxy Voraussetzung, nicht Beiwerk.
+A single-file `.m4b` is not directly usable on the watch: one track spanning
+twelve hours, no chapter navigation, a single download of several hundred MB
+whose abort costs everything. Since the library consists predominantly of
+`.m4b`, the proxy is a prerequisite, not an accessory.
 
-Er löst drei Probleme auf einmal:
+It solves three problems at once:
 
-1. **Kapitelschnitt.** `ffmpeg -ss <start> -to <ende> -i buch.m4b -map_chapters -1 -c copy seg.m4a`
-   schneidet verlustfrei per Stream-Copy — kein Re-Encode, Ergebnis ist AAC im
-   MP4-Container und damit `ENCODING_M4A`.
-2. **Schlanke JSON-Antworten.** Die Uhr sieht nie eine ABS-Antwort, sondern flache,
-   reduzierte Listen (siehe 1.2.3).
-3. **Geheimnisse bleiben serverseitig.** Der ABS-API-Key liegt im Proxy; die Uhr
-   kennt nur Proxy-URL und ein eigenes Token.
+1. **Chapter cutting.** `ffmpeg -ss <start> -to <end> -i book.m4b -map_chapters -1 -c copy seg.m4a`
+   cuts losslessly via stream copy — no re-encode, the result is AAC in an MP4
+   container and therefore `ENCODING_M4A`.
+2. **Lean JSON responses.** The watch never sees an ABS response, only flat,
+   reduced lists (see 1.2.3).
+3. **Secrets stay server-side.** The ABS API key lives in the proxy; the watch
+   only knows the proxy URL and a token of its own.
 
-### E2 — Vorbereitung pro Buch, nicht pro Segment
+### E2 — Preparation per book, not per segment
 
-Der Proxy hat **keinen Zugriff auf das ABS-Medienverzeichnis**. Um zu schneiden,
-muss er die `.m4b` erst über `GET /api/items/{id}/file/{ino}/download` holen. Damit
-ist Schneiden im Request ausgeschlossen — sonst würde jedes einzelne Segment einen
-300-MB-Download auslösen.
+The proxy has **no access to the ABS media directory**. To cut, it first has to
+fetch the `.m4b` via `GET /api/items/{id}/file/{ino}/download`. This rules out
+cutting within the request — otherwise every single segment would trigger a
+300 MB download.
 
-Stattdessen ein **Prepare-Job pro Buch**:
+Instead, a **prepare job per book**:
 
 ```
 prepare(bookId):
-  1. Metadaten + Kapitel von ABS holen
-  2. .m4b nach WORK_DIR herunterladen
-  3. ffprobe: Kapitel verifizieren (Fallback: 15-min-Raster)
-  4. Segmenttabelle normalisieren
-  5. alle Segmente per -c copy schneiden -> CACHE_DIR/<bookId>/
-  6. Cover holen und verkleinern
-  7. .m4b löschen            <- sofort, nicht am Jobende
-  8. Status = ready
+  1. fetch metadata + chapters from ABS
+  2. download .m4b to WORK_DIR
+  3. ffprobe: verify chapters (fallback: 15-minute grid)
+  4. normalize segment table
+  5. cut all segments via -c copy -> CACHE_DIR/<bookId>/
+  6. fetch and downscale cover
+  7. delete .m4b            <- immediately, not at job end
+  8. status = ready
 ```
 
-Ausgelöst wird der Job **beim Ankreuzen in der Sync-Konfiguration**, nicht beim
-Sync. Bis die Uhr am Ladegerät synchronisiert, ist das Buch in aller Regel fertig.
-Der Sync fragt nur den Status ab und lädt, was `ready` ist; alles andere meldet er
-als „wird noch vorbereitet" statt zu blockieren.
+The job is triggered **when checking a book in the sync configuration**, not on
+sync. By the time the watch syncs on the charger, the book is finished as a
+rule. The sync only queries the status and downloads what is `ready`; anything
+else it reports as "still being prepared" instead of blocking.
 
-Schritt 7 ist bewusst früh: nach dem Schnitt hält der Proxy nur noch die Segmente,
-deren Gesamtgröße dank Stream-Copy ungefähr der Quelldatei entspricht. Der
-Spitzenbedarf von ~2× Buchgröße besteht nur während des Jobs.
+Step 7 is deliberately early: after the cut, the proxy only holds the segments,
+whose total size thanks to stream copy roughly matches the source file. The
+peak usage of ~2× book size exists only during the job.
 
-### E2a — Die Playlist ist die Sollvorgabe
+### E2a — The playlist is the target
 
-Ausgewählt wird in Audiobookshelf, nicht auf der Uhr: was in der Playlist
-`ABS_PLAYLIST` (Default `Garmin`) liegt, gehört auf die Uhr. Kommt ein Buch dazu,
-erscheint es; fliegt es raus, verschwindet es. Das erspart die Auswahl auf einem
-280-Pixel-Display und macht das Handy zur einzigen Stelle, an der entschieden wird.
+Selection happens in Audiobookshelf, not on the watch: whatever is in the
+playlist `ABS_PLAYLIST` (default `Garmin`) belongs on the watch. If a book is
+added, it appears; if it is removed, it disappears. That spares selection on a
+280-pixel display and makes the phone the only place where decisions are made.
 
-Der Proxy gleicht selbstständig ab (`PLAYLIST_POLL_SECONDS`, Default 600), damit
-ein frisch hinzugefügtes Buch schon geschnitten bereitliegt, bevor die Uhr das
-nächste Mal synchronisiert. Die Uhr liest die Vorgabe über `GET /v1/playlist`
-und spiegelt sie: fehlende Segmente laden, überzählige Bücher löschen.
+The proxy reconciles on its own (`PLAYLIST_POLL_SECONDS`, default 600) so a
+freshly added book is already segmented and ready before the watch syncs the
+next time. The watch reads the target via `GET /v1/playlist` and mirrors it:
+download missing segments, delete surplus books.
 
-**Ein Fehlschlag ist keine leere Playlist.** Ein Tippfehler im Namen, ein kurz
-nicht erreichbares ABS, ein HTTP-Fehler — nichts davon darf die Uhr leerräumen.
-Der Proxy antwortet auf `/v1/playlist` mit 409 statt mit einer leeren Liste, gibt
-im Abgleich nichts frei und meldet den letzten bekannten Stand weiter; die Uhr
-löscht nur, wenn sie eine frische, gültige Vorgabe in der Hand hat.
+**A failure is not an empty playlist.** A typo in the name, a briefly
+unreachable ABS, an HTTP error — none of that may wipe the watch. The proxy
+answers `/v1/playlist` with 409 instead of an empty list, releases nothing
+during reconciliation and keeps reporting the last known state; the watch only
+deletes when it has a fresh, valid target in hand.
 
-Die Uhr merkt sich den letzten bekannten Stand und wann sie ihn geholt hat. Ohne
-diesen Zeitstempel bliebe ein neu hinzugefügtes Buch unbemerkt: lokal stimmt ja
-alles, es gäbe keinen Anlass zu synchronisieren. Deshalb gilt eine Vorgabe nach
-`PLAYLIST_MAX_AGE_SECONDS` (6 h) als veraltet und löst einen Sync aus.
+The watch remembers the last known state and when it fetched it. Without this
+timestamp a newly added book would go unnoticed: everything is fine locally,
+there would be no reason to sync. That is why a target is considered stale
+after `PLAYLIST_MAX_AGE_SECONDS` (6 h) and triggers a sync.
 
-Die Endpunkte `/v1/books`, `/prepare` und `/release` bleiben bestehen, werden von
-der Uhr aber nicht mehr aufgerufen — sie sind Werkzeug für `curl` und Fehlersuche.
+The endpoints `/v1/books`, `/prepare` and `/release` still exist, but the watch
+no longer calls them — they are tools for `curl` and debugging.
 
-### E3 — Konfiguration ausschließlich zur Laufzeit
+### E3 — Configuration exclusively at runtime
 
-Im Image steht **keine** ABS-Adresse und kein Schlüssel. Alles kommt aus der
-Umgebung, Geheimnisse über Podman-Secrets:
+The image contains **no** ABS address and no key. Everything comes from the
+environment, secrets via Podman secrets:
 
-| Variable | Pflicht | Bedeutung |
+| Variable | Required | Meaning |
 |---|---|---|
-| `ABS_URL` | ja | Basis-URL der ABS-Instanz (stackintern erreichbar) |
-| `ABS_API_KEY` | ja | ABS-API-Key, als Podman-Secret eingehängt |
-| `ABS_PLAYLIST` | — | Name der maßgeblichen Playlist, Default `Garmin` |
-| `PLAYLIST_POLL_SECONDS` | — | Abstand des Hintergrund-Abgleichs, Default 600 |
-| `ABCONNECT_TOKEN` | ja | Token für Uhr → Proxy, unabhängig vom ABS-Key; Komma-Liste für Rotation |
-| `CACHE_DIR` | — | Segment-Cache, Default `/var/cache/abconnect` |
-| `WORK_DIR` | — | transienter Platz für die `.m4b` während des Jobs |
-| `CACHE_MAX_BYTES` | — | Obergrenze, darüber LRU-Verdrängung; großzügig ansetzen |
-| `RELEASE_TTL_DAYS` | — | wie lange freigegebene Bücher im Cache bleiben, Default 30 |
-| `SEGMENT_TARGET_SECONDS` / `_MIN_` / `_MAX_` | — | Segmentnormalisierung, Default 900 / 180 / 1500 |
+| `ABS_URL` | yes | base URL of the ABS instance (reachable within the stack) |
+| `ABS_API_KEY` | yes | ABS API key, mounted as a Podman secret |
+| `ABS_PLAYLIST` | — | name of the authoritative playlist, default `Garmin` |
+| `PLAYLIST_POLL_SECONDS` | — | interval of the background reconciliation, default 600 |
+| `ABCONNECT_TOKEN` | yes | token for watch → proxy, independent of the ABS key; comma list for rotation |
+| `CACHE_DIR` | — | segment cache, default `/var/cache/abconnect` |
+| `WORK_DIR` | — | transient space for the `.m4b` during the job |
+| `CACHE_MAX_BYTES` | — | upper limit, above which LRU eviction kicks in; set generously |
+| `RELEASE_TTL_DAYS` | — | how long released books stay in the cache, default 30 |
+| `SEGMENT_TARGET_SECONDS` / `_MIN_` / `_MAX_` | — | segment normalization, default 900 / 180 / 1500 |
 | `LOG_LEVEL` | — | |
 
-Der Start bricht mit klarer Meldung ab, wenn eine Pflichtvariable fehlt — kein
-stiller Betrieb mit Defaults. `GET /healthz` prüft zusätzlich, ob ABS erreichbar
-ist und der Key akzeptiert wird; damit schlägt eine Fehlkonfiguration im
-Quadlet-Healthcheck auf, nicht erst beim ersten Sync.
+The start aborts with a clear message if a required variable is missing — no
+silent operation with defaults. `GET /health` additionally checks whether ABS
+is reachable and the key is accepted; this way a misconfiguration surfaces in
+the quadlet healthcheck, not only on the watch's first sync.
 
-Beispiel-Quadlet (`~/.config/containers/systemd/abconnect-proxy.container`):
+Example quadlet (`~/.config/containers/systemd/abconnect-proxy.container`):
 
 ```ini
 [Unit]
@@ -221,296 +221,299 @@ Secret=abs-api-key,type=env,target=ABS_API_KEY
 Secret=abconnect-token,type=env,target=ABCONNECT_TOKEN
 Volume=abconnect-cache:/var/cache/abconnect
 Volume=abconnect-work:/var/tmp/abconnect
-PublishPort=127.0.0.1:18543:8080   # 8080 ist auf dem Host belegt
-HealthCmd=/usr/bin/curl -fsS http://localhost:8080/healthz
+PublishPort=127.0.0.1:18543:8080   # 8080 is taken on the host
+HealthCmd=/usr/bin/curl -fsS http://localhost:8080/health
 
 [Install]
 WantedBy=default.target
 ```
 
-### E4 — Segmentnormalisierung
+### E4 — Segment normalization
 
-Kapitelmarken sind vorhanden, ABS-Kapitel schwanken aber stark in der Länge.
-Zielgröße 10–20 min: Kapitel unter 3 min werden mit dem Folgekapitel
-zusammengefasst, Kapitel über 25 min am festen Raster geteilt (Teil 1/2/…).
-Fehlen Kapitelmarken oder sind sie unbrauchbar (Zeiten außerhalb der Dauer,
-nicht monoton, nur ein Kapitel über das ganze Buch), greift der **Fallback: reines
-15-min-Raster**. Bei 64 kbps ergibt das ~5–10 MB pro Segment — klein genug, dass
-ein Abbruch billig ist und die unbekannte `makeWebRequest`-Dateigrenze nicht greift.
+Chapter markers are present, but ABS chapters vary widely in length. Target
+size 10–20 min: chapters under 3 min are merged with the following chapter,
+chapters over 25 min are split at a fixed grid (part 1/2/…). If chapter markers
+are missing or unusable (times outside the duration, not monotonic, only one
+chapter across the whole book), the **fallback: a plain 15-minute grid** kicks
+in. At 64 kbps this gives ~5–10 MB per segment — small enough that an abort is
+cheap and the unknown `makeWebRequest` file limit does not apply.
 
-### E5 — Ein Segment = ein „Song"
+### E5 — One segment = one "song"
 
-Jedes Segment wird ein Track, das Buch ist das „Album", der Autor der „Artist",
-der Segmentindex die `trackNumber`. Next/Previous, Fortschrittsanzeige und Resume
-funktionieren damit ohne Sonderlogik.
+Each segment becomes a track, the book is the "album", the author the "artist",
+the segment index the `trackNumber`. Next/previous, progress display and resume
+work with that without special logic.
 
-Die Uhr rechnet **nie** in absoluten Buchzeiten. Sie kennt nur
-`(Segmentindex, Offset im Segment)`; die Umrechnung in ABS-`currentTime` macht der
-Proxy anhand der Segmenttabelle. Das hält die Gerätelogik klein und die
-Segmentierung serverseitig änderbar.
+The watch **never** computes in absolute book times. It only knows
+`(segment index, offset within the segment)`; the conversion into ABS
+`currentTime` is done by the proxy using the segment table. That keeps the
+device logic small and the segmentation changeable server-side.
 
-### E6 — Fortschritt gepuffert, mit zwei Wegen nach draußen
+### E6 — Progress buffered, with two ways out
 
-`ContentDelegate.onSong()` liefert `(refId, event, playbackPosition)`; daraus wird
-`(bookId, segIdx, sek, ts)` flach in den Object Store geschrieben. Von dort geht
-er auf zwei Wegen raus:
+`ContentDelegate.onSong()` delivers `(refId, event, playbackPosition)`; from
+that `(bookId, segIdx, sec, ts)` is written flat into the Object Store. From
+there it goes out in two ways:
 
-1. **Beim Pausieren über Bluetooth.** Pause und Stopp sind die einzigen Momente
-   während der Wiedergabe, in denen ein Funkzugriff niemanden stört. Ist das
-   Telefon verbunden (`DeviceSettings.phoneConnected`), wandert der Puffer sofort
-   an `POST /v1/progress`. Gedrosselt auf einen Versuch je 30 Sekunden, weil
-   Pause und Fortsetzen in Serie kommen.
-2. **Beim Sync über WLAN**, als erster Schritt vor allen Downloads.
+1. **On pause over Bluetooth.** Pause and stop are the only moments during
+   playback when a radio access disturbs nobody. If the phone is connected
+   (`DeviceSettings.phoneConnected`), the buffer moves to `POST /v1/progress`
+   immediately. Throttled to one attempt per 30 seconds, because pause and
+   resume come in series.
+2. **On sync over Wi-Fi**, as the first step before all downloads.
 
-Beide Wege schicken dieselben Daten und verwerfen den Puffer erst nach
-bestätigter Übernahme — scheitert der eine, holt der andere es nach. Umgekehrt
-kommt ein auf dem Handy weiter gehörter Stand auf beiden Wegen zurück auf die
-Uhr. Konfliktregel: **jüngerer Zeitstempel gewinnt**.
+Both ways send the same data and only discard the buffer after confirmed
+acceptance — if one fails, the other catches up. Conversely, a position
+listened further on the phone comes back to the watch on both ways. Conflict
+rule: **the more recent timestamp wins**.
 
-### E7 — Sync ist deltabasiert und abbruchfest
+### E7 — Sync is delta-based and abort-resistant
 
-Der Object Store hält den lokalen Bestand. Der Sync berechnet `toDownload` /
-`toDelete` aus der Auswahl. Ein Abbruch verliert nur das laufende Segment, nicht
-das Buch. Option „abgeschlossene Bücher automatisch löschen".
+The Object Store holds the local inventory. The sync computes `toDownload` /
+`toDelete` from the selection. An abort loses only the current segment, not the
+book. Option "automatically delete finished books".
 
-### E8 — Multi-File-Bücher laufen mit, ohne Sonderweg
+### E8 — Multi-file books run along without a special path
 
-Bücher, die in ABS bereits als mehrere MP3/M4A-Dateien vorliegen, behandelt der
-Proxy identisch: Prepare lädt die Dateien, die Segmenttabelle entspricht den
-vorhandenen Dateien, geschnitten wird nur, wenn eine Datei über `SEGMENT_MAX` liegt.
+Books that already exist in ABS as multiple MP3/M4A files are handled
+identically by the proxy: prepare downloads the files, the segment table
+matches the existing files, cutting only happens when a file exceeds
+`SEGMENT_MAX`.
 
 ---
 
-## 3. Architektur
+## 3. Architecture
 
 ```
 proxy/                       abconnect-proxy (Python/FastAPI + ffmpeg, Podman)
-  config.py                  Env-Validierung beim Start, keine Defaults für Secrets
-  abs_client.py              ABS-REST mit API-Key, Metadaten-Cache
-  segmenter.py               Kapitel -> normalisierte Segmenttabelle, 15-min-Fallback
-  preparer.py                Job: download -> ffprobe -> cut -> m4b löschen -> ready
-  cache.py                   CACHE_DIR-Verwaltung, Pinning, Release-TTL, LRU als Notbremse
-  auth.py                    Bearer-Prüfung (konstantzeitig), signierte Cover-URLs
-  api.py                     /v1/* Vertrag zur Uhr, /healthz
-  progress.py                Segment-Offset <-> absolute Buchzeit, Push an ABS
+  config.py                  env validation at start, no defaults for secrets
+  abs_client.py              ABS REST with API key, metadata cache
+  segmenter.py               chapters -> normalized segment table, 15-min fallback
+  preparer.py                job: download -> ffprobe -> cut -> delete m4b -> ready
+  cache.py                   CACHE_DIR management, pinning, release TTL, LRU as emergency brake
+  auth.py                    bearer check (constant-time), signed cover URLs
+  api.py                     /v1/* contract to the watch, /health
+  progress.py                segment offset <-> absolute book time, push to ABS
 
-source/                      Connect-IQ-App (Monkey C)
-  AbConnectApp.mc            AudioContentProviderApp: die vier Delegates/Views
-  Constants.mc               Property-Keys, Enums, Schema-Version
+source/                      Connect IQ app (Monkey C)
+  AbConnectApp.mc            AudioContentProviderApp: the four delegates/views
+  Constants.mc               property keys, enums, schema version
 
   net/
-    ProxyClient.mc           /v1-Aufrufe, Token-Header
-    RequestQueue.mc          serielle Request-Kette + Context-Injection
+    ProxyClient.mc           /v1 calls, token header
+    RequestQueue.mc          serial request chain + context injection
 
   sync/
     SyncDelegate.mc          Communications.SyncDelegate
-    SyncPlanner.mc           Delta Auswahl vs. lokaler Bestand, Status-Filter
-    Downloader.mc            makeWebRequest mit :mediaEncoding, Retry, Fortschritt
+    SyncPlanner.mc           delta selection vs. local inventory, status filter
+    Downloader.mc            makeWebRequest with :mediaEncoding, retry, progress
 
   ui/
-    SyncConfigView.mc        Buchliste (CheckboxMenu), löst prepare aus, zeigt Status
-    PlaybackConfigView.mc    lokale Bücher, „fortsetzen" / „von vorn"
+    SyncConfigView.mc        book list (CheckboxMenu), triggers prepare, shows status
+    PlaybackConfigView.mc    local books, "resume" / "from the start"
     ProgressView.mc
     ErrorView.mc
 
   playback/
-    ContentDelegate.mc       Iterator liefern, onSong -> Progress-Puffer
-    ContentIterator.mc       Reihenfolge, Metadaten, ActiveContent mit Startposition
-    ProgressStore.mc         flacher Puffer + Flush-API
+    ContentDelegate.mc       supply iterator, onSong -> progress buffer
+    ContentIterator.mc       order, metadata, ActiveContent with start position
+    ProgressStore.mc         flat buffer + flush API
 
-resources/                   Strings (de/en), Icons, settings.xml (proxyUrl, proxyToken)
+resources/                   strings (de/en), icons, settings.xml (proxyUrl, proxyToken)
 manifest.xml                 type=audio-content-provider-app, fenix7xpro, minSdkVersion 5.0
 monkey.jungle
-deploy/                      Quadlet-Unit, Beispiel-Secrets, Setup-Doku
+deploy/                      quadlet unit, example secrets, setup docs
 ```
 
-### Proxy-API (Vertrag zur Uhr)
+### Proxy API (contract to the watch)
 
-| Endpunkt | Zweck |
+| Endpoint | Purpose |
 |---|---|
-| `GET /v1/playlist` | **die Sollvorgabe**: Bücher der Playlist mit Zustand; 409, wenn die Playlist fehlt |
-| `GET /v1/books?page=&q=` | Bibliothek durchsehen (Werkzeug, von der Uhr nicht genutzt) |
-| `POST /v1/books/{id}/prepare` | Job anstoßen (idempotent), Antwort sofort |
-| `GET /v1/books/{id}/status` | `pending` \| `preparing` (+ Prozent) \| `ready` \| `error` (+ Grund) |
-| `GET /v1/books/{id}/segments` | Segmentliste: Index, Titel, Dauer, Bytes — nur bei `ready` |
-| `GET /v1/books/{id}/seg/{n}.m4a` | fertiges Segment aus dem Cache |
-| `GET /v1/books/{id}/cover.jpg?w=&exp=&sig=` | verkleinertes Cover, vorsignierte URL (siehe Auth) |
-| `POST /v1/books/{id}/release` | Uhr meldet: Buch nicht mehr benötigt → Cache darf verdrängen |
-| `POST /v1/progress` | Batch-Upload, Umrechnung auf Buchzeit, Weitergabe an ABS |
-| `GET /healthz` | Konfiguration + ABS-Erreichbarkeit |
+| `GET /v1/playlist` | **the target**: books of the playlist with state; 409 if the playlist is missing |
+| `GET /v1/books?page=&q=` | browse the library (tool, not used by the watch) |
+| `POST /v1/books/{id}/prepare` | trigger the job (idempotent), response immediately |
+| `GET /v1/books/{id}/status` | `pending` \| `preparing` (+ percent) \| `ready` \| `error` (+ reason) |
+| `GET /v1/books/{id}/segments` | segment list: index, title, duration, bytes — only when `ready` |
+| `GET /v1/books/{id}/seg/{n}.m4a` | finished segment from the cache |
+| `GET /v1/books/{id}/cover.jpg?w=&exp=&sig=` | downscaled cover, pre-signed URL (see Auth) |
+| `POST /v1/books/{id}/release` | watch reports: book no longer needed → cache may evict |
+| `POST /v1/progress` | batch upload, conversion to book time, forwarding to ABS |
+| `GET /health` | configuration + ABS reachability |
 
-### Auth zwischen Uhr und Proxy
+### Auth between watch and proxy
 
-Alle `/v1`-Endpunkte verlangen `Authorization: Bearer <ABCONNECT_TOKEN>`. Das ist
-die einzige Absicherung dieser Strecke — TLS liefert Vertraulichkeit, der Token
-liefert Zugangskontrolle.
+All `/v1` endpoints require `Authorization: Bearer <ABCONNECT_TOKEN>`. That is
+the only protection of this path — TLS provides confidentiality, the token
+provides access control.
 
-**Was er leistet:** Er verhindert, dass ein beliebiger Aufrufer die Bibliothek
-ausliest, Prepare-Jobs auslöst (CPU und Plattenlast) oder über `/v1/progress`
-fremden Hörfortschritt nach ABS schreibt. Vor allem trennt er die Vertrauensebenen:
-der ABS-API-Key bleibt im Proxy, die Uhr kennt ihn nie. Ein kompromittierter Token
-lässt sich rotieren, ohne ABS anzufassen, und sein Schaden endet an der
-`/v1`-Oberfläche.
+**What it does:** It prevents an arbitrary caller from reading the library,
+triggering prepare jobs (CPU and disk load) or writing someone else's listening
+progress to ABS via `/v1/progress`. Above all it separates the trust levels:
+the ABS API key stays in the proxy, the watch never knows it. A compromised
+token can be rotated without touching ABS, and its damage ends at the `/v1`
+surface.
 
-**Was er nicht leistet:** Er ist ein geteiltes Geheimnis, keine Identität. Es gibt
-keine Unterscheidung einzelner Geräte und keine Sitzung. Auf der Uhr liegt er als
-Klartext in den Connect-IQ-App-Einstellungen und läuft über Garmin Connect —
-brauchbar als Zugangsschranke für einen privaten Stack, kein Ersatz für ein
-Auth-System mit Benutzern.
+**What it does not do:** It is a shared secret, not an identity. There is no
+distinction between individual devices and no session. On the watch it lives as
+plain text in the Connect IQ app settings and runs through Garmin Connect —
+usable as an access barrier for a private stack, no substitute for an auth
+system with users.
 
-Umsetzung:
+Implementation:
 
-* Vergleich mit `hmac.compare_digest`, nicht mit `==`.
-* `ABCONNECT_TOKEN` akzeptiert eine Komma-Liste, damit ein neuer Token gesetzt
-  werden kann, bevor der alte aus den Uhreneinstellungen verschwindet.
-* Backoff nach wiederholt fehlgeschlagener Auth, damit der Endpunkt kein
-  Rateorakel wird.
-* Kein Token in URLs (siehe unten) — Reverse-Proxy-Logs schreiben Query-Strings mit.
+* Comparison with `hmac.compare_digest`, not with `==`.
+* `ABCONNECT_TOKEN` accepts a comma list so a new token can be set before the
+  old one disappears from the watch settings.
+* Backoff after repeatedly failed auth so the endpoint does not become a
+  guessing oracle.
+* No token in URLs (see below) — reverse-proxy logs record query strings.
 
-**Ausnahme Cover:** `Communications.makeImageRequest` unterstützt **kein**
-`:headers` (im Gegensatz zu `makeWebRequest`, das `:headers` auch zusammen mit
-`:responseType => HTTP_RESPONSE_CONTENT_TYPE_AUDIO` erlaubt). Das Cover kann den
-Bearer-Header also nicht mitschicken. Statt den Token als Query-Parameter
-anzuhängen, liefert `/v1/books/{id}/segments` eine **vorsignierte Cover-URL**:
-`?exp=<unix-ts>&sig=<HMAC(token, bookId|exp)>`, gültig einige Stunden. Die Uhr
-benutzt die URL unverändert; der langlebige Token landet nie in einem Logfile.
-Alle anderen Downloads laufen über `makeWebRequest` und damit über den Header.
+**Exception: cover.** `Communications.makeImageRequest` does **not** support
+`:headers` (unlike `makeWebRequest`, which allows `:headers` even together with
+`:responseType => HTTP_RESPONSE_CONTENT_TYPE_AUDIO`). So the cover cannot send
+the bearer header. Instead of appending the token as a query parameter,
+`/v1/books/{id}/segments` delivers a **pre-signed cover URL**:
+`?exp=<unix-ts>&sig=<HMAC(token, bookId|exp)>`, valid for a few hours. The
+watch uses the URL unchanged; the long-lived token never ends up in a log
+file. All other downloads go through `makeWebRequest` and thus through the
+header.
 
-### Datenfluss
+### Data flow
 
 ```
-ABS  <--API-Key, HTTPS--  abconnect-proxy  <--Token, HTTPS--  fenix 7X Pro
-        (Download der m4b)                   (Segmente)
+ABS  <--API key, HTTPS--  abconnect-proxy  <--token, HTTPS--  fenix 7X Pro
+        (download of the m4b)                (segments)
 
-Sync-Config:   GET  /v1/books                  -> CheckboxMenu -> Store: SEL
-               POST /v1/books/{id}/prepare     -> Job läuft im Hintergrund
-Sync:          GET  /v1/books/{id}/status      -> nur ready wird geladen
-               GET  /v1/books/{id}/segments    -> Delta gegen lokalen Bestand
-               GET  /v1/books/{id}/seg/{n}.m4a -> Media-Cache (ENCODING_M4A)
+Sync config:   GET  /v1/books                  -> CheckboxMenu -> Store: SEL
+               POST /v1/books/{id}/prepare     -> job runs in the background
+Sync:          GET  /v1/books/{id}/status      -> only ready is downloaded
+               GET  /v1/books/{id}/segments    -> delta against local inventory
+               GET  /v1/books/{id}/seg/{n}.m4a -> media cache (ENCODING_M4A)
                GET  /v1/books/{id}/cover.jpg   -> makeImageRequest
                POST /v1/progress               <- Store: PRG  -> ABS /api/me/progress
-               POST /v1/books/{id}/release     -> für abgewählte Bücher
+               POST /v1/books/{id}/release     -> for deselected books
 Playback:      Store -> ContentIterator -> ActiveContent(ref, meta, startPos)
                onSong(pos) -> Store: PRG
 ```
 
-### Cache-Haushalt im Proxy
+### Cache housekeeping in the proxy
 
-* `CACHE_DIR/<bookId>/` hält Segmente + Cover, Größe ≈ Quelldatei.
-* `WORK_DIR` hält die `.m4b` nur während des Jobs; Löschung direkt nach dem Schnitt,
-  auch im Fehlerfall (`try/finally`).
-* Bücher in der aktuellen Auswahl der Uhr sind **gepinnt** und werden nicht
-  verdrängt; `release` hebt den Pin auf.
-* Plattenplatz ist in dieser Umgebung reichlich vorhanden, `CACHE_MAX_BYTES` wird
-  entsprechend hoch gesetzt. Freigegebene Bücher bleiben deshalb `RELEASE_TTL_DAYS`
-  lang liegen — ein erneut angekreuztes Buch ist dann sofort `ready`, ohne zweiten
-  Download und Schnitt. Das ist der eigentliche Nutzen des großen Caches.
-* LRU gegen `CACHE_MAX_BYTES` bleibt als Sicherheitsnetz, nicht als Regelbetrieb.
-  Ein verdrängtes Buch geht zurück auf `pending` und wird bei Bedarf neu vorbereitet.
-* Vor dem Start eines Jobs wird trotzdem geprüft, ob Quellgröße + Segmente passen;
-  sonst `error` mit klarer Meldung statt vollgelaufener Platte.
+* `CACHE_DIR/<bookId>/` holds segments + cover, size ≈ source file.
+* `WORK_DIR` holds the `.m4b` only during the job; deletion right after the cut,
+  even on error (`try/finally`).
+* Books in the watch's current selection are **pinned** and are not evicted;
+  `release` lifts the pin.
+* Disk space is plentiful in this environment, `CACHE_MAX_BYTES` is set
+  accordingly high. Released books therefore stay around for
+  `RELEASE_TTL_DAYS` — a re-checked book is then immediately `ready`, without a
+  second download and cut. That is the actual benefit of the large cache.
+* LRU against `CACHE_MAX_BYTES` remains as a safety net, not as routine
+  operation. An evicted book goes back to `pending` and is re-prepared when
+  needed.
+* Before starting a job it is still checked whether source size + segments fit;
+  otherwise `error` with a clear message instead of a full disk.
 
-### Object-Store-Layout auf der Uhr (8-KB-Grenze pro Wert)
+### Object Store layout on the watch (8 KB limit per value)
 
-| Key | Inhalt |
+| Key | Content |
 |---|---|
-| `SEL` | Array ausgewählter Buch-IDs |
-| `LOC_<bookId>` | flache Map `refId -> "segIdx\|dauer"` — **ein Key pro Buch** |
-| `BOOK_<bookId>` | Titel, Autor, Segmentanzahl, Cover-Status (kurze Strings) |
-| `PRG` | flache Map `bookId -> "segIdx\|sek\|ts"`, nur für lokal vorhandene Bücher |
-| `VER` | Schema-Version → bei Mismatch `clearProperties()` + `resetContentCache()` |
+| `SEL` | array of selected book IDs |
+| `LOC_<bookId>` | flat map `refId -> "segIdx\|duration"` — **one key per book** |
+| `BOOK_<bookId>` | title, author, segment count, cover status (short strings) |
+| `PRG` | flat map `bookId -> "segIdx\|sec\|ts"`, only for locally present books |
+| `VER` | schema version → on mismatch `clearProperties()` + `resetContentCache()` |
 
 ---
 
-## 4. Risiken
+## 4. Risks
 
-| # | Risiko | Wirkung | Gegenmaßnahme |
+| # | Risk | Effect | Mitigation |
 |---|---|---|---|
-| R1 | ffmpeg-Stream-Copy erzeugt Datei, die die Uhr ablehnt | Ansatz kippt komplett | **Spike in M0** vor allem anderen: Segment von Hand schneiden und auf der fēnix abspielen |
-| R2 | Prepare-Job dauert länger als die Geduld beim Sync | Buch fehlt beim Sync | Auslösung schon beim Ankreuzen (E2); Sync zeigt Status statt zu blockieren |
-| R3 | Volume läuft trotz reichlich Platz voll (Fehlkonfiguration, WORK_DIR-Leichen) | Job schlägt fehl | Vorabprüfung; `.m4b` im `finally` löschen; LRU als Sicherheitsnetz; `/healthz` meldet Cache-Füllstand |
-| R4 | Netzlast ABS → Proxy bei jedem Prepare | langsam bei großen Büchern | einmalig pro Buch statt pro Segment; Backlog: `ffmpeg` per HTTP-Range direkt gegen die ABS-URL, falls Range zuverlässig unterstützt wird |
-| R5 | Kapitelmarken doch unbrauchbar (nicht monoton, außerhalb der Dauer) | falsche Segmentgrenzen | Validierung in `segmenter.py`, automatischer 15-min-Fallback, Report in M1 |
-| R6 | Unbekannte `makeWebRequest`-Dateigrenze | Sync bricht auf Hardware ab, im Simulator nicht | 5–10-MB-Segmente halten weit darunter; Grenze im M0-Spike bestimmen |
-| R7 | 8-KB-Property-Limit bei großer Bibliothek | Datenverlust/Absturz | Key-pro-Buch-Layout; Serialisierungstest mit 500 Büchern |
-| R8 | ABS-API-Änderungen (2.26er Auth-Umbau) | Proxy bricht | Versionscheck beim Start, `/healthz`, Smoke-Test im Repo |
-| R9a | Playlist unauffindbar oder ABS kurz weg | Uhr könnte leergeräumt werden | Fehlschlag heißt nie „leer": 409 statt leerer Liste, kein Freigeben im Abgleich, Uhr löscht nur mit frischer Vorgabe; `/healthz` meldet `playlist_found` |
-| R9 | fēnix 7 Pro **ohne WLAN**-Variante | Sync über BLE unpraktikabel langsam | Nur WLAN-Varianten unterstützen, in der Beschreibung nennen |
-| R10 | `ABCONNECT_TOKEN` ist ein geteiltes Geheimnis im Klartext auf der Uhr | kein Geräte-Widerruf, Token in Garmin Connect | bewusst akzeptiert für einen privaten Stack; Rotation über Komma-Liste, vorsignierte Cover-URLs statt Token im Query-String |
-| R11 | Store-Freigabe für Audio-Provider-Apps | Release verzögert | Review-Anforderungen früh prüfen, Sideload-Weg dokumentieren |
+| R1 | ffmpeg stream copy produces a file the watch rejects | approach collapses entirely | **Spike in M0** before anything else: cut a segment by hand and play it on the fēnix |
+| R2 | prepare job takes longer than the patience during sync | book missing at sync | triggered already on check (E2); sync shows status instead of blocking |
+| R3 | volume fills up despite plenty of space (misconfiguration, WORK_DIR leftovers) | job fails | pre-check; delete `.m4b` in `finally`; LRU as a safety net; `/health` reports cache fill level |
+| R4 | network load ABS → proxy on every prepare | slow for large books | once per book instead of per segment; backlog: `ffmpeg` via HTTP range directly against the ABS URL, if range is reliably supported |
+| R5 | chapter markers unusable after all (not monotonic, outside the duration) | wrong segment boundaries | validation in `segmenter.py`, automatic 15-min fallback, report in M1 |
+| R6 | unknown `makeWebRequest` file limit | sync aborts on hardware, not in the simulator | 5–10 MB segments stay well below it; determine the limit in the M0 spike |
+| R7 | 8 KB property limit with a large library | data loss/crash | key-per-book layout; serialization test with 500 books |
+| R8 | ABS API changes (2.26 auth rework) | proxy breaks | version check at start, `/health`, smoke test in the repo |
+| R9a | playlist unfindable or ABS briefly gone | watch could be wiped | a failure never means "empty": 409 instead of an empty list, no releasing during reconciliation, watch only deletes with a fresh target; `/health` reports `playlist_found` |
+| R9 | fēnix 7 Pro **without a Wi-Fi** variant | sync over BLE impractically slow | only support Wi-Fi variants, mention it in the description |
+| R10 | `ABCONNECT_TOKEN` is a shared secret in plain text on the watch | no per-device revocation, token in Garmin Connect | deliberately accepted for a private stack; rotation via comma list, pre-signed cover URLs instead of a token in the query string |
+| R11 | store approval for audio provider apps | release delayed | check review requirements early, document the sideload path |
 
 ---
 
 ## 5. Roadmap
 
-**M0 — Machbarkeits-Spike (zuerst, klein, entscheidet alles)** — *App-Gerüst steht, Spike offen*
-Ein Buch der echten Bibliothek von Hand mit ffmpeg `-c copy` schneiden, per
-Mini-HTTP-Server ausliefern, mit einer Wegwerf-App auf der fēnix 7X Pro laden und
-abspielen. Beantwortet R1 und R6, bevor Code entsteht. Parallel: App-Gerüst mit
-allen vier Delegates als Stubs, Build für `fenix7xpro` grün, CI kompiliert.
+**M0 — feasibility spike (first, small, decides everything)** — *app skeleton stands, spike open*
+Cut a book from the real library by hand with ffmpeg `-c copy`, serve it via a
+mini HTTP server, load and play it with a throwaway app on the fēnix 7X Pro.
+Answers R1 and R6 before code is written. In parallel: app skeleton with all
+four delegates as stubs, build for `fenix7xpro` green, CI compiles.
 
-**M1 — `abconnect-proxy` v1** — *umgesetzt*
-Env-Validierung und `/healthz`, ABS-Client mit API-Key, Kapitelvalidierung und
-Segmentnormalisierung inkl. 15-min-Fallback, Prepare-Job mit Download → Schnitt →
-sofortiges Löschen der `.m4b`, Cache mit LRU und Pinning, `/v1/books`,
-`/status`, `/segments`, `/seg/{n}.m4a`, `/cover.jpg` mit vorsignierter URL,
-`/release`, Bearer-Auth mit konstantzeitigem Vergleich. Dazu ein
-Smoke-Test gegen die echte Instanz und ein Report über die Kapitelqualität der
-Bibliothek (R5). *Ergebnis: `curl` liefert ein abspielbares Segment, Quadlet läuft.*
+**M1 — `abconnect-proxy` v1** — *implemented*
+Env validation and `/health`, ABS client with API key, chapter validation and
+segment normalization incl. 15-min fallback, prepare job with download → cut →
+immediate deletion of the `.m4b`, cache with LRU and pinning, `/v1/books`,
+`/status`, `/segments`, `/seg/{n}.m4a`, `/cover.jpg` with a pre-signed URL,
+`/release`, bearer auth with constant-time comparison. Plus a smoke test
+against the real instance and a report on the chapter quality of the library
+(R5). *Result: `curl` delivers a playable segment, the quadlet runs.*
 
-**M2 — Sync-Konfiguration und Sync**
-`settings.xml` (proxyUrl, proxyToken), `ProxyClient`, Buchliste mit Paging als
-`CheckboxMenu` — Ankreuzen löst `prepare` aus, Status wird angezeigt.
-`Communications.SyncDelegate` mit Delta-Planer und Status-Filter, serielle
-Downloads mit `:mediaEncoding => Media.ENCODING_M4A`, `notifySyncProgress` /
-`notifySyncComplete`, `deleteCachedItem`, Cover via `makeImageRequest`,
-Speicherprüfung über `getCacheStatistics()` vor dem Sync.
-*Ergebnis: ein Buch liegt vollständig auf der Uhr.*
+**M2 — sync configuration and sync**
+`settings.xml` (proxyUrl, proxyToken), `ProxyClient`, book list with paging as a
+`CheckboxMenu` — checking triggers `prepare`, status is shown.
+`Communications.SyncDelegate` with a delta planner and status filter, serial
+downloads with `:mediaEncoding => Media.ENCODING_M4A`, `notifySyncProgress` /
+`notifySyncComplete`, `deleteCachedItem`, cover via `makeImageRequest`, memory
+check via `getCacheStatistics()` before the sync.
+*Result: a book is completely on the watch.*
 
-**M3 — Wiedergabe**
-`ContentDelegate` + `ContentIterator`, Metadaten aus dem Store statt aus Tags,
-`PlaybackProfile` mit Hörbuch-Skips (30 s / 15 s), `ActiveContent` mit
-Startposition, Playback-Konfiguration mit „fortsetzen" / „von vorn".
-*Ergebnis: Segmente laufen in richtiger Reihenfolge, Resume funktioniert.*
+**M3 — playback**
+`ContentDelegate` + `ContentIterator`, metadata from the store instead of from
+tags, `PlaybackProfile` with audiobook skips (30 s / 15 s), `ActiveContent`
+with a start position, playback configuration with "resume" / "from the start".
+*Result: segments play in the right order, resume works.*
 
-**M4 — Fortschritt bidirektional**
-`onSong`-Puffer, Flush an `POST /v1/progress`, Umrechnung im Proxy, Serverstand
-beim Sync einlesen, Konfliktregel jüngster Zeitstempel, „abgeschlossene löschen"
-inklusive `release`. *Ergebnis: Handy und Uhr bleiben synchron.*
+**M4 — progress bidirectional**
+`onSong` buffer, flush to `POST /v1/progress`, conversion in the proxy, read
+the server position on sync, conflict rule most recent timestamp, "delete
+finished" including `release`. *Result: phone and watch stay in sync.*
 
-**M5 — Härtung & Release**
-Fehlerpfade (401, Proxy offline, Prepare-Fehler, Speicher voll, Sync-Abbruch),
-Strings de/en, Store-Migration über `VER`, Icons, `deploy/` mit Quadlet-Unit,
-Secret-Anlage und Setup-Doku, Store-Einreichung bzw. Sideload-Anleitung.
+**M5 — hardening & release**
+Error paths (401, proxy offline, prepare error, storage full, sync abort),
+strings de/en, store migration via `VER`, icons, `deploy/` with a quadlet unit,
+secret creation and setup docs, store submission or sideload guide.
 
-**Backlog:** weitere Geräte über `fenix7xpro` hinaus, ffmpeg per HTTP-Range statt
-Vollabzug (R4), optionales Re-Encode auf niedrigere Bitrate, Podcast-Unterstützung.
-
----
-
-## 6. Zielgerät und Test
-
-Zielgerät: fēnix 7X Pro (`fenix7xpro`, API Level 5.2, 32 GB). `minSdkVersion` 5.0.
-Weitere Geräte erst nach M5 — jedes zusätzliche kostet Layout- und Testaufwand ohne
-neue Funktion.
-
-Testebenen:
-1. **Simulator** — Funktionslogik, alle vier Modi.
-2. **Proxy-Tests** — Segmentierung, Kapitelvalidierung und Schnitt gegen echte
-   `.m4b`-Dateien; schnell, automatisierbar, außerhalb von Monkey C.
-3. **Hardware** — ab M0 im Spiel, ab M2 verpflichtend: Dateigrößen, Speicher und
-   Codec-Akzeptanz lassen sich im Simulator nicht validieren.
+**Backlog:** more devices beyond `fenix7xpro`, ffmpeg via HTTP range instead of
+a full download (R4), optional re-encode to a lower bitrate, podcast support.
 
 ---
 
-## 7. Offene Punkte
+## 6. Target device and testing
 
-1. Podcasts aus ABS mitnehmen oder auf Bücher beschränken?
-2. Veröffentlichung im Connect IQ Store oder nur Sideload?
+Target device: fēnix 7X Pro (`fenix7xpro`, API level 5.2, 32 GB).
+`minSdkVersion` 5.0. More devices only after M5 — each additional one costs
+layout and testing effort without a new feature.
+
+Test levels:
+1. **Simulator** — functional logic, all four modes.
+2. **Proxy tests** — segmentation, chapter validation and cutting against real
+   `.m4b` files; fast, automatable, outside of Monkey C.
+3. **Hardware** — in play from M0, mandatory from M2: file sizes, memory and
+   codec acceptance cannot be validated in the simulator.
 
 ---
 
-## Quellen
+## 7. Open points
+
+1. Include podcasts from ABS or limit to books?
+2. Publish in the Connect IQ store or sideload only?
+
+---
+
+## Sources
 
 * [garmin/connectiq-apps — audio-provider/monkeymusic](https://github.com/garmin/connectiq-apps/tree/master/audio-provider/monkeymusic)
 * [Toybox.Media API](https://developer.garmin.com/connect-iq/api-docs/Toybox/Media.html) —
@@ -523,6 +526,7 @@ Testebenen:
 * [Connect IQ Compatible Devices](https://developer.garmin.com/connect-iq/compatible-devices/)
 * [Audiobookshelf API Reference](https://api.audiobookshelf.org/) ·
   [API Keys](https://audiobookshelf.org/docs/documentation/server-management/api-keys/)
-* [M4B verlustfrei nach Kapiteln schneiden](https://orsolabs.dev/audiobo/guides/split-m4b-into-chapters/) ·
+* [Split M4B losslessly by chapters](https://orsolabs.dev/audiobo/guides/split-m4b-into-chapters/) ·
   [m4b-tool](https://github.com/sandreas/m4b-tool)
 * [Podman Quadlet](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html)
+```

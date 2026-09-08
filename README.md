@@ -1,66 +1,67 @@
 # AbConnect
 
-Audiobookshelf als Connect IQ Audio Provider für Garmin-Musikuhren.
+Audiobookshelf as a Connect IQ audio provider for Garmin music watches.
 
-Hörbücher aus einer selbst gehosteten
-[Audiobookshelf](https://www.audiobookshelf.org/)-Instanz landen auf der Uhr,
-laufen offline über den System-Mediaplayer und der Hörfortschritt geht zurück
-an den Server.
+Audiobooks from a self-hosted
+[Audiobookshelf](https://www.audiobookshelf.org/) instance land on the watch,
+play offline through the system media player, and listening progress goes back
+to the server.
 
-## Aufbau
+## Structure
 
 ```
-Audiobookshelf  <--API-Key--  abconnect-proxy  <--Token--  fēnix 7X Pro
-                (lädt die m4b)                 (lädt Segmente)
+Audiobookshelf  <--API key--  abconnect-proxy  <--token--  fēnix 7X Pro
+                (downloads the m4b)            (downloads segments)
 ```
 
-**[`proxy/`](proxy/README.md)** — Container neben Audiobookshelf, betrieben als
-Podman-Quadlet. Lädt eine `.m4b` über die ABS-API, schneidet sie verlustfrei
-kapitelweise in Segmente von 10–20 Minuten, löscht die Quelldatei sofort wieder
-und hält den ABS-API-Key serverseitig.
+**[`proxy/`](proxy/README.md)** — container next to Audiobookshelf, run as a
+Podman quadlet. Downloads an `.m4b` via the ABS API, cuts it losslessly into
+chapter-wise segments of 10–20 minutes, deletes the source file again right
+away and keeps the ABS API key server-side.
 
-**[`app/`](app/README.md)** — Connect-IQ-App vom Typ
-`audio-content-provider-app`, die Segmente lädt, abspielt und den Fortschritt
-puffert.
+**[`app/`](app/README.md)** — Connect IQ app of type
+`audio-content-provider-app` that downloads segments, plays them and buffers
+progress.
 
-Was auf die Uhr kommt, entscheidet die Audiobookshelf-Playlist **`Garmin`**:
-Buch hineinlegen, es erscheint; herausnehmen, es verschwindet. Der Hörfortschritt
-geht beim Pausieren über Bluetooth und beim Sync über WLAN zurück an den Server.
+What ends up on the watch is decided by the Audiobookshelf playlist
+**`Garmin`**: add a book and it appears; remove it and it disappears. Listening
+progress goes back to the server on pause over Bluetooth and on sync over
+Wi-Fi.
 
-Warum ein Proxy dazwischen: eine einzelne `.m4b` wäre auf der Uhr ein Track über
-zwölf Stunden ohne Kapitelnavigation, und Connect IQ bricht große
-JSON-Antworten ohnehin ab. Die Begründungen im Einzelnen stehen in
+Why a proxy in between: a single `.m4b` on the watch would be one track
+spanning twelve hours with no chapter navigation, and Connect IQ aborts large
+JSON responses anyway. The reasoning in detail is in
 [docs/PLAN.md](docs/PLAN.md).
 
-## Stand
+## Status
 
-| Teil | Zustand |
+| Part | State |
 |---|---|
-| `abconnect-proxy` | funktionsfähig, 155 Tests grün (inkl. echtem ffmpeg-Schnitt) |
-| Connect-IQ-App | übersetzt sauber, **noch nie auf Hardware gelaufen** |
-| Hardware-Spike (M0) | **offen** — die entscheidende offene Frage |
+| `abconnect-proxy` | functional, 155 tests green (incl. real ffmpeg cut) |
+| Connect IQ app | compiles cleanly, **has never run on hardware** |
+| Hardware spike (M0) | **open** — the decisive open question |
 
-Der Spike aus M0 steht noch aus: ein per Stream-Copy geschnittenes Segment auf
-der fēnix 7X Pro abspielen. Lehnt das Gerät solche Dateien ab, trägt der ganze
-Ansatz nicht — das gehört vor jede weitere Arbeit.
+The M0 spike is still outstanding: play a stream-copied segment on the
+fēnix 7X Pro. If the device rejects such files, the whole approach does not
+hold — that belongs before any further work.
 
-## Loslegen
+## Getting started
 
 ```sh
-# Proxy: Tests
+# Proxy: tests
 python3 -m venv .venv && .venv/bin/pip install -e './proxy[dev]'
 .venv/bin/python -m pytest proxy/tests
 
-# Proxy: installieren und betreiben -> deploy/README.md
+# Proxy: install and run -> deploy/README.md
 ./deploy/install.sh
 
-# App bauen -> app/README.md (URL und Token wandern in die .prg)
+# Build the app -> app/README.md (URL and token go into the .prg)
 PROXY_URL=https://abconnect.example PROXY_TOKEN=... \
-CIQ_HOME=/pfad/zum/sdk ./app/build.sh
+CIQ_HOME=/path/to/sdk ./app/build.sh
 ```
 
-## Voraussetzungen
+## Requirements
 
-- Audiobookshelf ≥ 2.26 mit API-Key
-- `abconnect-proxy` per HTTPS erreichbar
-- Garmin-Uhr mit Musikspeicher und WLAN — Zielgerät zunächst fēnix 7X Pro
+- Audiobookshelf ≥ 2.26 with an API key
+- `abconnect-proxy` reachable over HTTPS
+- Garmin watch with music storage and Wi-Fi — initial target device fēnix 7X Pro

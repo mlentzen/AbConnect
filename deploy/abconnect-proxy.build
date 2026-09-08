@@ -1,18 +1,18 @@
-# Podman-Quadlet: baut das Proxy-Image direkt aus dem Arbeitsbaum.
+# Podman quadlet: builds the proxy image directly from the working tree.
 #
-# SetWorkingDirectory macht proxy/ zum Build-Kontext, damit die COPY-Zeilen
-# des Containerfiles greifen. Der Pfad ist maschinenabhängig — deploy/install.sh
-# trägt beim Installieren den tatsächlichen Ort des Checkouts ein.
+# SetWorkingDirectory makes proxy/ the build context so the Containerfile's COPY
+# lines resolve. The path is machine-dependent — deploy/install.sh fills in the
+# actual location of the checkout during installation.
 
 [Unit]
-Description=Build des AbConnect-Proxy-Images
+Description=Build of the AbConnect proxy image
 
 [Build]
 ImageTag=localhost/abconnect-proxy:latest
 File=Containerfile
 SetWorkingDirectory=%h/git/AbConnect/proxy
 
-# Holt auch ein neueres python:3.12-slim, nicht nur geänderten eigenen Code.
+# Also pulls a newer python:3.12-slim, not just changed local code.
 Pull=newer
 
 [Install]

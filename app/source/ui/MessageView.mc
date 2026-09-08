@@ -2,10 +2,10 @@ import Toybox.Graphics;
 import Toybox.Lang;
 import Toybox.WatchUi;
 
-//! Eine Meldung, die den Nutzer nicht ratlos zurücklässt.
+//! A message that does not leave the user puzzled.
 //!
-//! Ohne diese Ansicht endet jeder Fehlerfall in einem leeren Bildschirm — das
-//! ist der Unterschied zwischen "geht nicht" und "warum es nicht geht".
+//! Without this view every error case ends in a blank screen — that is the
+//! difference between "does not work" and "why it does not work".
 class MessageView extends WatchUi.View {
 
     private var _text as String;

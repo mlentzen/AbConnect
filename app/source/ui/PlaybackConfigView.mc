@@ -2,7 +2,7 @@ import Toybox.Graphics;
 import Toybox.Lang;
 import Toybox.WatchUi;
 
-//! Auswahl, welches Buch der Player spielt.
+//! Selection of which book the player plays.
 class PlaybackConfigView extends WatchUi.View {
 
     private var _menuShown as Boolean;

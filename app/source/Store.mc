@@ -2,13 +2,13 @@ import Toybox.Application;
 import Toybox.Lang;
 import Toybox.Time;
 
-//! Zugriff auf den Object Store.
+//! Access to the Object Store.
 //!
-//! Alle Werte sind bewusst flach: verschachtelte Dictionaries sprengen das
-//! 8-KB-Limit pro Wert, lange bevor eine größere Bibliothek darin Platz findet.
+//! All values are deliberately flat: nested dictionaries blow past the 8 KB
+//! per-value limit long before a larger library would fit in one.
 module Store {
 
-    //! Verwirft den Store, wenn er von einer älteren Schemaversion stammt.
+    //! Discards the store if it comes from an older schema version.
     function checkSchema() as Void {
         var version = Application.Storage.getValue(Keys.SCHEMA);
         if (!(version instanceof Number) || version != Keys.SCHEMA_VERSION) {
@@ -17,9 +17,9 @@ module Store {
         }
     }
 
-    // --- Sollvorgabe aus der Playlist ----------------------------------------
+    // --- Target from the playlist ----------------------------------------
 
-    //! Letzter bekannter Stand der Playlist.
+    //! Last known state of the playlist.
     function desired() as Array<String> {
         var stored = Application.Storage.getValue(Keys.DESIRED);
         if (stored instanceof Array) {
@@ -28,9 +28,9 @@ module Store {
         return [] as Array<String>;
     }
 
-    //! Nur nach einer *erfolgreichen* Abfrage aufrufen. Eine nicht erreichbare
-    //! oder unauffindbare Playlist darf nie als leere Vorgabe durchgehen —
-    //! sonst räumt der nächste Sync die Uhr leer.
+    //! Only call after a *successful* query. An unreachable or unfindable
+    //! playlist must never pass as an empty target — otherwise the next sync
+    //! wipes the watch.
     function setDesired(ids as Array<String>) as Void {
         Application.Storage.setValue(Keys.DESIRED, ids);
         Application.Storage.setValue(Keys.LAST_CHECK, Time.now().value());
@@ -44,9 +44,9 @@ module Store {
         return 0;
     }
 
-    // --- Lokaler Bestand -----------------------------------------------------
+    // --- Local inventory -----------------------------------------------------
 
-    //! Map refId -> "segIdx|dauer|titel" für ein Buch.
+    //! Map refId -> "segIdx|duration|title" for a book.
     function localTracks(bookId as String) as Dictionary {
         var stored = Application.Storage.getValue(Keys.local(bookId));
         if (stored instanceof Dictionary) {
@@ -64,7 +64,7 @@ module Store {
         Application.Storage.setValue(Keys.local(bookId), tracks);
     }
 
-    //! [segIdx, dauer, titel] eines lokalen Tracks, oder null.
+    //! [segIdx, duration, title] of a local track, or null.
     function trackInfo(bookId as String, refId as Object) as Array<String>? {
         var stored = localTracks(bookId)[refId];
         if (!(stored instanceof String)) {
@@ -87,7 +87,7 @@ module Store {
         }
     }
 
-    //! Alle Bücher, von denen Segmente auf der Uhr liegen — auch abgewählte.
+    //! All books that have segments on the watch — including deselected ones.
     function knownBooks() as Array<String> {
         var stored = Application.Storage.getValue(Keys.KNOWN);
         if (stored instanceof Array) {
@@ -104,7 +104,7 @@ module Store {
         }
     }
 
-    //! Buchtitel, Autor und Segmentanzahl in einem flachen Wert.
+    //! Book title, author and segment count in one flat value.
     function setBookInfo(bookId as String, title as String, author as String, segments as Number) as Void {
         Application.Storage.setValue(Keys.book(bookId), title + "|" + author + "|" + segments.toString());
     }
@@ -120,7 +120,7 @@ module Store {
         return ["", "", "0"] as Array<String>;
     }
 
-    //! Bücher, von denen mindestens ein Segment abspielbar auf der Uhr liegt.
+    //! Books that have at least one playable segment on the watch.
     function localBooks() as Array<String> {
         var books = [] as Array<String>;
         var ids = knownBooks();
@@ -132,7 +132,7 @@ module Store {
         return books;
     }
 
-    // --- Fortschritt ---------------------------------------------------------
+    // --- Progress ---------------------------------------------------------
 
     function progress() as Dictionary {
         var stored = Application.Storage.getValue(Keys.PROGRESS);
@@ -142,14 +142,14 @@ module Store {
         return {};
     }
 
-    //! Position merken. Wird beim nächsten Sync an den Proxy geschickt.
+    //! Remember the position. Sent to the proxy on the next sync.
     function rememberPosition(bookId as String, segment as Number, seconds as Number, timestamp as Number) as Void {
         var all = progress();
         all[bookId] = segment.toString() + "|" + seconds.toString() + "|" + timestamp.toString();
         Application.Storage.setValue(Keys.PROGRESS, all);
     }
 
-    //! [segIdx, sekunden, zeitstempel] oder null.
+    //! [segIdx, seconds, timestamp] or null.
     function position(bookId as String) as Array<Number>? {
         var stored = progress()[bookId];
         if (!(stored instanceof String)) {
@@ -162,9 +162,9 @@ module Store {
         return [toNumber(parts[0]), toNumber(parts[1]), toNumber(parts[2])] as Array<Number>;
     }
 
-    //! Der gepufferte Fortschritt in der Form, die /v1/progress erwartet.
-    //! Sync und Pausen-Push schicken dieselben Daten — deshalb hier und nicht
-    //! zweimal an den Aufrufstellen.
+    //! The buffered progress in the shape that /v1/progress expects.
+    //! Sync and pause push send the same data — hence here and not twice at
+    //! the call sites.
     function progressEntries() as Array<Dictionary> {
         var entries = [] as Array<Dictionary>;
         var bookIds = progress().keys();
@@ -190,16 +190,16 @@ module Store {
         Application.Storage.deleteValue(Keys.PROGRESS);
     }
 
-    // --- Hilfen --------------------------------------------------------------
+    // --- Helpers --------------------------------------------------------------
 
-    //! String.toNumber() liefert null, wenn der Wert unlesbar ist. Ein
-    //! beschädigter Store-Eintrag darf die App nicht mitreißen.
+    //! String.toNumber() returns null when the value is unreadable. A
+    //! corrupted store entry must not take the app down with it.
     function toNumber(value as String) as Number {
         var number = value.toNumber();
         return (number == null) ? 0 : number;
     }
 
-    //! Monkey C kennt kein String.split; die flachen Werte brauchen eines.
+    //! Monkey C has no String.split; the flat values need one.
     function split(value as String, separator as String) as Array<String> {
         var parts = [] as Array<String>;
         var rest = value;
@@ -214,7 +214,7 @@ module Store {
     }
 }
 
-//! Das Buch, das der Player gerade abspielt.
+//! The book the player is currently playing.
 module Current {
     function bookId() as String? {
         var stored = Application.Storage.getValue(Keys.CURRENT);

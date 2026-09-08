@@ -32,7 +32,7 @@ async def test_ping_reports_an_unreachable_server():
     def handler(request):
         raise httpx.ConnectError("no route", request=request)
 
-    with pytest.raises(AbsError, match="nicht erreichbar"):
+    with pytest.raises(AbsError, match="unreachable"):
         await client_for(handler).ping()
 
 
@@ -48,8 +48,8 @@ async def test_all_books_skips_podcast_libraries_and_sorts_by_title():
             json={
                 "total": 2,
                 "results": [
-                    {"id": "b", "media": {"metadata": {"title": "Zweites"}}},
-                    {"id": "a", "media": {"metadata": {"title": "Erstes"}}},
+                    {"id": "b", "media": {"metadata": {"title": "Second"}}},
+                    {"id": "a", "media": {"metadata": {"title": "First"}}},
                 ],
             },
         )
@@ -57,7 +57,7 @@ async def test_all_books_skips_podcast_libraries_and_sorts_by_title():
     books = await client_for(handler).all_books()
 
     assert calls == ["/api/libraries/lib1/items"]
-    assert [b["title"] for b in books] == ["Erstes", "Zweites"]
+    assert [b["title"] for b in books] == ["First", "Second"]
 
 
 async def test_all_books_is_cached_between_calls():
@@ -88,26 +88,26 @@ class TestDownload:
 
         seen = []
         size = await client_for(handler).download_file(
-            "li_1", "9001", tmp_path / "buch.m4b", on_progress=lambda done, total: seen.append(done)
+            "li_1", "9001", tmp_path / "book.m4b", on_progress=lambda done, total: seen.append(done)
         )
 
         assert size == len(payload)
-        assert (tmp_path / "buch.m4b").read_bytes() == payload
+        assert (tmp_path / "book.m4b").read_bytes() == payload
         assert seen and seen[-1] == len(payload)
 
     async def test_leaves_no_partial_file_behind_when_the_transfer_dies(self, tmp_path):
         def handler(request):
-            raise httpx.ReadError("Verbindung weg", request=request)
+            raise httpx.ReadError("connection lost", request=request)
 
         with pytest.raises(AbsError):
-            await client_for(handler).download_file("li_1", "9001", tmp_path / "buch.m4b")
+            await client_for(handler).download_file("li_1", "9001", tmp_path / "book.m4b")
 
         assert list(tmp_path.iterdir()) == []
 
     async def test_rejects_an_empty_response(self, tmp_path):
-        with pytest.raises(AbsError, match="keine Daten"):
+        with pytest.raises(AbsError, match="no data"):
             await client_for(lambda r: httpx.Response(200, content=b"")).download_file(
-                "li_1", "9001", tmp_path / "buch.m4b"
+                "li_1", "9001", tmp_path / "book.m4b"
             )
 
 

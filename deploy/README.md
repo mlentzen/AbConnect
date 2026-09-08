@@ -1,101 +1,98 @@
-# abconnect-proxy betreiben
+# Running abconnect-proxy
 
-## 1. Geheimnisse anlegen
+## 1. Create the secrets
 
-Der ABS-API-Key entsteht im Audiobookshelf-Webinterface unter
-*Settings → Users → API Keys*. Der zweite Token ist frei gewählt und schützt
-die Strecke Uhr → Proxy; er wird später in den App-Einstellungen der Uhr
-eingetragen.
+The ABS API key is created in the Audiobookshelf web interface under
+*Settings → Users → API Keys*. The second token is freely chosen and protects
+the watch → proxy path; it is entered into the watch's app settings later.
 
 ```sh
-printf '%s' 'abs-api-key-hier' | podman secret create abs-api-key -
+printf '%s' 'abs-api-key-here' | podman secret create abs-api-key -
 openssl rand -hex 24 | tee /dev/tty | podman secret create abconnect-token -
 ```
 
-## 2. Units installieren
+## 2. Install the units
 
-`ABS_URL` in `deploy/abconnect-proxy.container` auf die eigene Instanz
-anpassen, dann:
+Adjust `ABS_URL` in `deploy/abconnect-proxy.container` to your own instance,
+then:
 
 ```sh
 ./deploy/install.sh
 ```
 
-Das Skript legt vier Units ab und startet den Dienst. Ein Handbuild entfällt:
-das Image entsteht beim ersten Start aus `proxy/Containerfile`.
+The script drops four units and starts the service. No manual build needed: the
+image is produced on first start from `proxy/Containerfile`.
 
-| Unit | Ort | Zweck |
+| Unit | Location | Purpose |
 |---|---|---|
-| `abconnect-proxy.build` | `~/.config/containers/systemd/` | baut das Image aus dem Checkout |
-| `abconnect-proxy.container` | `~/.config/containers/systemd/` | der Dienst selbst |
-| `abconnect-proxy-rebuild.path` | `~/.config/systemd/user/` | beobachtet die Branch-Spitze |
-| `abconnect-proxy-rebuild.service` | `~/.config/systemd/user/` | baut neu und startet neu |
+| `abconnect-proxy.build` | `~/.config/containers/systemd/` | builds the image from the checkout |
+| `abconnect-proxy.container` | `~/.config/containers/systemd/` | the service itself |
+| `abconnect-proxy-rebuild.path` | `~/.config/systemd/user/` | watches the branch tip |
+| `abconnect-proxy-rebuild.service` | `~/.config/systemd/user/` | rebuilds and restarts |
 
-Zwei Zeilen sind maschinenabhängig — der Build-Kontext und die beobachtete
-Ref-Datei. Beide trägt das Skript aus dem tatsächlichen Ort des Checkouts und
-dem ausgecheckten Branch ein; im Repo stehen nur Vorgabewerte. Nach einem
-Branch-Wechsel oder einem verschobenen Checkout also einfach erneut ausführen.
+Two lines are machine-dependent — the build context and the watched ref file.
+The script fills both in from the actual location of the checkout and the
+checked-out branch; the repo only holds default values. So after a branch
+switch or a moved checkout, just run it again.
 
-## 3. Automatischer Rebuild
+## 3. Automatic rebuild
 
-`abconnect-proxy-rebuild.path` beobachtet `.git/refs/heads/<branch>`. Jeder
-Commit, `git pull` oder Checkout auf diesem Branch löst einen Rebuild und einen
-Neustart des Containers aus — nicht schon das Speichern einer Datei, sodass ein
-halbfertiger Stand nicht ausgeliefert wird.
+`abconnect-proxy-rebuild.path` watches `.git/refs/heads/<branch>`. Every commit,
+`git pull` or checkout on this branch triggers a rebuild and a restart of the
+container — not already the saving of a file, so a half-finished state is not
+shipped.
 
-Von Hand anstoßen, ohne auf einen Commit zu warten:
+Trigger by hand without waiting for a commit:
 
 ```sh
 systemctl --user start abconnect-proxy-rebuild
 ```
 
-Nachsehen, was passiert ist:
+Check what happened:
 
 ```sh
 systemctl --user status abconnect-proxy-rebuild.path
 journalctl --user -u abconnect-proxy-build -n 50
 ```
 
-Zwei Dinge, die auffallen können:
+Two things that may stand out:
 
-* Ein fehlgeschlagener Build reißt den Container mit, weil dieser den
-  Build-Dienst per `Requires=` einbindet. Ein kaputter Commit legt den Dienst
-  also still, statt still das alte Image weiterlaufen zu lassen. Wer das anders
-  will, ersetzt in `abconnect-proxy.container` `Requires=` durch `Wants=`.
-* `git gc` bzw. `git pack-refs` kann die beobachtete Ref-Datei entfernen. Der
-  Watcher fängt sich wieder, sobald sie neu entsteht; ein Commit unmittelbar
-  danach kann aber durchrutschen. Dann hilft der Aufruf von Hand.
+* A failed build takes the container down with it, because the container pulls
+  in the build service via `Requires=`. A broken commit therefore stops the
+  service instead of quietly keeping the old image running. If you want it
+  otherwise, replace `Requires=` with `Wants=` in `abconnect-proxy.container`.
+* `git gc` or `git pack-refs` can remove the watched ref file. The watcher
+  recovers as soon as it reappears; a commit right afterwards can slip through
+  though. Then the manual call helps.
 
-## 4. Prüfen
+## 4. Check
 
 ```sh
-curl -s localhost:18543/healthz | python3 -m json.tool
+curl -s localhost:18543/health | python3 -m json.tool
 ```
 
-Der Dienst hört im Container auf 8080, veröffentlicht wird aber
-`127.0.0.1:18543` — 8080 ist auf diesem Rechner bereits belegt. Der
-Healthcheck im Container prüft weiterhin 8080; nur die Host-Seite ändert sich.
+The service listens on 8080 inside the container, but is published as
+`127.0.0.1:18543` — 8080 is already taken on this machine. The healthcheck
+inside the container still checks 8080; only the host side changes.
 
-`audiobookshelf: "ok"` heißt: Adresse stimmt und der API-Key wird akzeptiert.
-`playlist_found: true` heißt, dass die Playlist unter ihrem Namen gefunden wurde
-— steht dort `false`, spiegelt der Proxy nichts, löscht aber auch nichts.
-Alles andere ist eine Fehlkonfiguration, die hier auffällt statt erst beim
-ersten Sync der Uhr.
+`audiobookshelf: "ok"` means: the address is correct and the API key is
+accepted. `playlist_found: true` means the playlist was found under its name —
+if it says `false`, the proxy mirrors nothing but also deletes nothing.
+Anything else is a misconfiguration that surfaces here instead of only on the
+watch's first sync.
 
-## Die Playlist
+## The playlist
 
-Was auf der Uhr landen soll, wird in Audiobookshelf entschieden: eine Playlist
-namens `Garmin` anlegen und Bücher hineinlegen. Der Proxy bereitet neue Einträge
-von selbst vor und gibt entfernte wieder frei; die Uhr spiegelt das beim nächsten
-Sync.
+What should end up on the watch is decided in Audiobookshelf: create a playlist
+named `Garmin` and add books to it. The proxy prepares new entries on its own
+and releases removed ones again; the watch mirrors that on the next sync.
 
-Gibt es keine Playlist dieses Namens, meldet `/healthz` das als
-`playlist_found: false` und `/v1/playlist` antwortet mit 409. Die Uhr löscht
-daraufhin nichts — ein Tippfehler im Namen räumt sie also nicht leer.
+If there is no playlist of that name, `/health` reports it as
+`playlist_found: false` and `/v1/playlist` answers with 409. The watch then
+deletes nothing — a typo in the name does not wipe it.
 
-Von Hand nachsehen oder ein einzelnes Buch anstoßen — die Endpunkte unterhalb
-von `/v1/playlist` ruft die Uhr nicht mehr auf, für die Fehlersuche sind sie aber
-da:
+Check by hand or trigger a single book — the watch no longer calls the
+endpoints below `/v1/playlist`, but they are there for debugging:
 
 ```sh
 TOKEN=$(podman secret inspect --showsecret abconnect-token | python3 -c 'import json,sys;print(json.load(sys.stdin)[0]["SecretData"])')
@@ -106,27 +103,27 @@ curl -s -H "Authorization: Bearer $TOKEN" localhost:18543/v1/books/<ID>/status
 curl -s -H "Authorization: Bearer $TOKEN" localhost:18543/v1/books/<ID>/segments | python3 -m json.tool
 ```
 
-## Konfiguration
+## Configuration
 
-| Variable | Pflicht | Default | Bedeutung |
+| Variable | Required | Default | Meaning |
 |---|---|---|---|
-| `ABS_URL` | ja | — | Basis-URL der ABS-Instanz |
-| `ABS_API_KEY` | ja | — | ABS-API-Key |
-| `ABCONNECT_TOKEN` | ja | — | Token für die Uhr; Komma-Liste für Rotation |
-| `ABS_PLAYLIST` | — | `Garmin` | Playlist, die auf die Uhr gespiegelt wird |
-| `PLAYLIST_POLL_SECONDS` | — | 600 | Abstand des Hintergrund-Abgleichs |
-| `CACHE_DIR` | — | `/var/cache/abconnect` | Segmente und Cover |
-| `WORK_DIR` | — | `/var/tmp/abconnect` | Quelldatei während des Prepare-Jobs |
-| `CACHE_MAX_BYTES` | — | 200 GiB | Notbremse für die Verdrängung |
-| `RELEASE_TTL_DAYS` | — | 30 | wie lange freigegebene Bücher liegen bleiben |
-| `SEGMENT_TARGET_SECONDS` | — | 900 | Zielgröße eines Segments |
-| `SEGMENT_MIN_SECONDS` | — | 180 | darunter wird verschmolzen |
-| `SEGMENT_MAX_SECONDS` | — | 1500 | darüber wird geteilt |
-| `COVER_URL_TTL_SECONDS` | — | 21600 | Gültigkeit der signierten Cover-URLs |
+| `ABS_URL` | yes | — | base URL of the ABS instance |
+| `ABS_API_KEY` | yes | — | ABS API key |
+| `ABCONNECT_TOKEN` | yes | — | token for the watch; comma list for rotation |
+| `ABS_PLAYLIST` | — | `Garmin` | playlist that is mirrored to the watch |
+| `PLAYLIST_POLL_SECONDS` | — | 600 | interval of the background reconciliation |
+| `CACHE_DIR` | — | `/var/cache/abconnect` | segments and covers |
+| `WORK_DIR` | — | `/var/tmp/abconnect` | source file during the prepare job |
+| `CACHE_MAX_BYTES` | — | 200 GiB | emergency brake for eviction |
+| `RELEASE_TTL_DAYS` | — | 30 | how long released books stay around |
+| `SEGMENT_TARGET_SECONDS` | — | 900 | target size of a segment |
+| `SEGMENT_MIN_SECONDS` | — | 180 | below this, segments are merged |
+| `SEGMENT_MAX_SECONDS` | — | 1500 | above this, segments are split |
+| `COVER_URL_TTL_SECONDS` | — | 21600 | validity of the signed cover URLs |
 | `LOG_LEVEL` | — | INFO | |
 
-## Token wechseln, ohne die Uhr auszusperren
+## Rotating the token without locking out the watch
 
-`ABCONNECT_TOKEN` akzeptiert eine Komma-Liste. Neuen Token voranstellen, Dienst
-neu starten, in den App-Einstellungen der Uhr eintragen, danach den alten aus
-der Liste entfernen.
+`ABCONNECT_TOKEN` accepts a comma list. Prepend the new token, restart the
+service, enter it in the watch's app settings, then remove the old one from the
+list.

@@ -18,7 +18,7 @@ pytestmark = [needs_ffmpeg, pytest.mark.anyio]
 
 
 class FakeAbs:
-    """Liefert eine echte m4b, damit ffmpeg wirklich etwas zu schneiden hat."""
+    """Provides a real m4b so ffmpeg actually has something to cut."""
 
     def __init__(self, item: ParsedItem, source: Path, cover: bytes | None = b"JPEG"):
         self.item = item
@@ -36,7 +36,7 @@ class FakeAbs:
         if self.fail_download:
             from abconnect_proxy.abs_client import AbsError
 
-            raise AbsError("Verbindung weg")
+            raise AbsError("connection lost")
         self.downloads.append(ino)
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(self.source, destination)
@@ -50,11 +50,11 @@ class FakeAbs:
 
 
 def make_config(tmp_path, **overrides) -> config_module.Config:
-    """Echte Validierung, danach Testmaße.
+    """Real validation, then test dimensions.
 
-    Die Produktionsgrenzen (Segmente ab 60 s) sind hier hinderlich: die
-    Fixtures sind eine Minute lang. Deshalb erst regulär laden, damit die
-    Validierung mitgetestet bleibt, und dann auf Testgrößen umstellen.
+    The production limits (segments from 60 s) get in the way here: the
+    fixtures are one minute long. So load regularly first, keeping the
+    validation under test, and then switch to test sizes.
     """
     base = config_module.load(
         {
@@ -161,7 +161,7 @@ class TestHappyPath:
 
         manifest = cache.load_manifest("li_1")
         assert manifest["chapter_source"] == "grid"
-        assert "keine Kapitelmarken" in manifest["reason"]
+        assert "no chapter markers" in manifest["reason"]
 
 
 class TestMultiFile:
@@ -194,7 +194,7 @@ class TestFailures:
         preparer, cache, _, cfg = await build(tmp_path, item, source)
 
         async def explode(*args, **kwargs):
-            raise media.MediaError("ffmpeg mag nicht")
+            raise media.MediaError("ffmpeg refuses")
 
         monkeypatch.setattr("abconnect_proxy.preparer.cut", explode)
 
@@ -213,12 +213,12 @@ class TestFailures:
         state = await run(preparer)
 
         assert state.status is Status.ERROR
-        assert "Verbindung" in state.error
+        assert "connection lost" in state.error
         assert not cache.is_ready("li_1")
 
     async def test_an_unusable_item_reports_the_reason(self, tmp_path, single_book):
         _, source = single_book
-        preparer, _, _, _ = await build(tmp_path, ItemUnusable("nur eBook"), source)
+        preparer, _, _, _ = await build(tmp_path, ItemUnusable("eBook only"), source)
 
         state = await run(preparer)
 
@@ -232,7 +232,7 @@ class TestFailures:
         state = await run(preparer)
 
         assert state.status is Status.ERROR
-        assert "Platz" in state.error
+        assert "space" in state.error
 
 
 class TestLifecycle:

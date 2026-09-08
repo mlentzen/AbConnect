@@ -1,12 +1,12 @@
 import Toybox.Lang;
 import Toybox.Media;
 
-//! Reihenfolge und Metadaten der Segmente eines Buchs.
+//! Order and metadata of a book's segments.
 //!
-//! Zwei Dinge machen den Unterschied zwischen Musikplayer und Hörbuch:
-//! die Metadaten kommen aus dem Object Store statt aus den Tags der Datei,
-//! und das laufende Segment wird als ActiveContent mit gemerkter Position
-//! zurückgegeben — nur so setzt der Player mitten im Kapitel fort.
+//! Two things make the difference between a music player and an audiobook:
+//! the metadata comes from the Object Store instead of the file's tags, and
+//! the current segment is returned as ActiveContent with a remembered
+//! position — only then does the player resume in the middle of a chapter.
 class AbContentIterator extends Media.ContentIterator {
 
     private var _bookId as String;
@@ -41,10 +41,10 @@ class AbContentIterator extends Media.ContentIterator {
         }
     }
 
-    //! Segmente in ihre Reihenfolge bringen.
+    //! Put the segments into their order.
     //!
-    //! Der Object Store ist eine Map ohne Ordnung, deshalb wird über ein Feld
-    //! einsortiert statt sortiert — Monkey C hat kein Array.sort.
+    //! The Object Store is an unordered map, so entries are placed by a field
+    //! instead of being sorted — Monkey C has no Array.sort.
     private function buildPlaylist() as Void {
         var tracks = Store.localTracks(_bookId);
         var refIds = tracks.keys();
@@ -110,8 +110,8 @@ class AbContentIterator extends Media.ContentIterator {
         if (_index < 0 || _index >= _refs.size()) {
             return null;
         }
-        // Nur das laufende Segment trägt eine Startposition — alle folgenden
-        // beginnen von vorn.
+        // Only the current segment carries a start position — all following
+        // ones begin from the start.
         var ref = new Media.ContentRef(_refs[_index], Media.CONTENT_TYPE_AUDIO);
         return new Media.ActiveContent(ref, metadataFor(_index), _startPosition);
     }
@@ -143,7 +143,7 @@ class AbContentIterator extends Media.ContentIterator {
     }
 
     function shuffling() as Boolean {
-        // Ein Hörbuch in zufälliger Reihenfolge ist kein Hörbuch mehr.
+        // An audiobook in random order is no longer an audiobook.
         return false;
     }
 
@@ -160,11 +160,11 @@ class AbContentIterator extends Media.ContentIterator {
             Media.PLAYBACK_CONTROL_SKIP_FORWARD,
             Media.PLAYBACK_CONTROL_SKIP_BACKWARD
         ] as Array<Media.PlaybackControl>;
-        // Hörbuchmaße statt der Musik-Vorgabe von zweimal 30 Sekunden.
+        // Audiobook values instead of the music default of two times 30 seconds.
         profile.skipForwardTimeDelta = 30;
         profile.skipBackwardTimeDelta = 15;
         profile.attemptSkipAfterThumbsDown = false;
-        // Ohne diese Meldungen erführe die App nie, wo der Hörer steht.
+        // Without these notifications the app would never learn where the listener is.
         profile.requirePlaybackNotification = true;
         profile.playbackNotificationThreshold = 30;
         profile.skipPreviousThreshold = 4;

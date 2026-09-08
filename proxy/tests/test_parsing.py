@@ -66,10 +66,10 @@ class TestParseItem:
     @pytest.mark.parametrize(
         "media, expected",
         [
-            ({"audioFiles": []}, "keine Audiodateien"),
+            ({"audioFiles": []}, "no audio files"),
             ({"audioFiles": [{"index": 1, "ino": "1", "codec": "opus", "duration": 10, "metadata": {}}]}, "Opus"),
-            ({"audioFiles": [{"index": 1, "ino": "1", "codec": "aac", "duration": 0, "metadata": {}}]}, "ohne Dauer"),
-            ({"audioFiles": [{"index": 1, "codec": "aac", "duration": 10, "metadata": {}}]}, "ohne ino"),
+            ({"audioFiles": [{"index": 1, "ino": "1", "codec": "aac", "duration": 0, "metadata": {}}]}, "without duration"),
+            ({"audioFiles": [{"index": 1, "codec": "aac", "duration": 10, "metadata": {}}]}, "without ino"),
         ],
     )
     def test_reports_unusable_items_in_plain_language(self, media, expected):
@@ -95,7 +95,7 @@ class TestParseListing:
         )
         assert total == 42
         assert books[0] == {"id": "a", "title": "T", "author": "A", "duration": 100.0}
-        assert books[1]["title"] == "b"  # ohne Titel bleibt die ID als Notnagel
+        assert books[1]["title"] == "b"  # without a title the ID remains as a fallback
 
     def test_tolerates_a_bare_list(self):
         books, total = parse_listing([{"id": "a", "media": {"metadata": {"title": "T"}}}])

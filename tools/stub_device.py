@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""Erzeugt ein Ersatz-Geräteprofil, damit `monkeyc` ohne SDK-Manager baut.
+"""Creates a substitute device profile so `monkeyc` builds without the SDK Manager.
 
-WOFÜR DAS GUT IST: Der Connect-IQ-Compiler verlangt ein Geräteprofil unter
-~/.Garmin/ConnectIQ/Devices/. Die echten Profile lädt nur der SDK-Manager nach
-einem Garmin-Login. Ohne sie lässt sich der Code nicht einmal übersetzen.
+WHAT THIS IS GOOD FOR: The Connect IQ compiler requires a device profile under
+~/.Garmin/ConnectIQ/Devices/. The real profiles are only downloaded by the SDK
+Manager after a Garmin login. Without them the code cannot even be compiled.
 
-WOFÜR NICHT: Die Werte hier sind nachgebaut, nicht von Garmin. Ein grüner Build
-belegt, dass der Code syntaktisch stimmt, dass alle API-Symbole gegen das echte
-SDK auflösen und dass die Ressourcen übersetzen. Er belegt *nicht*, dass die App
-in das Speicherlimit der echten fenix 7X Pro passt, dass das Layout stimmt oder
-dass sie auf dem Gerät läuft. Vor jedem Release gehört ein Build gegen das echte
-Profil aus dem SDK-Manager — und ein Test auf der Uhr.
+WHAT IT IS NOT FOR: The values here are reconstructed, not from Garmin. A green
+build proves that the code is syntactically correct, that all API symbols
+resolve against the real SDK and that the resources compile. It does *not*
+prove that the app fits into the memory limit of the real fenix 7X Pro, that
+the layout is right or that it runs on the device. Before every release there
+should be a build against the real profile from the SDK Manager — and a test
+on the watch.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from pathlib import Path
 
 PROFILE = {
     "deviceId": "fenix7xpro",
-    "displayName": "fenix 7X Pro (Ersatzprofil, nicht von Garmin)",
+    "displayName": "fenix 7X Pro (substitute profile, not from Garmin)",
     "deviceFamily": "fenix7x-20",
     "worldWidePartNumber": "006-B4375-00",
     "orientation": "portrait",
@@ -56,15 +57,15 @@ def main() -> int:
         "--root",
         type=Path,
         default=Path.home() / ".Garmin" / "ConnectIQ" / "Devices",
-        help="Verzeichnis der Geräteprofile",
+        help="directory of the device profiles",
     )
     args = parser.parse_args()
 
     target = args.root / PROFILE["deviceId"]
     target.mkdir(parents=True, exist_ok=True)
     (target / "compiler.json").write_text(json.dumps(PROFILE, indent=1), encoding="utf-8")
-    print(f"Ersatzprofil geschrieben: {target / 'compiler.json'}")
-    print("Achtung: nachgebaute Werte. Ersetzt keinen Build gegen das echte Profil.")
+    print(f"Substitute profile written: {target / 'compiler.json'}")
+    print("Caution: reconstructed values. Does not replace a build against the real profile.")
     return 0
 
 

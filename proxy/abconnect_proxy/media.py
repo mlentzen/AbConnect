@@ -1,8 +1,8 @@
-"""ffmpeg/ffprobe-Anbindung.
+"""ffmpeg/ffprobe binding.
 
-Geschnitten wird ausschließlich per Stream-Copy: kein Re-Encode, kein
-Qualitätsverlust, Laufzeit im Bereich von Sekundenbruchteilen. Das ist die
-Annahme, auf der die ganze Prepare-Mechanik ruht.
+Cutting is done exclusively via stream copy: no re-encode, no quality loss,
+runtime in the range of fractions of a second. That is the assumption the
+whole prepare mechanism rests on.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ class ProbeResult:
 def ensure_available() -> None:
     missing = [tool for tool in ("ffmpeg", "ffprobe") if shutil.which(tool) is None]
     if missing:
-        raise MediaError(f"Nicht im PATH gefunden: {', '.join(missing)}")
+        raise MediaError(f"Not found in PATH: {', '.join(missing)}")
 
 
 async def _run(*args: str) -> bytes:
@@ -43,7 +43,7 @@ async def _run(*args: str) -> bytes:
     stdout, stderr = await process.communicate()
     if process.returncode != 0:
         detail = stderr.decode(errors="replace").strip().splitlines()
-        raise MediaError(f"{args[0]} scheiterte ({process.returncode}): {detail[-1] if detail else '?'}")
+        raise MediaError(f"{args[0]} failed ({process.returncode}): {detail[-1] if detail else '?'}")
     return stdout
 
 
@@ -56,11 +56,11 @@ async def probe(path: Path) -> ProbeResult:
 
     audio = next((s for s in data.get("streams", []) if s.get("codec_type") == "audio"), None)
     if audio is None:
-        raise MediaError(f"{path.name} enthält keine Audiospur")
+        raise MediaError(f"{path.name} contains no audio track")
 
     duration = float(data.get("format", {}).get("duration") or audio.get("duration") or 0.0)
     if duration <= 0:
-        raise MediaError(f"{path.name} meldet keine Dauer")
+        raise MediaError(f"{path.name} reports no duration")
 
     chapters = []
     for entry in data.get("chapters", []):
@@ -68,7 +68,7 @@ async def probe(path: Path) -> ProbeResult:
             start, end = float(entry["start_time"]), float(entry["end_time"])
         except (KeyError, TypeError, ValueError):
             continue
-        title = (entry.get("tags") or {}).get("title") or f"Kapitel {len(chapters) + 1}"
+        title = (entry.get("tags") or {}).get("title") or f"Chapter {len(chapters) + 1}"
         chapters.append(Chapter(start=start, end=end, title=title))
 
     return ProbeResult(duration=duration, codec=audio.get("codec_name", ""), chapters=chapters)
@@ -85,20 +85,20 @@ async def cut(
     album: str = "",
     track: int | None = None,
 ) -> int:
-    """Schneidet [start, start+duration) verlustfrei heraus. Gibt die Größe zurück."""
+    """Cuts out [start, start+duration) losslessly. Returns the size."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     args = [
         "ffmpeg", "-nostdin", "-v", "error", "-y",
-        "-ss", f"{start:.3f}",          # vor -i: schnelles Input-Seeking
+        "-ss", f"{start:.3f}",          # before -i: fast input seeking
         "-i", str(source),
         "-t", f"{duration:.3f}",
         "-map", "0:a:0",
-        "-map_metadata", "-1",          # Quell-Tags verwerfen, wir setzen eigene
-        "-map_chapters", "-1",          # keine Kapitel im Segment
+        "-map_metadata", "-1",          # drop source tags, we set our own
+        "-map_chapters", "-1",          # no chapters in the segment
         "-c", "copy",
     ]
     if destination.suffix == ".m4a":
-        # moov nach vorn, damit der Player nicht ans Dateiende springen muss.
+        # move moov to the front so the player does not have to seek to EOF.
         args += ["-movflags", "+faststart"]
     for key, value in (("title", title), ("artist", artist), ("album", album)):
         if value:
@@ -109,5 +109,5 @@ async def cut(
 
     await _run(*args)
     if not destination.exists() or destination.stat().st_size == 0:
-        raise MediaError(f"Segment {destination.name} blieb leer")
+        raise MediaError(f"Segment {destination.name} stayed empty")
     return destination.stat().st_size

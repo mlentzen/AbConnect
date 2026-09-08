@@ -1,18 +1,18 @@
-# Podman-Quadlet: gehört nach ~/.config/containers/systemd/ — am einfachsten
-# über deploy/install.sh.
+# Podman quadlet: goes into ~/.config/containers/systemd/ — easiest via
+# deploy/install.sh.
 #
-# Im Image steht weder eine Serveradresse noch ein Schlüssel — beides kommt
-# von hier. Fehlt eine Pflichtvariable, startet der Container nicht.
+# The image contains neither a server address nor a key — both come from here.
+# If a required variable is missing, the container does not start.
 
 [Unit]
 Description=AbConnect proxy (Audiobookshelf -> Garmin)
 After=audiobookshelf.service
 Wants=audiobookshelf.service
 
-# Das Image entsteht aus abconnect-proxy.build; ein Handbuild entfällt.
-# Requires heißt auch: ein fehlgeschlagener Build (kaputter Commit) reißt den
-# laufenden Container mit. Wer lieber das alte Image weiterlaufen lässt,
-# ersetzt Requires durch Wants.
+# The image is produced from abconnect-proxy.build; no manual build needed.
+# Requires also means: a failed build (broken commit) takes the running
+# container down with it. If you would rather keep the old image running,
+# replace Requires with Wants.
 Requires=abconnect-proxy-build.service
 After=abconnect-proxy-build.service
 
@@ -24,8 +24,8 @@ Environment=ABS_URL=https://ab.ml-bn.de
 Secret=abs-api-key,type=env,target=ABS_API_KEY
 Secret=abconnect-token,type=env,target=ABCONNECT_TOKEN
 
-# Platz ist vorhanden: großzügiges Budget, damit freigegebene Bücher liegen
-# bleiben und ein erneutes Ankreuzen ohne zweiten Download auskommt.
+# Disk space is available: a generous budget so released books stay around and
+# re-selecting one does not require a second download.
 Environment=CACHE_MAX_BYTES=214748364800
 Environment=RELEASE_TTL_DAYS=30
 Environment=LOG_LEVEL=INFO
@@ -34,7 +34,7 @@ Volume=abconnect-cache:/var/cache/abconnect
 Volume=abconnect-work:/var/tmp/abconnect
 
 PublishPort=127.0.0.1:18543:8080
-HealthCmd=/usr/bin/curl -fsS http://localhost:8080/healthz
+HealthCmd=/usr/bin/curl -fsS http://localhost:8080/health
 HealthInterval=60s
 HealthStartPeriod=20s
 

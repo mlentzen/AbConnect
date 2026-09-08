@@ -1,8 +1,9 @@
-"""Laufzeitkonfiguration.
+"""Runtime configuration.
 
-Im Image steht nichts: Adresse und Schlüssel kommen ausschließlich aus der
-Umgebung. Fehlt etwas, startet der Prozess nicht — und zwar mit *allen*
-Beanstandungen auf einmal, damit ein Fehlstart nicht zur Salamitaktik wird.
+Nothing is baked into the image: address and keys come exclusively from the
+environment. If something is missing, the process does not start — and it
+reports *all* complaints at once so a failed start does not turn into salami
+tactics.
 """
 
 from __future__ import annotations
@@ -28,11 +29,11 @@ DEFAULTS = {
 
 
 class ConfigError(Exception):
-    """Sammelt alle Konfigurationsfehler, statt beim ersten abzubrechen."""
+    """Collects all configuration errors instead of aborting on the first."""
 
     def __init__(self, problems: list[str]) -> None:
         self.problems = problems
-        super().__init__("Ungültige Konfiguration:\n  - " + "\n  - ".join(problems))
+        super().__init__("Invalid configuration:\n  - " + "\n  - ".join(problems))
 
 
 @dataclass(frozen=True)
@@ -55,7 +56,7 @@ class Config:
 
     @property
     def signing_key(self) -> str:
-        """Schlüssel für vorsignierte Cover-URLs: der erste (aktuelle) Token."""
+        """Key for pre-signed cover URLs: the first (current) token."""
         return self.tokens[0]
 
 
@@ -64,10 +65,10 @@ def _int(env: dict[str, str], key: str, problems: list[str], minimum: int = 1) -
     try:
         value = int(raw)
     except ValueError:
-        problems.append(f"{key}: '{raw}' ist keine ganze Zahl")
+        problems.append(f"{key}: '{raw}' is not an integer")
         return minimum
     if value < minimum:
-        problems.append(f"{key}: {value} liegt unter dem Minimum {minimum}")
+        problems.append(f"{key}: {value} is below the minimum {minimum}")
         return minimum
     return value
 
@@ -78,26 +79,26 @@ def load(env: dict[str, str] | None = None) -> Config:
 
     abs_url = (env.get("ABS_URL") or "").strip().rstrip("/")
     if not abs_url:
-        problems.append("ABS_URL fehlt (Basis-URL der Audiobookshelf-Instanz)")
+        problems.append("ABS_URL missing (base URL of the Audiobookshelf instance)")
     elif not abs_url.startswith(("http://", "https://")):
-        problems.append(f"ABS_URL: '{abs_url}' braucht http:// oder https://")
+        problems.append(f"ABS_URL: '{abs_url}' needs http:// or https://")
 
     abs_api_key = (env.get("ABS_API_KEY") or "").strip()
     if not abs_api_key:
-        problems.append("ABS_API_KEY fehlt (als Podman-Secret einhängen)")
+        problems.append("ABS_API_KEY missing (mount as a Podman secret)")
 
-    # Die Playlist ist die Sollvorgabe: was drin liegt, kommt auf die Uhr.
+    # The playlist is the target: whatever is in it goes onto the watch.
     abs_playlist = (env.get("ABS_PLAYLIST") or DEFAULTS["ABS_PLAYLIST"]).strip()
     if not abs_playlist:
-        problems.append("ABS_PLAYLIST darf nicht leer sein")
+        problems.append("ABS_PLAYLIST must not be empty")
 
-    # Komma-Liste: der neue Token kann gesetzt werden, bevor der alte aus den
-    # Uhreneinstellungen verschwunden ist.
+    # Comma list: the new token can be set before the old one has disappeared
+    # from the watch settings.
     tokens = tuple(t.strip() for t in (env.get("ABCONNECT_TOKEN") or "").split(",") if t.strip())
     if not tokens:
-        problems.append("ABCONNECT_TOKEN fehlt (Token für die Uhr)")
+        problems.append("ABCONNECT_TOKEN missing (token for the watch)")
     elif any(len(t) < 16 for t in tokens):
-        problems.append("ABCONNECT_TOKEN: jeder Token braucht mindestens 16 Zeichen")
+        problems.append("ABCONNECT_TOKEN: every token needs at least 16 characters")
 
     cache_max = _int(env, "CACHE_MAX_BYTES", problems, minimum=1024**3)
     release_ttl = _int(env, "RELEASE_TTL_DAYS", problems, minimum=0)
@@ -110,7 +111,7 @@ def load(env: dict[str, str] | None = None) -> Config:
 
     if not seg_min <= target <= seg_max:
         problems.append(
-            f"Segmentgrenzen unplausibel: MIN={seg_min} <= TARGET={target} <= MAX={seg_max} gilt nicht"
+            f"Segment bounds implausible: MIN={seg_min} <= TARGET={target} <= MAX={seg_max} does not hold"
         )
 
     if problems:

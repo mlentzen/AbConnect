@@ -3,16 +3,16 @@ import Toybox.Media;
 import Toybox.System;
 import Toybox.Time;
 
-//! Bindeglied zum System-Player.
+//! Link to the system player.
 //!
-//! Die Position wird bei jedem Ereignis gemerkt. Beim Pausieren wird zusätzlich
-//! versucht, sie sofort über die Telefonverbindung zu melden — das ist der
-//! einzige Moment während der Wiedergabe, in dem ein Funkzugriff niemanden
-//! stört. Klappt es nicht, bleibt alles gepuffert und geht beim nächsten Sync
-//! über WLAN raus. Verloren geht dabei nichts.
+//! The position is remembered on every event. On pause it additionally tries
+//! to report it immediately over the phone connection — that is the only
+//! moment during playback when a radio access disturbs nobody. If it fails,
+//! everything stays buffered and goes out on the next sync over Wi-Fi. Nothing
+//! is lost in the process.
 class AbContentDelegate extends Media.ContentDelegate {
 
-    //! Pause und Fortsetzen kommen in Serie; ohne Bremse liefe der Funk mit.
+    //! Pause and resume come in series; without a throttle the radio would run along.
     private const PUSH_THROTTLE_SECONDS = 30;
 
     private var _iterator as AbContentIterator?;
@@ -63,8 +63,8 @@ class AbContentDelegate extends Media.ContentDelegate {
             seconds = playbackPosition;
         }
         if (songEvent == Media.SONG_EVENT_COMPLETE) {
-            // Am Ende des Segments zählt dessen volle Dauer, sonst ginge bei
-            // jedem Kapitelwechsel eine Handvoll Sekunden verloren.
+            // At the end of the segment its full duration counts, otherwise a
+            // handful of seconds would be lost on every chapter change.
             seconds = Store.toNumber(parts[1]);
         }
         Store.rememberPosition(bookId, Store.toNumber(parts[0]), seconds, Time.now().value());
@@ -74,10 +74,10 @@ class AbContentDelegate extends Media.ContentDelegate {
         }
     }
 
-    //! Versuch, den Stand sofort loszuwerden — über die Telefonverbindung.
+    //! Attempt to get the position out immediately — over the phone connection.
     //!
-    //! Jeder Grund, es zu lassen, führt hier nur zum Rücksprung: der gepufferte
-    //! Stand bleibt liegen und geht spätestens beim nächsten Sync raus.
+    //! Every reason not to do so just returns here: the buffered position stays
+    //! and goes out on the next sync at the latest.
     private function pushOverPhone() as Void {
         if (_pushing || !_client.isConfigured()) {
             return;
@@ -101,15 +101,15 @@ class AbContentDelegate extends Media.ContentDelegate {
     function onPushed(code as Number, data as Dictionary or String or Null) as Void {
         _pushing = false;
         if (code != 200) {
-            // Nichts verwerfen: der Sync über WLAN holt es nach.
+            // Discard nothing: the sync over Wi-Fi catches up on it.
             return;
         }
         Store.clearProgress();
         adoptServerPositions(data);
     }
 
-    //! War das Handy weiter als die Uhr, springt die Uhr nach — dieselbe Regel
-    //! wie beim Sync, damit beide Wege zum selben Ergebnis führen.
+    //! If the phone was ahead of the watch, the watch jumps to it — the same
+    //! rule as during sync, so both paths lead to the same result.
     private function adoptServerPositions(data as Dictionary or String or Null) as Void {
         if (!(data instanceof Dictionary)) {
             return;
@@ -135,6 +135,6 @@ class AbContentDelegate extends Media.ContentDelegate {
     }
 
     function onShuffle() as Void {
-        // Hörbücher werden nicht gemischt.
+        // Audiobooks are not shuffled.
     }
 }

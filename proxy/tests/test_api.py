@@ -27,14 +27,14 @@ PLAYLISTS = {
                 }
             ],
         },
-        {"id": "pl2", "name": "Andere", "items": []},
+        {"id": "pl2", "name": "Other", "items": []},
     ]
 }
 LISTING = {
     "total": 2,
     "results": [
         {"id": "li_a", "media": {"duration": 3600, "metadata": {"title": "Amerika", "authorName": "Kafka"}}},
-        {"id": "li_b", "media": {"duration": 7200, "metadata": {"title": "Das Schloss", "authorName": "Kafka"}}},
+        {"id": "li_b", "media": {"duration": 7200, "metadata": {"title": "The Castle", "authorName": "Kafka"}}},
     ],
 }
 
@@ -95,9 +95,9 @@ def prepared_book(config, book_id="li_a", cover=True):
             "cover": cover,
             "prepared_at": time.time(),
             "segments": [
-                {"index": 0, "title": "Der Heizer", "duration": 900.0, "book_start": 0.0,
+                {"index": 0, "title": "The Stoker", "duration": 900.0, "book_start": 0.0,
                  "bytes": 7, "encoding": "m4a", "file": "0000.m4a"},
-                {"index": 1, "title": "Der Onkel", "duration": 900.0, "book_start": 900.0,
+                {"index": 1, "title": "The Uncle", "duration": 900.0, "book_start": 900.0,
                  "bytes": 7, "encoding": "m4a", "file": "0001.m4a"},
             ],
         },
@@ -141,9 +141,9 @@ class TestAuth:
             codes = [client.get("/v1/books", headers={"Authorization": "Bearer x"}).status_code for _ in range(7)]
         assert 429 in codes
 
-    def test_healthz_needs_no_token(self, config):
+    def test_health_needs_no_token(self, config):
         with build_client(config) as client:
-            assert client.get("/healthz").status_code in (200, 503)
+            assert client.get("/health").status_code in (200, 503)
 
 
 class TestHealth:
@@ -152,13 +152,13 @@ class TestHealth:
             return httpx.Response(500, json={})
 
         with build_client(config, broken) as client:
-            response = client.get("/healthz")
+            response = client.get("/health")
         assert response.status_code == 503
         assert response.json()["audiobookshelf"] != "ok"
 
     def test_healthy_when_everything_answers(self, config):
         with build_client(config) as client:
-            response = client.get("/healthz")
+            response = client.get("/health")
         assert response.status_code == 200
         assert response.json()["audiobookshelf"] == "ok"
 
@@ -179,11 +179,11 @@ class TestListing:
         with build_client(config) as client:
             payload = client.get("/v1/books?page=2&per_page=1", headers=HEAD).json()
         assert payload["pages"] == 2
-        assert [b["title"] for b in payload["books"]] == ["Das Schloss"]
+        assert [b["title"] for b in payload["books"]] == ["The Castle"]
 
     def test_filters_by_query(self, config):
         with build_client(config) as client:
-            payload = client.get("/v1/books?q=schloss", headers=HEAD).json()
+            payload = client.get("/v1/books?q=castle", headers=HEAD).json()
         assert [b["id"] for b in payload["books"]] == ["li_b"]
 
 
@@ -192,9 +192,9 @@ class TestSegments:
         with build_client(config) as client:
             response = client.get("/v1/books/li_a/segments", headers=HEAD)
         assert response.status_code == 409
-        # Der genaue Zustand haengt davon ab, ob der Playlist-Abgleich schon
-        # zugeschlagen hat - entscheidend ist, dass "nicht bereit" gemeldet wird.
-        assert "nicht bereit" in response.json()["detail"]
+        # The exact state depends on whether the playlist reconciliation has
+        # already run - what matters is that "not ready" is reported.
+        assert "not ready" in response.json()["detail"]
 
     def test_returns_the_segment_list_with_urls(self, config):
         prepared_book(config)
@@ -202,7 +202,7 @@ class TestSegments:
             payload = client.get("/v1/books/li_a/segments", headers=HEAD).json()
 
         assert payload["title"] == "Amerika"
-        assert [s["title"] for s in payload["segments"]] == ["Der Heizer", "Der Onkel"]
+        assert [s["title"] for s in payload["segments"]] == ["The Stoker", "The Uncle"]
         assert payload["segments"][1]["url"] == "/v1/books/li_a/seg/0001.m4a"
 
     def test_includes_the_server_resume_point(self, config):
@@ -233,7 +233,7 @@ class TestCover:
         prepared_book(config)
         with build_client(config) as client:
             url = client.get("/v1/books/li_a/segments", headers=HEAD).json()["cover_url"]
-            response = client.get(url)  # bewusst ohne Header - makeImageRequest kann keine setzen
+            response = client.get(url)  # deliberately without a header - makeImageRequest cannot set any
         assert response.status_code == 200
         assert response.content == b"JPEGDATA"
 
@@ -356,24 +356,24 @@ class TestPlaylist:
     def test_a_missing_playlist_answers_409_and_touches_nothing(self, config):
         cache = prepared_book(config)
         cache.pin("li_a")
-        empty = {"playlists": [{"id": "pl2", "name": "Andere", "items": []}]}
+        empty = {"playlists": [{"id": "pl2", "name": "Other", "items": []}]}
 
         with build_client(config, abs_handler(playlists=empty)) as client:
             response = client.get("/v1/playlist", headers=HEAD)
 
         assert response.status_code == 409
         assert response.json()["found"] is False
-        assert "existiert" in response.json()["error"]
-        # Entscheidend: die Uhr darf daraufhin nichts loeschen.
+        assert "does not exist" in response.json()["error"]
+        # What matters: the watch must not delete anything as a result.
         assert cache.pinned("li_a")
 
     def test_playlist_needs_a_token(self, config):
         with build_client(config) as client:
             assert client.get("/v1/playlist").status_code == 401
 
-    def test_healthz_reports_whether_the_playlist_was_found(self, config):
+    def test_health_reports_whether_the_playlist_was_found(self, config):
         with build_client(config) as client:
             client.get("/v1/playlist", headers=HEAD)
-            report = client.get("/healthz").json()
+            report = client.get("/health").json()
         assert report["playlist"] == "Garmin"
         assert report["playlist_found"] is True

@@ -41,7 +41,7 @@ class TestManifest:
 
     def test_broken_manifest_counts_as_not_prepared(self, cache):
         cache.store_manifest("book", {"segments": []})
-        cache.manifest_path("book").write_text("{kaputt", encoding="utf-8")
+        cache.manifest_path("book").write_text("{broken", encoding="utf-8")
         assert cache.load_manifest("book") is None
 
 
@@ -72,7 +72,7 @@ class TestEviction:
 
         evicted = cache.enforce_budget(max_bytes=2200)
 
-        assert evicted == ["b"]  # 3000 -> 2000 Bytes, ältester Zugriff zuerst
+        assert evicted == ["b"]  # 3000 -> 2000 bytes, oldest access first
 
     def test_budget_leaves_pinned_books_alone_even_when_over(self, cache):
         fill(cache, "pinned", size=5000)

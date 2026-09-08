@@ -1,7 +1,7 @@
-"""HTTP-Vertrag zur Uhr.
+"""HTTP contract for the watch.
 
-Antworten bleiben bewusst schmal: Connect IQ bricht große JSON-Antworten mit
--402 beziehungsweise -403 ab, lange bevor eine ABS-Antwort durchpassen würde.
+Responses stay deliberately small: Connect IQ aborts large JSON responses with
+-402 or -403, long before a full ABS response would fit through.
 """
 
 from __future__ import annotations
@@ -27,8 +27,8 @@ log = logging.getLogger(__name__)
 
 SWEEP_INTERVAL_SECONDS = 3600
 COVER_WIDTH = 300
-# Die Uhr bricht große JSON-Antworten ab; eine Sync-Playlist mit mehr als
-# hundert Büchern passt ohnehin nicht auf sie.
+# The watch aborts large JSON responses; a sync playlist with more than a
+# hundred books would not fit on it anyway.
 MAX_PLAYLIST_BOOKS = 100
 
 
@@ -62,8 +62,8 @@ def create_app(config: Config, *, abs_client: AbsClient | None = None) -> FastAP
             config=config,
         )
         sweeper = asyncio.create_task(_sweep_forever(app), name="cache-sweeper")
-        # Läuft im Hintergrund, damit ein neu in die Playlist gelegtes Buch
-        # schon geschnitten bereitliegt, bevor die Uhr das nächste Mal synct.
+        # Runs in the background so a book newly added to the playlist is already
+        # segmented and ready before the watch syncs the next time.
         watcher = asyncio.create_task(app.state.reconciler.run_forever(), name="playlist-watcher")
         try:
             yield
@@ -92,26 +92,26 @@ async def _sweep_forever(app: FastAPI) -> None:
                 app.state.preparer.forget(book_id)
         except asyncio.CancelledError:
             raise
-        except Exception:  # pragma: no cover - der Sweeper darf nie den Prozess reißen
-            log.exception("Cache-Sweep gescheitert")
+        except Exception:  # pragma: no cover - the sweeper must never take down the process
+            log.exception("Cache sweep failed")
 
 
-# --- Zugangskontrolle --------------------------------------------------------
+# --- Access control --------------------------------------------------------
 
 
 async def require_token(request: Request) -> None:
     config: Config = request.app.state.config
     failures: auth.FailureTracker = request.app.state.failures
-    client = request.client.host if request.client else "unbekannt"
+    client = request.client.host if request.client else "unknown"
 
     remaining = failures.locked(client)
     if remaining:
-        raise HTTPException(429, f"Zu viele Fehlversuche, {int(remaining)} s sperren")
+        raise HTTPException(429, f"Too many failed attempts, locked for {int(remaining)} s")
 
     presented = auth.token_from_header(request.headers.get("authorization"))
     if not presented or not auth.verify_token(presented, config.tokens):
         failures.record_failure(client)
-        raise HTTPException(401, "Token fehlt oder ist ungültig")
+        raise HTTPException(401, "Token missing or invalid")
     failures.record_success(client)
 
 
@@ -127,12 +127,12 @@ def _book_id(book_id: str) -> str:
 def _register(app: FastAPI) -> None:
     guarded = [Depends(require_token)]
 
-    # --- Betrieb -------------------------------------------------------------
+    # --- Operations --------------------------------------------------------
 
-    @app.get("/healthz")
-    async def healthz(request: Request):
-        """Prüft Konfiguration *und* ABS-Erreichbarkeit — sonst fällt eine
-        Fehlkonfiguration erst beim ersten Sync der Uhr auf."""
+    @app.get("/health")
+    async def health(request: Request):
+        """Checks configuration *and* ABS reachability — otherwise a
+        misconfiguration would only surface on the watch's first sync."""
         cache: Cache = request.app.state.cache
         config: Config = request.app.state.config
         report = {
@@ -162,7 +162,7 @@ def _register(app: FastAPI) -> None:
         healthy = report["ffmpeg"] and report["audiobookshelf"] == "ok"
         return JSONResponse(report, status_code=200 if healthy else 503)
 
-    # --- Bibliothek ----------------------------------------------------------
+    # --- Library ----------------------------------------------------------
 
     @app.get("/v1/books", dependencies=guarded)
     async def list_books(
@@ -213,10 +213,10 @@ def _register(app: FastAPI) -> None:
 
     @app.get("/v1/playlist", dependencies=guarded)
     async def playlist(request: Request):
-        """Die Sollvorgabe für die Uhr.
+        """The target playlist for the watch.
 
-        Der Abgleich läuft bei jedem Aufruf, damit ein gerade hinzugefügtes Buch
-        sofort vorbereitet wird statt erst beim nächsten Hintergrunddurchlauf.
+        Reconciliation runs on every call so a just-added book is prepared
+        immediately instead of only on the next background pass.
         """
         result = await request.app.state.reconciler.reconcile()
         preparer: Preparer = request.app.state.preparer
@@ -247,8 +247,8 @@ def _register(app: FastAPI) -> None:
         }
         if result.error:
             payload["error"] = result.error
-        # Eine unauffindbare Playlist ist ein Konfigurationsfehler, kein leerer
-        # Wunsch — die Uhr darf daraufhin nichts löschen.
+        # An unfindable playlist is a configuration error, not an empty wish —
+        # the watch must not delete anything as a result.
         return JSONResponse(payload, status_code=200 if result.found else 409)
 
     @app.post("/v1/books/{book_id}/prepare", dependencies=guarded)
@@ -273,7 +273,7 @@ def _register(app: FastAPI) -> None:
         manifest = cache.load_manifest(book_id)
         if manifest is None:
             state = request.app.state.preparer.status(book_id)
-            raise HTTPException(409, f"Buch ist nicht bereit (Status: {state.status.value})")
+            raise HTTPException(409, f"Book is not ready (status: {state.status.value})")
         cache.touch(book_id)
 
         config: Config = request.app.state.config
@@ -304,8 +304,8 @@ def _register(app: FastAPI) -> None:
                 f"/v1/books/{book_id}/cover.jpg?w={COVER_WIDTH}&exp={expires}&sig={signature}"
             )
 
-        # Wo der Server weiterhören würde — die Uhr entscheidet beim Sync selbst,
-        # ob ihr eigener Stand jünger ist.
+        # Where the server would resume — the watch decides during sync whether
+        # its own position is more recent.
         try:
             stored = await request.app.state.abs.get_progress(book_id)
         except AbsError:
@@ -328,7 +328,7 @@ def _register(app: FastAPI) -> None:
         except UnsafeBookId as error:
             raise HTTPException(400, str(error)) from None
         if not path.exists():
-            raise HTTPException(404, "Segment nicht vorhanden")
+            raise HTTPException(404, "Segment not found")
         cache.touch(book_id)
         media_type = "audio/mp4" if path.suffix == ".m4a" else "audio/mpeg"
         return FileResponse(path, media_type=media_type)
@@ -341,16 +341,16 @@ def _register(app: FastAPI) -> None:
         sig: str = Query(...),
         w: int = Query(COVER_WIDTH, ge=32, le=1024),
     ):
-        # Ohne Bearer: makeImageRequest kann keine Header setzen. Statt des
-        # langlebigen Tokens im Query-String trägt die URL eine kurzlebige
-        # Signatur, die in keinem Log Schaden anrichtet.
+        # Without a bearer: makeImageRequest cannot set headers. Instead of the
+        # long-lived token in the query string, the URL carries a short-lived
+        # signature that does no harm in any log.
         book_id = _book_id(book_id)
         config: Config = request.app.state.config
         if not auth.verify_cover(book_id, exp, sig, config.tokens):
-            raise HTTPException(403, "Cover-Signatur ungültig oder abgelaufen")
+            raise HTTPException(403, "Cover signature invalid or expired")
         path = request.app.state.cache.cover_path(book_id)
         if not path.exists():
-            raise HTTPException(404, "Kein Cover vorhanden")
+            raise HTTPException(404, "No cover available")
         return FileResponse(path, media_type="image/jpeg")
 
     @app.post("/v1/books/{book_id}/release", dependencies=guarded)
@@ -359,7 +359,7 @@ def _register(app: FastAPI) -> None:
         request.app.state.cache.release(book_id)
         return {"released": book_id}
 
-    # --- Fortschritt ---------------------------------------------------------
+    # --- Progress ---------------------------------------------------------
 
     @app.post("/v1/progress", dependencies=guarded)
     async def push_progress(request: Request, batch: ProgressBatch):
@@ -376,7 +376,7 @@ def _register(app: FastAPI) -> None:
         for book_id, entry in newest.items():
             manifest = cache.load_manifest(book_id)
             if manifest is None:
-                results.append({"id": book_id, "accepted": False, "reason": "nicht vorbereitet"})
+                results.append({"id": book_id, "accepted": False, "reason": "not prepared"})
                 continue
 
             watch_time = progress.book_time(manifest["segments"], entry.segment, entry.offset)
@@ -401,7 +401,7 @@ def _register(app: FastAPI) -> None:
                 except AbsError as error:
                     result.update(accepted=False, reason=str(error))
             else:
-                # Der Server ist weiter — die Uhr soll dorthin springen.
+                # The server is ahead — the watch should jump there.
                 spot = progress.position(manifest["segments"], winning_time)
                 result["resume"] = {"segment": spot.segment, "offset": spot.offset}
             results.append(result)

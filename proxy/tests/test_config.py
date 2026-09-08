@@ -19,7 +19,7 @@ def test_strips_a_trailing_slash_from_the_url():
 def test_reads_a_token_list_for_rotation():
     config = load({**MINIMAL, "ABCONNECT_TOKEN": f"{'a' * 20}, {'b' * 20}"})
     assert config.tokens == ("a" * 20, "b" * 20)
-    assert config.signing_key == "a" * 20  # der erste ist der aktuelle
+    assert config.signing_key == "a" * 20  # the first one is the current one
 
 
 def test_reports_every_problem_at_once():
@@ -35,10 +35,10 @@ def test_reports_every_problem_at_once():
     "env, expected",
     [
         ({"ABS_URL": "abs.example"}, "http://"),
-        ({"ABCONNECT_TOKEN": "kurz"}, "16 Zeichen"),
-        ({"SEGMENT_TARGET_SECONDS": "keine Zahl"}, "keine ganze Zahl"),
-        ({"SEGMENT_TARGET_SECONDS": "10"}, "Minimum"),
-        ({"SEGMENT_MIN_SECONDS": "1200"}, "unplausibel"),
+        ({"ABCONNECT_TOKEN": "short"}, "16 characters"),
+        ({"SEGMENT_TARGET_SECONDS": "not a number"}, "not an integer"),
+        ({"SEGMENT_TARGET_SECONDS": "10"}, "minimum"),
+        ({"SEGMENT_MIN_SECONDS": "1200"}, "implausible"),
     ],
 )
 def test_rejects_implausible_values(env, expected):
@@ -48,6 +48,6 @@ def test_rejects_implausible_values(env, expected):
 
 
 def test_nothing_is_baked_in():
-    """Ohne Umgebung darf kein Default eine Serveradresse oder einen Key liefern."""
+    """Without an environment, no default may supply a server address or a key."""
     with pytest.raises(ConfigError):
         load({})

@@ -1,25 +1,25 @@
 # abconnect-proxy
 
-Companion-Server zwischen Audiobookshelf und der Connect-IQ-App.
+Companion server between Audiobookshelf and the Connect IQ app.
 
-Er lädt eine `.m4b` über die ABS-API, schneidet sie verlustfrei kapitelweise in
-Segmente von 10–20 Minuten und löscht die Quelldatei sofort wieder. Die Uhr
-bekommt nur schlanke JSON-Antworten und fertige Segmente; der ABS-API-Key
-bleibt hier.
+It downloads an `.m4b` via the ABS API, cuts it losslessly into chapter-wise
+segments of 10–20 minutes and deletes the source file again right away. The
+watch only gets lean JSON responses and finished segments; the ABS API key
+stays here.
 
-Warum überhaupt: eine einzelne `.m4b` ist auf der Uhr ein Track über zwölf
-Stunden ohne Kapitelnavigation, und Connect IQ bricht große JSON-Antworten
-ohnehin ab. Details in [../docs/PLAN.md](../docs/PLAN.md).
+Why at all: a single `.m4b` on the watch is one track spanning twelve hours
+with no chapter navigation, and Connect IQ aborts large JSON responses anyway.
+Details in [../docs/PLAN.md](../docs/PLAN.md).
 
-## Entwicklung
+## Development
 
 ```sh
 python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 .venv/bin/python -m pytest
 ```
 
-Die Tests brauchen `ffmpeg` und `ffprobe` im `PATH` — sie erzeugen echte
-m4b-Dateien mit Kapitelmarken, schneiden sie und prüfen das Ergebnis mit
-`ffprobe` nach. Ohne ffmpeg werden diese Tests übersprungen, der Rest läuft.
+The tests need `ffmpeg` and `ffprobe` on the `PATH` — they create real m4b
+files with chapter markers, cut them and verify the result with `ffprobe`.
+Without ffmpeg these tests are skipped, the rest runs.
 
-Betrieb und Konfiguration: [../deploy/README.md](../deploy/README.md).
+Operation and configuration: [../deploy/README.md](../deploy/README.md).

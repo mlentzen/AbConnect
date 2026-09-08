@@ -1,8 +1,8 @@
-"""ABS-JSON -> eigene Modelle.
+"""ABS JSON -> our own models.
 
-Bewusst nachsichtig: Audiobookshelf hat die Feldnamen zwischen Versionen
-verschoben, und ein fehlendes Nebenfeld darf kein Buch unsichtbar machen. Was
-wirklich fehlt (Dateien, Dauer), meldet sich als ItemUnusable mit Klartext.
+Deliberately lenient: Audiobookshelf has moved field names between versions,
+and a missing secondary field must not make a book invisible. What is really
+missing (files, duration) surfaces as ItemUnusable with plain text.
 """
 
 from __future__ import annotations
@@ -51,9 +51,9 @@ def _author(metadata: dict) -> str:
 
 
 def parse_item(payload: dict) -> ParsedItem:
-    """Erwartet die Antwort von GET /api/items/{id} (nicht minified)."""
+    """Expects the response of GET /api/items/{id} (not minified)."""
     if not isinstance(payload, dict) or not payload.get("id"):
-        raise ItemUnusable("Antwort enthält kein Item")
+        raise ItemUnusable("Response contains no item")
 
     media = payload.get("media") or {}
     metadata = _metadata(media)
@@ -61,7 +61,7 @@ def parse_item(payload: dict) -> ParsedItem:
 
     audio_files = media.get("audioFiles") or []
     if not audio_files:
-        raise ItemUnusable(f"'{title}' hat keine Audiodateien (nur eBook?)")
+        raise ItemUnusable(f"'{title}' has no audio files (eBook only?)")
 
     files: list[SourceFile] = []
     for entry in sorted(audio_files, key=lambda f: _number(f.get("index"), 0)):
@@ -75,7 +75,7 @@ def parse_item(payload: dict) -> ParsedItem:
             raise ItemUnusable(f"'{title}': {error}") from None
         duration = _number(entry.get("duration"))
         if duration <= 0:
-            raise ItemUnusable(f"'{title}': Datei {file_metadata.get('filename', '?')} ohne Dauer")
+            raise ItemUnusable(f"'{title}': file {file_metadata.get('filename', '?')} without duration")
         files.append(
             SourceFile(
                 ino=str(entry.get("ino") or ""),
@@ -87,9 +87,9 @@ def parse_item(payload: dict) -> ParsedItem:
         )
 
     if not files:
-        raise ItemUnusable(f"'{title}': alle Audiodateien sind als ungültig markiert")
+        raise ItemUnusable(f"'{title}': all audio files are marked as invalid")
     if any(not f.ino for f in files):
-        raise ItemUnusable(f"'{title}': Audiodatei ohne ino, Download nicht adressierbar")
+        raise ItemUnusable(f"'{title}': audio file without ino, download not addressable")
 
     chapters = []
     for entry in media.get("chapters") or []:
@@ -97,7 +97,7 @@ def parse_item(payload: dict) -> ParsedItem:
             Chapter(
                 start=_number(entry.get("start")),
                 end=_number(entry.get("end")),
-                title=str(entry.get("title") or f"Kapitel {len(chapters) + 1}"),
+                title=str(entry.get("title") or f"Chapter {len(chapters) + 1}"),
             )
         )
 
@@ -115,7 +115,7 @@ def parse_item(payload: dict) -> ParsedItem:
 
 
 def parse_listing(payload: dict) -> tuple[list[dict], int]:
-    """GET /api/libraries/{id}/items -> schmale Einträge plus Gesamtzahl."""
+    """GET /api/libraries/{id}/items -> slim entries plus total count."""
     results = payload.get("results") if isinstance(payload, dict) else None
     if results is None:
         results = payload if isinstance(payload, list) else []
@@ -152,13 +152,13 @@ class Playlist:
     id: str
     name: str
     book_ids: list[str] = field(default_factory=list)
-    #! Titel und Autor gleich mitnehmen: die eingebetteten libraryItem-Objekte
-    #! sparen der Uhr einen zweiten Aufruf pro Buch.
+    #! Take title and author along right away: the embedded libraryItem objects
+    #! save the watch a second call per book.
     books: list[dict] = field(default_factory=list)
 
 
 def parse_playlists(payload) -> list[Playlist]:
-    """GET /api/playlists -> Playlists mit ihren Buch-IDs."""
+    """GET /api/playlists -> playlists with their book IDs."""
     entries = payload.get("playlists") if isinstance(payload, dict) else payload
     result: list[Playlist] = []
     for entry in entries or []:
@@ -168,8 +168,8 @@ def parse_playlists(payload) -> list[Playlist]:
         for item in entry.get("items") or []:
             if not isinstance(item, dict):
                 continue
-            # Podcast-Folgen tragen eine episodeId; die kann die Uhr nicht
-            # adressieren, weil ein Segment immer zu einem Item gehört.
+            # Podcast episodes carry an episodeId; the watch cannot address
+            # those because a segment always belongs to an item.
             if item.get("episodeId"):
                 continue
             book_id = item.get("libraryItemId")
@@ -192,7 +192,7 @@ def parse_playlists(payload) -> list[Playlist]:
 
 
 def find_playlist(playlists: list[Playlist], name: str) -> Playlist | None:
-    """Auflösung über den Namen — ABS kennt keine Suche danach."""
+    """Resolution by name — ABS has no search for it."""
     wanted = name.casefold().strip()
     for playlist in playlists:
         if playlist.name.casefold().strip() == wanted:

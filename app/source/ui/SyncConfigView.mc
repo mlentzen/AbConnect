@@ -3,11 +3,11 @@ import Toybox.Graphics;
 import Toybox.Lang;
 import Toybox.WatchUi;
 
-//! Zeigt, was laut Playlist auf die Uhr gehört und wie weit es ist.
+//! Shows what belongs on the watch according to the playlist and how far along it is.
 //!
-//! Ausgewählt wird nicht mehr hier, sondern in Audiobookshelf: die Playlist ist
-//! die Sollvorgabe. Diese Ansicht beantwortet nur die Frage, warum ein Buch
-//! noch nicht auf der Uhr ist.
+//! Selection no longer happens here but in Audiobookshelf: the playlist is the
+//! target. This view only answers the question of why a book is not on the
+//! watch yet.
 class SyncConfigView extends WatchUi.View {
 
     private var _client as ProxyClient;
@@ -28,7 +28,7 @@ class SyncConfigView extends WatchUi.View {
             showMessage(Rez.Strings.notConfigured);
             return;
         }
-        Log.line("Konfig: hole Playlist");
+        Log.line("Config: fetching playlist");
         _client.playlist(method(:onPlaylist));
     }
 
@@ -45,7 +45,7 @@ class SyncConfigView extends WatchUi.View {
     }
 
     function onPlaylist(code as Number, data as Dictionary or String or Null) as Void {
-        Log.code("Konfig: playlist", code);
+        Log.code("Config: playlist", code);
         if (code == 409) {
             showMessage(Rez.Strings.syncNoPlaylist);
             return;
@@ -85,7 +85,7 @@ class SyncConfigView extends WatchUi.View {
         WatchUi.pushView(menu, new SyncConfigDelegate(), WatchUi.SLIDE_IMMEDIATE);
     }
 
-    //! Zustand im Klartext — der Nutzer soll nicht raten, warum ein Buch fehlt.
+    //! State in plain text — the user should not have to guess why a book is missing.
     private function statusLine(book as Dictionary) as String {
         var status = book["status"];
         if (!(status instanceof String)) {
@@ -128,7 +128,7 @@ class SyncConfigView extends WatchUi.View {
     }
 }
 
-//! Die Liste ist reine Anzeige — es gibt nichts auszuwählen.
+//! The list is display only — there is nothing to select.
 class SyncConfigDelegate extends WatchUi.Menu2InputDelegate {
 
     function initialize() {
@@ -136,11 +136,11 @@ class SyncConfigDelegate extends WatchUi.Menu2InputDelegate {
     }
 
     function onSelect(item as WatchUi.MenuItem) as Void {
-        // Die Liste ist reine Anzeige: ausgewählt wird in der Playlist.
+        // The list is display only: selection happens in the playlist.
     }
 
     function onBack() as Void {
-        Log.code("Konfig: zurück, Playlist-Stand", Store.desired().size());
+        Log.code("Config: back, playlist state", Store.desired().size());
         WatchUi.popView(WatchUi.SLIDE_IMMEDIATE);
     }
 }

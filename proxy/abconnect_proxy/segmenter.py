@@ -1,14 +1,14 @@
-"""Kapitel -> Segmentplan.
+"""Chapters -> segment plan.
 
-Reine Rechnung ohne IO, damit sie gegen echte Kapitellisten schnell testbar
-bleibt. Vier Schritte, in dieser Reihenfolge:
+Pure computation without IO so it stays quick to test against real chapter
+lists. Four steps, in this order:
 
-1. Kapitel validieren, sonst 15-Minuten-Raster als Fallback
-2. an Dateigrenzen schneiden — ein Segment liegt nie in zwei Quelldateien
-3. zu kurze Segmente verschmelzen
-4. zu lange Segmente teilen
+1. validate chapters, otherwise a 15-minute grid as fallback
+2. cut at file boundaries — a segment never spans two source files
+3. merge segments that are too short
+4. split segments that are too long
 
-Danach die Titel durchnummerieren, wo ein Kapitel mehrere Segmente ergab.
+Afterwards, number the titles where one chapter produced several segments.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ MIN_COVERAGE = 0.9
 
 @dataclass
 class _Piece:
-    """Zwischenstand: ein Stück einer konkreten Quelldatei."""
+    """Intermediate state: a piece of a specific source file."""
 
     file_index: int
     source_start: float
@@ -39,32 +39,32 @@ class _Piece:
 
 
 def validate_chapters(chapters: list[Chapter], total_duration: float) -> str:
-    """Leerer String heißt brauchbar, sonst der Grund für den Fallback."""
+    """An empty string means usable, otherwise the reason for the fallback."""
     if not chapters:
-        return "keine Kapitelmarken vorhanden"
+        return "no chapter markers present"
 
     ordered = sorted(chapters, key=lambda c: c.start)
     if ordered != list(chapters):
-        return "Kapitel sind nicht chronologisch sortiert"
+        return "chapters are not sorted chronologically"
 
     for chapter in ordered:
         if chapter.duration <= 0:
-            return f"Kapitel '{chapter.title}' hat keine Dauer"
+            return f"chapter '{chapter.title}' has no duration"
     for previous, current in zip(ordered, ordered[1:]):
         if current.start < previous.end - TOLERANCE:
-            return f"Kapitel überlappen bei '{current.title}'"
+            return f"chapters overlap at '{current.title}'"
 
     if ordered[0].start < -TOLERANCE:
-        return "erstes Kapitel beginnt vor dem Buchanfang"
+        return "first chapter begins before the start of the book"
     if ordered[-1].end > total_duration + TOLERANCE:
-        return "Kapitel reichen über die Buchdauer hinaus"
+        return "chapters extend beyond the book duration"
 
     if len(ordered) == 1:
-        return "nur ein Kapitel über das gesamte Buch"
+        return "only one chapter across the whole book"
 
     covered = sum(c.duration for c in ordered)
     if total_duration > 0 and covered / total_duration < MIN_COVERAGE:
-        return f"Kapitel decken nur {covered / total_duration:.0%} des Buchs ab"
+        return f"chapters cover only {covered / total_duration:.0%} of the book"
 
     return ""
 
@@ -73,18 +73,18 @@ def _grid(total_duration: float, target: int) -> list[Chapter]:
     count = max(1, math.ceil(total_duration / target))
     length = total_duration / count
     return [
-        Chapter(start=i * length, end=min((i + 1) * length, total_duration), title=f"Abschnitt {i + 1}")
+        Chapter(start=i * length, end=min((i + 1) * length, total_duration), title=f"Section {i + 1}")
         for i in range(count)
     ]
 
 
 def _snap(chapters: list[Chapter], total_duration: float) -> list[Chapter]:
-    """Randlücken schließen, damit kein Ton zwischen den Segmenten verloren geht."""
+    """Close edge gaps so no audio is lost between the segments."""
     snapped = list(chapters)
     first, last = snapped[0], snapped[-1]
     snapped[0] = Chapter(0.0, first.end, first.title)
     snapped[-1] = Chapter(snapped[-1].start, total_duration, last.title)
-    # Lücken zwischen Kapiteln dem jeweils vorherigen zuschlagen.
+    # Add gaps between chapters to the preceding one.
     for i in range(len(snapped) - 1):
         if snapped[i + 1].start > snapped[i].end + TOLERANCE:
             snapped[i] = Chapter(snapped[i].start, snapped[i + 1].start, snapped[i].title)
@@ -119,7 +119,7 @@ def _split_at_file_boundaries(chapters: list[Chapter], files: list[SourceFile]) 
 
 
 def _merge_short(pieces: list[_Piece], minimum: int) -> list[_Piece]:
-    """Zu kurze Stücke an den Nachbarn hängen — nur innerhalb derselben Datei."""
+    """Attach pieces that are too short to their neighbor — only within the same file."""
     merged: list[_Piece] = []
     for piece in pieces:
         if (
@@ -127,14 +127,14 @@ def _merge_short(pieces: list[_Piece], minimum: int) -> list[_Piece]:
             and merged[-1].duration < minimum
             and merged[-1].file_index == piece.file_index
         ):
-            # Der Vorgänger ist zu kurz: er schluckt das aktuelle Stück und behält
-            # seinen Titel — so heißt das Segment nach dem ersten Kapitel darin.
+            # The predecessor is too short: it swallows the current piece and
+            # keeps its title — so the segment is named after the first chapter in it.
             merged[-1].source_end = piece.source_end
             continue
         merged.append(piece)
 
-    # Ein zu kurzes letztes Stück einer Datei kann nicht nach vorn wachsen und
-    # wird deshalb rückwärts angehängt.
+    # A last piece of a file that is too short cannot grow forwards and is
+    # therefore appended backwards.
     result: list[_Piece] = []
     for piece in merged:
         if (
@@ -173,7 +173,7 @@ def _split_long(pieces: list[_Piece], maximum: int, target: int) -> list[_Piece]
 
 
 def _number_titles(pieces: list[_Piece]) -> None:
-    """'Kapitel 3' wird zu 'Kapitel 3 (1/3)', wo ein Kapitel mehrere Segmente ergab."""
+    """'Chapter 3' becomes 'Chapter 3 (1/3)' where one chapter produced several segments."""
     counts: dict[int, int] = {}
     for piece in pieces:
         counts[piece.chapter_index] = counts.get(piece.chapter_index, 0) + 1
@@ -195,7 +195,7 @@ def plan_segments(
     max_seconds: int,
 ) -> SegmentPlan:
     if not files:
-        raise ValueError("Item ohne Audiodateien")
+        raise ValueError("Item without audio files")
 
     total_duration = sum(f.duration for f in files)
     reason = validate_chapters(chapters, total_duration)
@@ -232,7 +232,7 @@ def plan_segments(
 
 
 def locate(segments: list[Segment], book_time: float) -> tuple[int, float]:
-    """Absolute Buchzeit -> (Segmentindex, Offset). Für den Rückweg von ABS."""
+    """Absolute book time -> (segment index, offset). For the way back from ABS."""
     if not segments:
         return 0, 0.0
     chosen = segments[0]

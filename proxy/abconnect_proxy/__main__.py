@@ -1,4 +1,4 @@
-"""Einstiegspunkt. Bricht laut ab, wenn die Umgebung unvollständig ist."""
+"""Entry point. Aborts loudly when the environment is incomplete."""
 
 from __future__ import annotations
 

@@ -1,7 +1,7 @@
-"""Zugangskontrolle für die Strecke Uhr -> Proxy.
+"""Access control for the watch -> proxy path.
 
-Der Token ist ein geteiltes Geheimnis, keine Identität: er hält Fremde von der
-/v1-Oberfläche fern und hält den ABS-API-Key serverseitig. Mehr soll er nicht.
+The token is a shared secret, not an identity: it keeps strangers away from the
+/v1 surface and keeps the ABS API key server-side. Nothing more is intended.
 """
 
 from __future__ import annotations
@@ -15,10 +15,10 @@ from dataclasses import dataclass, field
 
 
 def verify_token(presented: str, tokens: tuple[str, ...]) -> bool:
-    """Konstantzeitiger Vergleich gegen alle gültigen Token.
+    """Constant-time comparison against every valid token.
 
-    Ohne Short-Circuit: es werden immer alle Token geprüft, damit die Laufzeit
-    nicht verrät, welcher der Kandidaten getroffen wurde.
+    No short-circuit: all tokens are always checked so the runtime does not
+    reveal which of the candidates matched.
     """
     hit = False
     for token in tokens:
@@ -35,11 +35,11 @@ def token_from_header(header: str | None) -> str | None:
     return value.strip()
 
 
-# --- Vorsignierte Cover-URLs -------------------------------------------------
+# --- Pre-signed cover URLs -------------------------------------------------
 #
-# Communications.makeImageRequest kennt kein :headers, das Cover kann den
-# Bearer-Header also nicht mitschicken. Der Token als Query-Parameter würde in
-# jedem Reverse-Proxy-Log landen, deshalb eine kurzlebige Signatur.
+# Communications.makeImageRequest has no :headers, so the cover cannot send the
+# bearer header. The token as a query parameter would end up in every
+# reverse-proxy log, hence a short-lived signature.
 
 
 def sign_cover(book_id: str, expires_at: int, key: str) -> str:
@@ -62,7 +62,7 @@ def verify_cover(book_id: str, expires_at: int, signature: str, keys: tuple[str,
 
 @dataclass
 class FailureTracker:
-    """Bremst Rateversuche aus, ohne einen legitimen Client auszusperren."""
+    """Throttles guessing attempts without locking out a legitimate client."""
 
     threshold: int = 5
     lockout_seconds: float = 60.0
@@ -70,7 +70,7 @@ class FailureTracker:
     _locked_until: dict[str, float] = field(default_factory=dict)
 
     def locked(self, client: str, now: float | None = None) -> float:
-        """Verbleibende Sperrzeit in Sekunden, 0 wenn offen."""
+        """Remaining lockout time in seconds, 0 when open."""
         now = time.time() if now is None else now
         until = self._locked_until.get(client, 0.0)
         return max(0.0, until - now)

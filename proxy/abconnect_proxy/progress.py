@@ -1,8 +1,8 @@
-"""Umrechnung zwischen Uhr- und ABS-Koordinaten.
+"""Conversion between watch and ABS coordinates.
 
-Die Uhr kennt nur (Segmentindex, Offset). Absolute Buchzeiten entstehen erst
-hier — so bleibt die Gerätelogik klein und die Segmentierung serverseitig
-änderbar, ohne gespeicherte Positionen zu entwerten.
+The watch only knows (segment index, offset). Absolute book times are formed
+only here — this keeps the device logic small and lets the segmentation change
+server-side without invalidating stored positions.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ class Position:
 
 
 def book_time(segments: list[dict], segment_index: int, offset: float) -> float:
-    """(Segment, Offset) -> absolute Buchzeit."""
+    """(segment, offset) -> absolute book time."""
     for entry in segments:
         if entry["index"] == segment_index:
             capped = max(0.0, min(offset, float(entry["duration"])))
@@ -28,7 +28,7 @@ def book_time(segments: list[dict], segment_index: int, offset: float) -> float:
 
 
 def position(segments: list[dict], time_in_book: float) -> Position:
-    """Absolute Buchzeit -> (Segment, Offset)."""
+    """Absolute book time -> (segment, offset)."""
     if not segments:
         return Position(0, 0.0)
     chosen = segments[0]
@@ -42,7 +42,7 @@ def position(segments: list[dict], time_in_book: float) -> Position:
 
 
 def server_timestamp(progress: dict | None) -> float:
-    """ABS meldet lastUpdate in Millisekunden — hier in Sekunden."""
+    """ABS reports lastUpdate in milliseconds — here in seconds."""
     if not progress:
         return 0.0
     raw = progress.get("lastUpdate") or progress.get("updatedAt") or 0
@@ -60,10 +60,10 @@ def reconcile(
     server_time: float,
     server_ts: float,
 ) -> tuple[str, float]:
-    """Jüngerer Zeitstempel gewinnt.
+    """The more recent timestamp wins.
 
-    Gleichstand geht an die Uhr: sie hat gerade gehört, der Server hält nur
-    einen bereits übertragenen Stand.
+    A tie goes to the watch: it was just listening, the server only holds an
+    already-transmitted position.
     """
     if server_ts > watch_ts:
         return "server", server_time

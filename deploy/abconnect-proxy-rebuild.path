@@ -1,17 +1,17 @@
-# Kein Quadlet, sondern eine gewöhnliche User-Unit: nach ~/.config/systemd/user/.
+# Not a quadlet but a plain user unit: goes into ~/.config/systemd/user/.
 #
-# Beobachtet die Branch-Spitze, nicht die Quelldateien: ein Rebuild läuft nach
-# Commit, `git pull` oder Checkout an — nicht mitten im Tippen. Branch und Pfad
-# trägt deploy/install.sh beim Installieren ein; nach einem Merge nach main ist
-# hier eine Zeile zu ändern (oder install.sh erneut auszuführen).
+# Watches the branch tip, not the source files: a rebuild runs after a commit,
+# `git pull` or checkout — not mid-typing. Branch and path are filled in by
+# deploy/install.sh during installation; after a merge to main one line here
+# needs changing (or run install.sh again).
 #
-# Vorsicht: `git gc` bzw. `git pack-refs` kann die Ref-Datei entfernen. systemd
-# beobachtet dann das nächsthöhere vorhandene Verzeichnis und löst wieder aus,
-# sobald die Datei neu entsteht — ein Commit direkt nach dem Packen kann aber
-# durchrutschen. Dann hilft `systemctl --user start abconnect-proxy-rebuild`.
+# Caution: `git gc` or `git pack-refs` can remove the ref file. systemd then
+# watches the next existing directory up and triggers again as soon as the file
+# reappears — but a commit right after packing can slip through. Then
+# `systemctl --user start abconnect-proxy-rebuild` helps.
 
 [Unit]
-Description=AbConnect-Branch auf neue Commits beobachten
+Description=Watch the AbConnect branch for new commits
 
 [Path]
 PathChanged=%h/git/AbConnect/.git/refs/heads/claude/audiobookshelf-connectiq-garmin-uh247o

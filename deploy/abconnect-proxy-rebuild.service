@@ -1,14 +1,14 @@
-# Kein Quadlet, sondern eine gewöhnliche User-Unit: nach ~/.config/systemd/user/.
+# Not a quadlet but a plain user unit: goes into ~/.config/systemd/user/.
 #
-# Beide Units in einem Aufruf: systemd fasst das zu einer Transaktion zusammen
-# und ordnet sie über das After= des Containers, es wird also genau einmal
-# gebaut und danach neu gestartet. Den Build-Dienst ausdrücklich zu nennen ist
-# Absicht — ob ein Neustart des Containers ihn von allein mitzieht, hängt daran,
-# ob Quadlet ihn mit RemainAfterExit erzeugt, und das ist ein Implementierungs-
-# detail der jeweiligen Podman-Version.
+# Both units in one call: systemd groups this into a single transaction and
+# orders it via the container's After=, so it is built exactly once and then
+# restarted. Naming the build service explicitly is intentional — whether a
+# restart of the container pulls it in on its own depends on whether Quadlet
+# creates it with RemainAfterExit, and that is an implementation detail of the
+# respective Podman version.
 
 [Unit]
-Description=AbConnect-Proxy neu bauen und neu starten
+Description=Rebuild and restart the AbConnect proxy
 
 [Service]
 Type=oneshot

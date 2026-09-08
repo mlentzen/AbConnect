@@ -5,12 +5,12 @@ import Toybox.Lang;
 import Toybox.Media;
 import Toybox.WatchUi;
 
-//! Audio Content Provider für Audiobookshelf.
+//! Audio content provider for Audiobookshelf.
 //!
-//! Das System startet die App in vier getrennten Modi — Sync-Konfiguration,
-//! Sync, Playback-Konfiguration und Playback. Jeder Modus ist ein eigener
-//! App-Start ohne gemeinsamen Laufzeitzustand; alles, was einen Modus
-//! überdauern muss, liegt im Object Store.
+//! The system starts the app in four separate modes — sync configuration,
+//! sync, playback configuration and playback. Each mode is its own app start
+//! without shared runtime state; anything that has to outlive a mode lives in
+//! the Object Store.
 class AbConnectApp extends Application.AudioContentProviderApp {
 
     function initialize() {
@@ -18,27 +18,27 @@ class AbConnectApp extends Application.AudioContentProviderApp {
         Store.checkSchema();
     }
 
-    //! Modus 1: Nutzer wählt aus, was auf die Uhr soll.
+    //! Mode 1: the user selects what should go onto the watch.
     function getSyncConfigurationView() as [WatchUi.Views] or [WatchUi.Views, WatchUi.InputDelegates] {
-        Log.line("Modus: Sync-Konfiguration");
+        Log.line("Mode: sync configuration");
         return [new SyncConfigView()];
     }
 
-    //! Modus 2: das System hat WLAN aktiviert und lässt uns laden.
+    //! Mode 2: the system has enabled Wi-Fi and lets us download.
     function getSyncDelegate() as Communications.SyncDelegate? {
-        Log.line("Modus: Sync");
+        Log.line("Mode: sync");
         return new AbSyncDelegate();
     }
 
-    //! Modus 3: Nutzer wählt aus, was abgespielt wird.
+    //! Mode 3: the user selects what is played.
     function getPlaybackConfigurationView() as [WatchUi.Views] or [WatchUi.Views, WatchUi.InputDelegates] {
-        Log.line("Modus: Playback-Konfiguration");
+        Log.line("Mode: playback configuration");
         return [new PlaybackConfigView()];
     }
 
-    //! Modus 4: der System-Player fragt uns nach den Tracks.
+    //! Mode 4: the system player asks us for the tracks.
     function getContentDelegate(args as Application.PersistableType) as Media.ContentDelegate {
-        Log.line("Modus: Playback");
+        Log.line("Mode: playback");
         return new AbContentDelegate();
     }
 

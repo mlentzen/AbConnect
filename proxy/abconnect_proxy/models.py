@@ -1,4 +1,4 @@
-"""Datenmodelle, die zwischen ABS, Segmentierung und Uhr geteilt werden."""
+"""Data models shared between ABS, segmentation and the watch."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from enum import Enum
 
 
 class Encoding(str, Enum):
-    """Entspricht den Media.ENCODING_*-Konstanten der Uhr."""
+    """Matches the watch's Media.ENCODING_* constants."""
 
     M4A = "m4a"
     MP3 = "mp3"
@@ -17,9 +17,9 @@ class Encoding(str, Enum):
         return f".{self.value}"
 
 
-# ABS meldet Codecs, die Uhr kennt Container. Alles, was hier nicht auftaucht,
-# kann das Gerät nicht abspielen und führt zu einem klaren Fehler statt zu einer
-# Datei, die der Player stumm verweigert.
+# ABS reports codecs, the watch knows containers. Anything not listed here
+# cannot be played by the device and leads to a clear error instead of a file
+# the player silently refuses.
 CODEC_TO_ENCODING = {
     "aac": Encoding.M4A,
     "mp4a": Encoding.M4A,
@@ -32,7 +32,7 @@ CODEC_TO_ENCODING = {
 class UnsupportedCodec(Exception):
     def __init__(self, codec: str) -> None:
         self.codec = codec
-        super().__init__(f"Codec '{codec}' wird von Connect IQ nicht unterstützt")
+        super().__init__(f"Codec '{codec}' is not supported by Connect IQ")
 
 
 def encoding_for(codec: str) -> Encoding:
@@ -44,7 +44,7 @@ def encoding_for(codec: str) -> Encoding:
 
 @dataclass(frozen=True)
 class SourceFile:
-    """Eine Audiodatei eines ABS-Items."""
+    """An audio file of an ABS item."""
 
     ino: str
     filename: str
@@ -59,7 +59,7 @@ class SourceFile:
 
 @dataclass(frozen=True)
 class Chapter:
-    """Kapitelmarke in absoluter Buchzeit."""
+    """Chapter marker in absolute book time."""
 
     start: float
     end: float
@@ -72,11 +72,11 @@ class Chapter:
 
 @dataclass(frozen=True)
 class Segment:
-    """Ein Track auf der Uhr.
+    """A track on the watch.
 
-    Zwei Koordinatensysteme: `source_*` sagt ffmpeg, was zu schneiden ist,
-    `book_start` erlaubt später die Rückrechnung eines Abspielpunkts auf die
-    absolute Buchzeit für ABS.
+    Two coordinate systems: `source_*` tells ffmpeg what to cut,
+    `book_start` allows a playback point to be converted back to absolute
+    book time for ABS later.
     """
 
     index: int
@@ -100,7 +100,7 @@ class Segment:
 class SegmentPlan:
     segments: list[Segment]
     chapter_source: str  # "chapters" | "grid"
-    reason: str = ""  # warum der Fallback griff
+    reason: str = ""  # why the fallback kicked in
     total_duration: float = 0.0
 
     @property
@@ -110,7 +110,7 @@ class SegmentPlan:
 
 @dataclass
 class BookSummary:
-    """Was die Uhr über ein Buch sehen muss — bewusst schmal."""
+    """What the watch needs to see about a book — deliberately minimal."""
 
     id: str
     title: str

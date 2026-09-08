@@ -38,7 +38,7 @@ class TestServerTimestamp:
     def test_accepts_seconds(self):
         assert server_timestamp({"lastUpdate": 1_700_000_000}) == 1_700_000_000.0
 
-    @pytest.mark.parametrize("payload", [None, {}, {"lastUpdate": "kaputt"}])
+    @pytest.mark.parametrize("payload", [None, {}, {"lastUpdate": "not a number"}])
     def test_missing_or_broken_means_zero(self, payload):
         assert server_timestamp(payload) == 0.0
 

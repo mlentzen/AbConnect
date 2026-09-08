@@ -1,7 +1,7 @@
 [project]
 name = "abconnect-proxy"
 version = "0.1.0"
-description = "Audiobookshelf-Companion für die Connect-IQ-App AbConnect"
+description = "Audiobookshelf companion for the Connect IQ app AbConnect"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",

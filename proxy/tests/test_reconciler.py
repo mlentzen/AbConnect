@@ -101,13 +101,13 @@ class TestAdding:
 
         await reconciler.reconcile()
 
-        # Ohne erneutes Anpinnen wuerde die Notbremse ein Buch verdraengen,
-        # das laut Playlist auf die Uhr gehoert.
+        # Without pinning again, the emergency brake would evict a book that
+        # belongs on the watch according to the playlist.
         assert cache.pinned("li_a")
 
     async def test_leaves_an_errored_book_alone(self, tmp_path):
         reconciler, _, _, preparer = make(
-            tmp_path, playlist_of("li_a"), states={"li_a": BookState(status=Status.ERROR, error="kaputt")}
+            tmp_path, playlist_of("li_a"), states={"li_a": BookState(status=Status.ERROR, error="broken")}
         )
 
         await reconciler.reconcile()
@@ -125,7 +125,7 @@ class TestRemoving:
 
         assert result.released == ["li_old"]
         assert not cache.pinned("li_old")
-        assert cache.is_ready("li_old")  # bleibt bis zum TTL liegen
+        assert cache.is_ready("li_old")  # stays around until the TTL
 
     async def test_an_already_released_book_is_not_released_again(self, tmp_path):
         reconciler, cache, _, _ = make(tmp_path, playlist_of())
@@ -144,26 +144,26 @@ class TestFailureIsNotEmptiness:
         result = await reconciler.reconcile()
 
         assert not result.found
-        assert "existiert" in result.error
+        assert "does not exist" in result.error
         assert result.released == []
         assert cache.pinned("li_a")
 
     async def test_an_unreachable_server_never_releases_anything(self, tmp_path):
-        reconciler, cache, _, _ = make(tmp_path, AbsError("Verbindung weg"))
+        reconciler, cache, _, _ = make(tmp_path, AbsError("connection lost"))
         cached(cache, "li_a")
 
         result = await reconciler.reconcile()
 
         assert result.released == []
         assert cache.pinned("li_a")
-        assert "Verbindung" in result.error
+        assert "connection lost" in result.error
 
     async def test_an_outage_keeps_reporting_the_last_known_playlist(self, tmp_path):
         reconciler, cache, abs_client, _ = make(tmp_path, playlist_of("li_a"))
         await reconciler.reconcile()
 
-        abs_client.playlist_value = AbsError("Verbindung weg")
+        abs_client.playlist_value = AbsError("connection lost")
         result = await reconciler.reconcile()
 
-        assert result.found  # der letzte bekannte Stand, nicht "leer"
+        assert result.found  # the last known state, not "empty"
         assert [b["id"] for b in result.books] == ["li_a"]

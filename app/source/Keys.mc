@@ -1,43 +1,43 @@
 import Toybox.Lang;
 
-//! Schlüssel und Schema des Object Store.
+//! Keys and schema of the Object Store.
 //!
-//! Connect IQ begrenzt jeden gespeicherten Wert auf 8 KB. Deshalb liegt pro
-//! Buch ein eigener Schlüssel im Store statt einer globalen Struktur, und die
-//! Werte sind flache Strings statt verschachtelter Maps.
+//! Connect IQ limits every stored value to 8 KB. That is why each book has its
+//! own key in the store instead of one global structure, and the values are
+//! flat strings instead of nested maps.
 module Keys {
-    //! Array der Buch-IDs aus der zuletzt gelesenen Playlist.
+    //! Array of the book IDs from the most recently read playlist.
     //!
-    //! Die Playlist auf dem Server ist die Sollvorgabe; dies ist nur ihr
-    //! letzter bekannter Stand, damit die Uhr auch ohne Verbindung weiß,
-    //! was auf ihr liegen soll.
+    //! The playlist on the server is the target; this is only its last known
+    //! state, so the watch knows what should be on it even without a
+    //! connection.
     const DESIRED = "DES";
-    //! Zeitpunkt der letzten erfolgreichen Playlist-Abfrage.
+    //! Time of the last successful playlist query.
     const LAST_CHECK = "CHK";
-    //! Flache Map bookId -> "segIdx|sekunden|zeitstempel".
+    //! Flat map bookId -> "segIdx|seconds|timestamp".
     const PROGRESS = "PRG";
-    //! Schemaversion; ändert sie sich, wird der Store verworfen.
+    //! Schema version; if it changes, the store is discarded.
     const SCHEMA = "VER";
-    //! Buch, das der Player gerade abspielt.
+    //! Book the player is currently playing.
     const CURRENT = "CUR";
-    //! Bücher, von denen Segmente auf der Uhr liegen.
+    //! Books that have segments on the watch.
     //!
-    //! Application.Storage kann seine Schlüssel nicht aufzählen. Ohne diese
-    //! Liste wäre ein abgewähltes Buch nicht mehr auffindbar und seine
-    //! Segmente blieben für immer im Media-Cache liegen.
+    //! Application.Storage cannot enumerate its keys. Without this list a
+    //! deselected book would no longer be findable and its segments would stay
+    //! in the media cache forever.
     const KNOWN = "KNW";
 
-    //! Präfix: Map refId -> "segIdx|dauer" für ein Buch.
+    //! Prefix: map refId -> "segIdx|duration" for a book.
     const LOCAL_PREFIX = "L_";
-    //! Präfix: "titel|autor|segmentanzahl" für ein Buch.
+    //! Prefix: "title|author|segmentCount" for a book.
     const BOOK_PREFIX = "B_";
 
-    //! Beim Erhöhen wird der Store beim nächsten Start geleert.
-    //! 2: Auswahl einzelner Bücher durch die Playlist ersetzt.
+    //! When incremented, the store is cleared on the next start.
+    //! 2: selection of individual books replaced by the playlist.
     const SCHEMA_VERSION = 2;
 
-    //! Spätestens so oft wird die Playlist neu gelesen, auch wenn lokal alles
-    //! stimmt — sonst bliebe ein neu hinzugefügtes Buch unbemerkt.
+    //! The playlist is re-read at least this often, even when everything is
+    //! fine locally — otherwise a newly added book would go unnoticed.
     const PLAYLIST_MAX_AGE_SECONDS = 21600;
 
     function local(bookId as String) as String {
@@ -49,7 +49,7 @@ module Keys {
     }
 }
 
-//! Namen der App-Einstellungen aus resources/settings/properties.xml.
+//! Names of the app settings from resources/settings/properties.xml.
 module Settings {
     const PROXY_URL = "proxyUrl";
     const PROXY_TOKEN = "proxyToken";

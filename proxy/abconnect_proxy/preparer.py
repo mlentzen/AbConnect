@@ -1,11 +1,11 @@
-"""Prepare-Job: aus einer ABS-Datei werden Segmente für die Uhr.
+"""Prepare job: an ABS file is turned into segments for the watch.
 
-Der Proxy hat keinen Zugriff auf das ABS-Medienverzeichnis, muss also erst
-herunterladen. Deshalb wird pro Buch einmal vorbereitet und nicht pro Segment
-geschnitten — sonst löste jedes Segment einen Vollabzug aus.
+The proxy has no access to the ABS media directory, so it must download first.
+That is why preparation happens once per book instead of cutting per segment —
+otherwise every segment would trigger a full download.
 
-Die Quelldatei verschwindet unmittelbar nach ihrem Schnitt, auch im Fehlerfall.
-Der Spitzenbedarf bleibt damit eine Quelldatei plus deren Segmente.
+The source file disappears immediately after it is cut, even on error. Peak
+usage therefore stays at one source file plus its segments.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from .segmenter import plan_segments
 
 log = logging.getLogger(__name__)
 
-# Der Download dominiert die Laufzeit; Stream-Copy und Cover fallen kaum ins Gewicht.
+# The download dominates the runtime; stream copy and cover barely matter.
 WEIGHT_DOWNLOAD = 0.65
 WEIGHT_CUT = 0.30
 WEIGHT_COVER = 0.05
@@ -55,10 +55,10 @@ class Preparer:
 
     _states: dict[str, BookState] = field(default_factory=dict)
     _tasks: dict[str, asyncio.Task] = field(default_factory=dict)
-    # Ein Job zur Zeit: hält den Plattenbedarf vorhersagbar und ABS ruhig.
+    # One job at a time: keeps disk usage predictable and ABS calm.
     _slot: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(1))
 
-    # --- Zustand -------------------------------------------------------------
+    # --- State -------------------------------------------------------------
 
     def status(self, book_id: str) -> BookState:
         if self.cache.is_ready(book_id):
@@ -75,10 +75,10 @@ class Preparer:
         for key, value in changes.items():
             setattr(state, key, value)
 
-    # --- Steuerung -----------------------------------------------------------
+    # --- Control -----------------------------------------------------------
 
     def request(self, book_id: str) -> BookState:
-        """Idempotent: ein laufender oder fertiger Job wird nicht neu gestartet."""
+        """Idempotent: a running or finished job is not restarted."""
         self.cache.pin(book_id)
         state = self.status(book_id)
         if state.status is Status.READY:
@@ -100,15 +100,15 @@ class Preparer:
             task.cancel()
         if self._tasks:
             await asyncio.gather(*self._tasks.values(), return_exceptions=True)
-        # Ein Job, der vor seinem ersten Lauf abgebrochen wurde, kommt nie in den
-        # CancelledError-Zweig. Ohne diesen Nachlauf bliebe er auf "preparing"
-        # stehen und die Uhr wartete auf ein Buch, an dem niemand mehr arbeitet.
+        # A job cancelled before its first run never reaches the CancelledError
+        # branch. Without this cleanup it would stay stuck at "preparing" and the
+        # watch would wait for a book nobody is working on anymore.
         for state in self._states.values():
             if state.status is Status.PREPARING:
                 state.status = Status.PENDING
                 state.percent = 0
 
-    # --- Ausführung ----------------------------------------------------------
+    # --- Execution ----------------------------------------------------------
 
     async def _guarded(self, book_id: str) -> None:
         try:
@@ -118,13 +118,13 @@ class Preparer:
             self._set(book_id, status=Status.PENDING, percent=0)
             raise
         except (AbsError, MediaError, ItemUnusable, ValueError) as error:
-            log.warning("Vorbereitung von %s gescheitert: %s", book_id, error)
+            log.warning("Preparation of %s failed: %s", book_id, error)
             self.cache.discard(book_id)
             self._set(book_id, status=Status.ERROR, error=str(error), percent=0)
-        except Exception:  # pragma: no cover - unerwartet, aber nie stillschweigend
-            log.exception("Vorbereitung von %s mit unerwartetem Fehler", book_id)
+        except Exception:  # pragma: no cover - unexpected, but never silent
+            log.exception("Preparation of %s with an unexpected error", book_id)
             self.cache.discard(book_id)
-            self._set(book_id, status=Status.ERROR, error="Unerwarteter Fehler, siehe Log")
+            self._set(book_id, status=Status.ERROR, error="Unexpected error, see log")
 
     async def _prepare(self, book_id: str) -> None:
         item = await self.abs_client.get_item(book_id)
@@ -136,22 +136,22 @@ class Preparer:
             max_seconds=self.config.segment_max_seconds,
         )
         if plan.used_fallback:
-            log.info("%s: 15-Minuten-Raster statt Kapiteln (%s)", item.title, plan.reason)
+            log.info("%s: 15-minute grid instead of chapters (%s)", item.title, plan.reason)
 
         largest = max(f.size for f in item.files) if item.files else 0
         if not self.cache.has_room_for(item.total_bytes + largest, self.config.cache_max_bytes):
             self.cache.enforce_budget(self.config.cache_max_bytes)
         if not self.cache.has_room_for(item.total_bytes + largest, self.config.cache_max_bytes):
             raise MediaError(
-                f"Zu wenig Platz im Cache für '{item.title}' "
-                f"({(item.total_bytes + largest) / 1024**2:.0f} MB benötigt)"
+                f"Not enough space in the cache for '{item.title}' "
+                f"({(item.total_bytes + largest) / 1024**2:.0f} MB needed)"
             )
 
         by_file: dict[str, list[Segment]] = {}
         for segment in plan.segments:
             by_file.setdefault(segment.source_ino, []).append(segment)
 
-        self.cache.discard(book_id)  # Reste eines abgebrochenen Laufs
+        self.cache.discard(book_id)  # leftovers of an aborted run
         manifest_segments: list[dict] = []
         done_bytes = 0
 
@@ -200,8 +200,8 @@ class Preparer:
                         percent=int((WEIGHT_DOWNLOAD + file_share * WEIGHT_CUT) * 100),
                     )
             finally:
-                # Die Quelldatei ist ab hier nutzlos — sie darf keine Platte belegen,
-                # egal ob der Schnitt geklappt hat oder nicht.
+                # The source file is useless from here on — it must not occupy
+                # disk, whether the cut succeeded or not.
                 work_file.unlink(missing_ok=True)
                 parent = work_file.parent
                 if parent.exists() and not any(parent.iterdir()):
@@ -230,4 +230,4 @@ class Preparer:
         )
         self.cache.touch(book_id)
         self._set(book_id, status=Status.READY, percent=100, segment_count=len(manifest_segments))
-        log.info("%s vorbereitet: %d Segmente", item.title, len(manifest_segments))
+        log.info("%s prepared: %d segments", item.title, len(manifest_segments))

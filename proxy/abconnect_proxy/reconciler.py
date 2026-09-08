@@ -1,13 +1,12 @@
-"""Abgleich der ABS-Playlist mit dem Cache.
+"""Reconciliation of the ABS playlist with the cache.
 
-Die Playlist ist die Sollvorgabe: was darin liegt, wird vorbereitet; was
-verschwindet, wird freigegeben. Der Abgleich läuft im Hintergrund, damit ein
-neu hinzugefügtes Buch schon geschnitten bereitliegt, bevor die Uhr das nächste
-Mal synchronisiert.
+The playlist is the target: whatever is in it gets prepared; whatever
+disappears gets released. Reconciliation runs in the background so a newly
+added book is already segmented and ready before the watch syncs the next time.
 
-Wichtigste Regel: Eine Playlist, die nicht gefunden wird, ist kein Grund, den
-Cache zu leeren. Ein Tippfehler im Namen oder ein kurz nicht erreichbares ABS
-würde sonst die Uhr leerräumen.
+Most important rule: a playlist that is not found is no reason to empty the
+cache. A typo in the name or a briefly unreachable ABS would otherwise wipe
+the watch.
 """
 
 from __future__ import annotations
@@ -55,17 +54,17 @@ class PlaylistReconciler:
             try:
                 playlist = await self.abs_client.playlist(self.config.abs_playlist)
             except AbsError as error:
-                # Kein Zugriff heißt "unbekannt", nicht "leer".
+                # No access means "unknown", not "empty".
                 result.error = str(error)
                 result.found = self._last.found
                 result.books = self._last.books
-                log.warning("Playlist nicht abrufbar: %s", error)
+                log.warning("Playlist not retrievable: %s", error)
                 self._last = result
                 return result
 
             if playlist is None:
-                result.error = f"Playlist '{self.config.abs_playlist}' existiert in Audiobookshelf nicht"
-                log.warning("%s — Cache bleibt unangetastet", result.error)
+                result.error = f"Playlist '{self.config.abs_playlist}' does not exist in Audiobookshelf"
+                log.warning("%s — cache stays untouched", result.error)
                 self._last = result
                 return result
 
@@ -76,8 +75,8 @@ class PlaylistReconciler:
             for book_id in playlist.book_ids:
                 state = self.preparer.status(book_id)
                 if state.status is Status.READY:
-                    # Ein wieder aufgenommenes Buch muss erneut angepinnt werden,
-                    # sonst verdrängt es die Notbremse trotz Playlist-Zugehörigkeit.
+                    # A re-added book must be pinned again, otherwise the
+                    # emergency brake evicts it despite being in the playlist.
                     self.cache.pin(book_id)
                 elif state.status is Status.PENDING:
                     self.preparer.request(book_id)
@@ -90,7 +89,7 @@ class PlaylistReconciler:
 
             if result.prepared or result.released:
                 log.info(
-                    "Playlist abgeglichen: %d neu vorbereitet, %d freigegeben",
+                    "Playlist reconciled: %d newly prepared, %d released",
                     len(result.prepared),
                     len(result.released),
                 )
@@ -104,6 +103,6 @@ class PlaylistReconciler:
                 await asyncio.sleep(self.config.playlist_poll_seconds)
             except asyncio.CancelledError:
                 raise
-            except Exception:  # pragma: no cover - der Abgleich darf nie den Prozess reißen
-                log.exception("Playlist-Abgleich gescheitert")
+            except Exception:  # pragma: no cover - reconciliation must never take down the process
+                log.exception("Playlist reconciliation failed")
                 await asyncio.sleep(self.config.playlist_poll_seconds)

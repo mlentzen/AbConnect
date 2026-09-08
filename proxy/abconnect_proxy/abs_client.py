@@ -1,7 +1,7 @@
-"""Audiobookshelf-Zugriff.
+"""Audiobookshelf access.
 
-Der API-Key lebt nur hier. Die Uhr sieht diese Schicht nie — sie bekommt
-ausschließlich das, was api.py daraus formt.
+The API key lives only here. The watch never sees this layer — it only gets
+what api.py shapes out of it.
 """
 
 from __future__ import annotations
@@ -61,15 +61,15 @@ class AbsClient:
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    # --- Basis ---------------------------------------------------------------
+    # --- Basics ---------------------------------------------------------------
 
     async def _get(self, path: str, **kwargs) -> httpx.Response:
         try:
             response = await self._client.get(path, **kwargs)
         except httpx.HTTPError as error:
-            raise AbsError(f"Audiobookshelf nicht erreichbar: {error}") from error
+            raise AbsError(f"Audiobookshelf unreachable: {error}") from error
         if response.status_code in (401, 403):
-            raise AbsAuthError("Audiobookshelf lehnt den API-Key ab")
+            raise AbsAuthError("Audiobookshelf rejects the API key")
         if response.status_code >= 400:
             raise AbsError(f"GET {path} -> HTTP {response.status_code}")
         return response
@@ -79,24 +79,24 @@ class AbsClient:
         try:
             return response.json()
         except ValueError as error:
-            raise AbsError(f"GET {path} lieferte kein JSON") from error
+            raise AbsError(f"GET {path} returned no JSON") from error
 
     async def ping(self) -> None:
-        """Für /healthz: prüft Erreichbarkeit *und* Key in einem Zug."""
+        """For /health: checks reachability *and* the key in one go."""
         await self._json("/api/libraries")
 
-    # --- Bibliothek ----------------------------------------------------------
+    # --- Library ----------------------------------------------------------
 
     async def library_ids(self) -> list[str]:
         return parse_book_libraries(await self._json("/api/libraries"))
 
     async def all_books(self, *, force: bool = False) -> list[dict]:
-        """Vollständige Buchliste, kurz zwischengespeichert.
+        """Complete book list, briefly cached.
 
-        Alles auf einmal zu holen und im Speicher zu blättern ist deutlich
-        einfacher, als eine Seitenzahl der Uhr über mehrere Bibliotheken hinweg
-        auf ABS-Offsets abzubilden. Bei einigen tausend Büchern sind das
-        wenige hundert Kilobyte.
+        Fetching everything at once and paging through it in memory is much
+        simpler than mapping a watch page number onto ABS offsets across
+        multiple libraries. For a few thousand books this is a few hundred
+        kilobytes.
         """
         async with self._listing_lock:
             now = time.monotonic()
@@ -117,11 +117,11 @@ class AbsClient:
             return books
 
     async def playlist(self, name: str) -> Playlist | None:
-        """Playlist über ihren Namen holen.
+        """Fetch a playlist by its name.
 
-        ABS kann Playlists nicht nach Namen suchen, also wird die Liste geholt
-        und lokal aufgelöst. Gibt es keine mit diesem Namen, kommt None zurück —
-        und der Aufrufer darf daraus *nicht* auf eine leere Playlist schließen.
+        ABS cannot search playlists by name, so the list is fetched and
+        resolved locally. If none has this name, None is returned — and the
+        caller must *not* infer an empty playlist from that.
         """
         payload = await self._json("/api/playlists")
         return find_playlist(parse_playlists(payload), name)
@@ -129,7 +129,7 @@ class AbsClient:
     async def get_item(self, item_id: str) -> ParsedItem:
         return parse_item(await self._json(f"/api/items/{item_id}", params={"expanded": 1}))
 
-    # --- Dateien -------------------------------------------------------------
+    # --- Files -------------------------------------------------------------
 
     async def download_file(
         self,
@@ -139,16 +139,16 @@ class AbsClient:
         *,
         on_progress: Callable[[int, int], None] | None = None,
     ) -> int:
-        """Lädt eine Audiodatei nach `destination`. Gibt die Größe zurück."""
+        """Downloads an audio file to `destination`. Returns its size."""
         destination.parent.mkdir(parents=True, exist_ok=True)
         partial = destination.with_suffix(destination.suffix + ".part")
         written = 0
         try:
             async with self._client.stream("GET", f"/api/items/{item_id}/file/{ino}/download") as response:
                 if response.status_code in (401, 403):
-                    raise AbsAuthError("Audiobookshelf lehnt den API-Key ab")
+                    raise AbsAuthError("Audiobookshelf rejects the API key")
                 if response.status_code >= 400:
-                    raise AbsError(f"Download von {ino} -> HTTP {response.status_code}")
+                    raise AbsError(f"Download of {ino} -> HTTP {response.status_code}")
                 total = int(response.headers.get("content-length") or 0)
                 with partial.open("wb") as sink:
                     async for chunk in response.aiter_bytes(CHUNK):
@@ -158,14 +158,14 @@ class AbsClient:
                             on_progress(written, total)
         except httpx.HTTPError as error:
             partial.unlink(missing_ok=True)
-            raise AbsError(f"Download von {ino} abgebrochen: {error}") from error
+            raise AbsError(f"Download of {ino} aborted: {error}") from error
         except BaseException:
             partial.unlink(missing_ok=True)
             raise
 
         if written == 0:
             partial.unlink(missing_ok=True)
-            raise AbsError(f"Download von {ino} lieferte keine Daten")
+            raise AbsError(f"Download of {ino} returned no data")
         partial.replace(destination)
         return written
 
@@ -175,11 +175,11 @@ class AbsClient:
                 f"/api/items/{item_id}/cover", params={"width": width, "format": "jpeg"}
             )
         except AbsError as error:
-            log.info("Kein Cover für %s: %s", item_id, error)
+            log.info("No cover for %s: %s", item_id, error)
             return None
         return response.content or None
 
-    # --- Fortschritt ---------------------------------------------------------
+    # --- Progress ---------------------------------------------------------
 
     async def get_progress(self, item_id: str) -> dict | None:
         try:
@@ -187,7 +187,7 @@ class AbsClient:
         except AbsAuthError:
             raise
         except AbsError:
-            return None  # ABS antwortet 404, solange nichts gehört wurde
+            return None  # ABS responds 404 as long as nothing has been listened to
         return payload if isinstance(payload, dict) else None
 
     async def set_progress(self, item_id: str, *, current_time: float, duration: float) -> None:
@@ -200,8 +200,8 @@ class AbsClient:
         try:
             response = await self._client.patch(f"/api/me/progress/{item_id}", json=body)
         except httpx.HTTPError as error:
-            raise AbsError(f"Fortschritt für {item_id} nicht übertragen: {error}") from error
+            raise AbsError(f"Progress for {item_id} not transmitted: {error}") from error
         if response.status_code in (401, 403):
-            raise AbsAuthError("Audiobookshelf lehnt den API-Key ab")
+            raise AbsAuthError("Audiobookshelf rejects the API key")
         if response.status_code >= 400:
             raise AbsError(f"PATCH /api/me/progress/{item_id} -> HTTP {response.status_code}")

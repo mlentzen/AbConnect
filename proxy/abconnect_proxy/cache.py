@@ -1,12 +1,11 @@
-"""Segment-Cache auf der Platte.
+"""Segment cache on disk.
 
-Platz ist reichlich vorhanden, deshalb ist die Verdrängung kein Regelbetrieb,
-sondern eine Notbremse. Der eigentliche Zweck des großzügigen Caches: ein
-freigegebenes Buch bleibt liegen, damit ein erneutes Ankreuzen ohne zweiten
-Download und Schnitt auskommt.
+Disk space is plentiful, so eviction is not routine operation but an emergency
+brake. The actual purpose of the generous cache: a released book stays around
+so re-selecting it does not require a second download and segmentation.
 
-Der Zustand lebt im Dateisystem, nicht im Prozess: ein Buch mit gültigem
-Manifest ist nach einem Neustart sofort wieder `ready`.
+The state lives in the filesystem, not in the process: a book with a valid
+manifest is immediately `ready` again after a restart.
 """
 
 from __future__ import annotations
@@ -34,7 +33,7 @@ class UnsafeBookId(ValueError):
 
 def check_id(book_id: str) -> str:
     if not SAFE_ID.match(book_id or ""):
-        raise UnsafeBookId(f"Unzulässige Buch-ID: {book_id!r}")
+        raise UnsafeBookId(f"Invalid book ID: {book_id!r}")
     return book_id
 
 
@@ -45,7 +44,7 @@ class Cache:
     def __post_init__(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
 
-    # --- Pfade ---------------------------------------------------------------
+    # --- Paths ---------------------------------------------------------------
 
     def book_dir(self, book_id: str) -> Path:
         return self.root / check_id(book_id)
@@ -55,7 +54,7 @@ class Cache:
 
     def segment_path(self, book_id: str, filename: str) -> Path:
         if "/" in filename or ".." in filename:
-            raise UnsafeBookId(f"Unzulässiger Segmentname: {filename!r}")
+            raise UnsafeBookId(f"Invalid segment name: {filename!r}")
         return self.book_dir(book_id) / SEGMENTS / filename
 
     def cover_path(self, book_id: str) -> Path:
@@ -73,19 +72,19 @@ class Cache:
         try:
             return json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
-            log.warning("Manifest von %s ist unlesbar, Buch gilt als nicht vorbereitet", book_id)
+            log.warning("Manifest of %s is unreadable, book counts as not prepared", book_id)
             return None
 
     def store_manifest(self, book_id: str, manifest: dict) -> None:
         path = self.manifest_path(book_id)
         path.parent.mkdir(parents=True, exist_ok=True)
-        # Erst daneben schreiben, dann umbenennen: ein abgebrochener Schreibvorgang
-        # darf kein halbes Manifest hinterlassen, das als "ready" durchgeht.
+        # Write alongside first, then rename: an aborted write must not leave a
+        # half manifest behind that passes as "ready".
         temporary = path.with_suffix(".tmp")
         temporary.write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
         temporary.replace(path)
 
-    # --- Zustand -------------------------------------------------------------
+    # --- State -------------------------------------------------------------
 
     def _state(self, book_id: str) -> dict:
         path = self.book_dir(book_id) / STATE
@@ -102,13 +101,13 @@ class Cache:
         (directory / STATE).write_text(json.dumps(state), encoding="utf-8")
 
     def pin(self, book_id: str, now: float | None = None) -> None:
-        """Buch ist ausgewählt: nicht verdrängen."""
+        """Book is selected: do not evict."""
         state = self._state(book_id)
         state.update(pinned=True, released_at=None, last_access=time.time() if now is None else now)
         self._write_state(book_id, state)
 
     def release(self, book_id: str, now: float | None = None) -> None:
-        """Uhr braucht es nicht mehr — bleibt aber bis zum TTL liegen."""
+        """The watch no longer needs it — but it stays around until the TTL."""
         state = self._state(book_id)
         state.update(pinned=False, released_at=time.time() if now is None else now)
         self._write_state(book_id, state)
@@ -121,7 +120,7 @@ class Cache:
     def pinned(self, book_id: str) -> bool:
         return bool(self._state(book_id).get("pinned"))
 
-    # --- Platz ---------------------------------------------------------------
+    # --- Space ---------------------------------------------------------------
 
     def book_bytes(self, book_id: str) -> int:
         directory = self.book_dir(book_id)
@@ -139,7 +138,7 @@ class Cache:
         shutil.rmtree(self.book_dir(book_id), ignore_errors=True)
 
     def sweep(self, ttl_days: int, now: float | None = None) -> list[str]:
-        """Freigegebene Bücher, deren TTL abgelaufen ist."""
+        """Released books whose TTL has expired."""
         if ttl_days <= 0:
             return []
         now = time.time() if now is None else now
@@ -156,7 +155,7 @@ class Cache:
         return evicted
 
     def enforce_budget(self, max_bytes: int) -> list[str]:
-        """Notbremse: verdrängt freigegebene Bücher, am längsten ungenutzt zuerst."""
+        """Emergency brake: evicts released books, least recently used first."""
         total = self.total_bytes()
         if total <= max_bytes:
             return []
@@ -175,9 +174,9 @@ class Cache:
             total -= self.book_bytes(book_id)
             self.discard(book_id)
             evicted.append(book_id)
-            log.info("Cache über Budget: %s verdrängt", book_id)
+            log.info("Cache over budget: %s evicted", book_id)
         if total > max_bytes:
-            log.warning("Cache weiter über Budget — alle verbleibenden Bücher sind angepinnt")
+            log.warning("Cache still over budget — all remaining books are pinned")
         return evicted
 
     def has_room_for(self, needed_bytes: int, max_bytes: int) -> bool:

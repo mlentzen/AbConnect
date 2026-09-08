@@ -1,15 +1,15 @@
 import Toybox.Lang;
 import Toybox.System;
 
-//! Ablaufspuren für den Simulator.
+//! Execution traces for the simulator.
 //!
-//! Sync und Playback laufen ohne eigene Oberfläche: bleibt einer der beiden
-//! stehen, sagt nur die Konsole, an welcher Stelle. Jede Zeile beginnt mit dem
-//! Modus, weil das System die App je Modus neu startet und die Ausgaben sonst
-//! nicht auseinanderzuhalten sind.
+//! Sync and playback run without a UI of their own: if either one gets stuck,
+//! only the console says where. Every line starts with the mode, because the
+//! system restarts the app per mode and the output would otherwise be
+//! impossible to tell apart.
 module Log {
 
-    //! Auf false setzen, sobald die App auf der Uhr läuft.
+    //! Set to false once the app runs on the watch.
     const ENABLED = true;
 
     function line(message as String) as Void {

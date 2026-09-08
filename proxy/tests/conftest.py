@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 FFMPEG = shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
-needs_ffmpeg = pytest.mark.skipif(not FFMPEG, reason="ffmpeg/ffprobe nicht verfügbar")
+needs_ffmpeg = pytest.mark.skipif(not FFMPEG, reason="ffmpeg/ffprobe not available")
 
 
 def _metadata(chapters: list[tuple[float, float, str]]) -> str:
@@ -23,7 +23,7 @@ def _metadata(chapters: list[tuple[float, float, str]]) -> str:
 
 @pytest.fixture(scope="session")
 def make_m4b(tmp_path_factory):
-    """Erzeugt eine echte m4b mit Kapitelmarken — Testdaten, die ffmpeg glaubt."""
+    """Creates a real m4b with chapter markers — test data that ffmpeg believes."""
 
     root = tmp_path_factory.mktemp("fixtures")
 
