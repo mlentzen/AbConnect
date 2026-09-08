@@ -79,13 +79,24 @@ class Preparer:
 
     # --- Control -----------------------------------------------------------
 
-    def request(self, book_id: str) -> BookState:
-        """Idempotent: a running or finished job is not restarted."""
+    def request(self, book_id: str, force: bool = False) -> BookState:
+        """Idempotent: a running or finished job is not restarted.
+
+        `force` throws the prepared segments away first, so the job really runs
+        again. That is the only way to pick up changed encoder settings: the
+        cache outlives the container, and a book that is READY would otherwise
+        keep the segments it was cut with forever. A job already in flight is
+        left alone — nothing is discarded out from under it.
+        """
         self.cache.pin(book_id)
+        running = book_id in self._tasks and not self._tasks[book_id].done()
+        if force and not running:
+            self.cache.discard(book_id)
+            self._states.pop(book_id, None)
         state = self.status(book_id)
         if state.status is Status.READY:
             return state
-        if book_id in self._tasks and not self._tasks[book_id].done():
+        if running:
             return state
 
         self._set(book_id, status=Status.PREPARING, percent=0, error="")

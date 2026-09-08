@@ -131,9 +131,15 @@ fine but stay silent on the watch, which is what this exists for. A
 re-encoded segment roughly doubles in size, so a slow Bluetooth sync is
 the price; `TRANSCODE_BITRATE_KBPS=48` buys some of it back.
 
-Changing either setting only affects books prepared afterwards. Release and
-re-prepare the book, then reset the watch — the sync compares segments by
-index alone and would otherwise keep the copies it already has.
+Changing either setting only affects books prepared afterwards, and a book that
+is already `ready` keeps the segments it was first cut with — the cache outlives
+the container, and `release` only unpins it. Force the re-cut:
+
+    curl -X POST -H "Authorization: Bearer $ABCONNECT_TOKEN" \
+         "$PROXY_URL/v1/books/<book-id>/prepare?force=true"
+
+Then reset the watch before syncing — the sync compares segments by index alone
+and would otherwise keep the copies it already has.
 
 ## Rotating the token without locking out the watch
 

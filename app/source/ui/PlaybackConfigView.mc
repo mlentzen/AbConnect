@@ -75,7 +75,7 @@ class PlaybackConfigView extends WatchUi.View {
     }
 
     function onUpdate(dc as Graphics.Dc) as Void {
-        Log.line("Konfig: onUpdate");
+        Log.line("Config: onUpdate");
         dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_BLACK);
         dc.clear();
     }

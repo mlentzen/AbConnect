@@ -87,6 +87,21 @@ def parsed(files, chapters, **kwargs) -> ParsedItem:
 
 
 @pytest.fixture
+def low_rate_source(make_m4b):
+    """A source at 22050 Hz mono — the shape the watch would not play."""
+    source = make_m4b(
+        "prep-lowrate", 60, [(0, 30, "Verhaftung"), (30, 60, "Untersuchung")],
+        sample_rate=22050, channels=1,
+    )
+    item = parsed(
+        [SourceFile(ino="9002", filename="leise.m4b", duration=60,
+                    size=source.stat().st_size, codec="aac")],
+        [Chapter(0, 30, "Verhaftung"), Chapter(30, 60, "Untersuchung")],
+    )
+    return item, source
+
+
+@pytest.fixture
 def single_book(make_m4b):
     source = make_m4b("prep-single", 60, [(0, 30, "Verhaftung"), (30, 60, "Untersuchung")])
     item = parsed(
@@ -283,21 +298,8 @@ class TestTranscoding:
     can only be made once the file is on disk.
     """
 
-    @pytest.fixture
-    def low_rate_book(self, make_m4b):
-        source = make_m4b(
-            "prep-lowrate", 60, [(0, 30, "Verhaftung"), (30, 60, "Untersuchung")],
-            sample_rate=22050, channels=1,
-        )
-        item = parsed(
-            [SourceFile(ino="9002", filename="leise.m4b", duration=60,
-                        size=source.stat().st_size, codec="aac")],
-            [Chapter(0, 30, "Verhaftung"), Chapter(30, 60, "Untersuchung")],
-        )
-        return item, source
-
-    async def test_a_22050_source_is_lifted_to_44100(self, tmp_path, low_rate_book):
-        item, source = low_rate_book
+    async def test_a_22050_source_is_lifted_to_44100(self, tmp_path, low_rate_source):
+        item, source = low_rate_source
         preparer, cache, _, _ = await build(tmp_path, item, source)
 
         assert (await run(preparer)).status is Status.READY
@@ -309,9 +311,9 @@ class TestTranscoding:
             assert probed.sample_rate == 44100
             assert media.conforms(probed)
 
-    async def test_the_mp3_fallback_changes_container_and_manifest(self, tmp_path, low_rate_book):
+    async def test_the_mp3_fallback_changes_container_and_manifest(self, tmp_path, low_rate_source):
         """Flipping the target must carry through to the file name the watch fetches."""
-        item, source = low_rate_book
+        item, source = low_rate_source
         preparer, cache, _, _ = await build(tmp_path, item, source, transcode_target="mp3")
 
         assert (await run(preparer)).status is Status.READY
@@ -336,9 +338,9 @@ class TestTranscoding:
             assert entry["encoding"] == "m4a"
             assert entry["file"].endswith(".m4a")
 
-    async def test_never_leaves_even_a_bad_source_untouched(self, tmp_path, low_rate_book):
+    async def test_never_leaves_even_a_bad_source_untouched(self, tmp_path, low_rate_source):
         """The way back to pure stream copy, for when the format is ruled out."""
-        item, source = low_rate_book
+        item, source = low_rate_source
         preparer, cache, _, _ = await build(tmp_path, item, source, transcode_mode="never")
 
         assert (await run(preparer)).status is Status.READY
@@ -346,3 +348,57 @@ class TestTranscoding:
         manifest = cache.load_manifest("li_1")
         probed = await media.probe(cache.segment_path("li_1", manifest["segments"][0]["file"]))
         assert probed.sample_rate == 22050
+
+
+class TestForcedRePrepare:
+    """Changed encoder settings must be able to reach a book that is already ready.
+
+    The segment cache outlives the container, so without this a book stays on
+    the files it was first cut with no matter what the settings say.
+    """
+
+    async def test_a_plain_request_does_not_recut_a_ready_book(self, tmp_path, single_book):
+        item, source = single_book
+        preparer, _, abs_client, _ = await build(tmp_path, item, source)
+        await run(preparer)
+
+        preparer.request("li_1")
+        assert len(abs_client.downloads) == 1
+
+    async def test_force_recuts_and_picks_up_the_new_target(self, tmp_path, low_rate_source):
+        item, source = low_rate_source
+        preparer, cache, abs_client, _ = await build(tmp_path, item, source)
+        assert (await run(preparer)).status is Status.READY
+        assert cache.load_manifest("li_1")["segments"][0]["file"].endswith(".m4a")
+
+        # Same cache, a preparer configured for the fallback container.
+        cfg = make_config(tmp_path, transcode_target="mp3")
+        again = Preparer(abs_client=abs_client, cache=cache, config=cfg)
+        again.request("li_1", force=True)
+        for _ in range(400):
+            await asyncio.sleep(0.02)
+            if again.status("li_1").status in (Status.READY, Status.ERROR):
+                break
+
+        assert again.status("li_1").status is Status.READY
+        assert len(abs_client.downloads) == 2
+        for entry in cache.load_manifest("li_1")["segments"]:
+            assert entry["file"].endswith(".mp3")
+            assert cache.segment_path("li_1", entry["file"]).exists()
+
+    async def test_force_leaves_stale_segment_files_behind_nowhere(self, tmp_path, low_rate_source):
+        """A re-cut into a different container must not leave the old files."""
+        item, source = low_rate_source
+        preparer, cache, abs_client, _ = await build(tmp_path, item, source)
+        await run(preparer)
+
+        cfg = make_config(tmp_path, transcode_target="mp3")
+        again = Preparer(abs_client=abs_client, cache=cache, config=cfg)
+        again.request("li_1", force=True)
+        for _ in range(400):
+            await asyncio.sleep(0.02)
+            if again.status("li_1").status in (Status.READY, Status.ERROR):
+                break
+
+        leftover = list(cache.book_dir("li_1").glob("*.m4a"))
+        assert leftover == []

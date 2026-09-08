@@ -252,8 +252,11 @@ def _register(app: FastAPI) -> None:
         return JSONResponse(payload, status_code=200 if result.found else 409)
 
     @app.post("/v1/books/{book_id}/prepare", dependencies=guarded)
-    async def prepare(request: Request, book_id: str):
-        state = request.app.state.preparer.request(_book_id(book_id))
+    async def prepare(request: Request, book_id: str, force: bool = Query(False)):
+        # force=true re-cuts a book that is already ready. Needed whenever the
+        # encoder settings change: the segment cache survives a restart, so
+        # without it the old files stay in place indefinitely.
+        state = request.app.state.preparer.request(_book_id(book_id), force=force)
         return {"status": state.status.value, "percent": state.percent}
 
     @app.get("/v1/books/{book_id}/status", dependencies=guarded)

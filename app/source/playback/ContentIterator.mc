@@ -297,13 +297,16 @@ class AbContentIterator extends Media.ContentIterator {
     function getPlaybackProfile() as Media.PlaybackProfile? {
         Log.line("Iterator: getPlaybackProfile");
         var profile = new Media.PlaybackProfile();
-        // PLAYBACK_CONTROL_PLAYBACK is deliberately absent. The player carries
-        // play/pause on START either way, and the docs note the first entry of
-        // this list may be bound as the device hotkey — listing it here put a
-        // second play button on DOWN. Skip forward is the one worth having
-        // there in an audiobook.
+        // Order matters, and membership matters more. The SDK says this array
+        // "determines which native media player control options are rendered
+        // and available", and separately that "the first entry in the array may
+        // be used as a hotkey". So PLAYBACK_CONTROL_PLAYBACK has to stay — drop
+        // it and the player renders no play/pause at all — but putting it first
+        // is what bound a second play button to the hotkey next to the one on
+        // START. Skip forward is the hotkey worth having in an audiobook.
         profile.playbackControls = [
             Media.PLAYBACK_CONTROL_SKIP_FORWARD,
+            Media.PLAYBACK_CONTROL_PLAYBACK,
             Media.PLAYBACK_CONTROL_SKIP_BACKWARD,
             Media.PLAYBACK_CONTROL_PREVIOUS,
             Media.PLAYBACK_CONTROL_NEXT
