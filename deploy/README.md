@@ -120,7 +120,20 @@ curl -s -H "Authorization: Bearer $TOKEN" localhost:18543/v1/books/<ID>/segments
 | `SEGMENT_MIN_SECONDS` | — | 180 | below this, segments are merged |
 | `SEGMENT_MAX_SECONDS` | — | 1500 | above this, segments are split |
 | `COVER_URL_TTL_SECONDS` | — | 21600 | validity of the signed cover URLs |
+| `TRANSCODE_MODE` | — | `auto` | `auto` re-encodes only what the watch will not play, `always` everything, `never` nothing |
+| `TRANSCODE_TARGET` | — | `m4a` | container for re-encoded segments; `mp3` is the fallback |
+| `TRANSCODE_BITRATE_KBPS` | — | 64 | bitrate of a re-encoded segment |
 | `LOG_LEVEL` | — | INFO | |
+
+`auto` probes every source file after download and resamples anything that
+is not AAC-LC or MP3 at 44100/48000 Hz. Audiobooks at 22050 Hz download
+fine but stay silent on the watch, which is what this exists for. A
+re-encoded segment roughly doubles in size, so a slow Bluetooth sync is
+the price; `TRANSCODE_BITRATE_KBPS=48` buys some of it back.
+
+Changing either setting only affects books prepared afterwards. Release and
+re-prepare the book, then reset the watch — the sync compares segments by
+index alone and would otherwise keep the copies it already has.
 
 ## Rotating the token without locking out the watch
 
