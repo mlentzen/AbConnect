@@ -27,7 +27,14 @@ def make_m4b(tmp_path_factory):
 
     root = tmp_path_factory.mktemp("fixtures")
 
-    def _make(name: str, duration: float, chapters: list[tuple[float, float, str]]) -> Path:
+    def _make(
+        name: str,
+        duration: float,
+        chapters: list[tuple[float, float, str]],
+        sample_rate: int = 44100,
+        channels: int = 2,
+    ) -> Path:
+        """Defaults match what a watch accepts; pass 22050/1 for the awkward case."""
         target = root / f"{name}.m4b"
         if target.exists():
             return target
@@ -38,7 +45,9 @@ def make_m4b(tmp_path_factory):
                 "ffmpeg", "-nostdin", "-v", "error", "-y",
                 "-f", "lavfi", "-i", f"sine=frequency=440:duration={duration}",
                 "-i", str(meta), "-map_metadata", "1",
-                "-c:a", "aac", "-b:a", "32k", str(target),
+                "-c:a", "aac", "-b:a", "32k",
+                "-ar", str(sample_rate), "-ac", str(channels),
+                str(target),
             ],
             check=True,
         )

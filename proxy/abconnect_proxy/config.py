@@ -23,6 +23,9 @@ DEFAULTS = {
     "SEGMENT_MIN_SECONDS": "180",
     "SEGMENT_MAX_SECONDS": "1500",
     "COVER_URL_TTL_SECONDS": "21600",
+    "TRANSCODE_MODE": "auto",
+    "TRANSCODE_TARGET": "m4a",
+    "TRANSCODE_BITRATE_KBPS": "64",
     "HTTP_TIMEOUT_SECONDS": "60",
     "LOG_LEVEL": "INFO",
 }
@@ -51,6 +54,9 @@ class Config:
     segment_min_seconds: int
     segment_max_seconds: int
     cover_url_ttl_seconds: int
+    transcode_mode: str
+    transcode_target: str
+    transcode_bitrate_kbps: int
     http_timeout_seconds: float
     log_level: str
 
@@ -108,6 +114,20 @@ def load(env: dict[str, str] | None = None) -> Config:
     cover_ttl = _int(env, "COVER_URL_TTL_SECONDS", problems, minimum=60)
     poll = _int(env, "PLAYLIST_POLL_SECONDS", problems, minimum=60)
     timeout = _int(env, "HTTP_TIMEOUT_SECONDS", problems, minimum=5)
+    bitrate = _int(env, "TRANSCODE_BITRATE_KBPS", problems, minimum=32)
+
+    # "auto" re-encodes only what `media.conforms()` rejects. "always" is the
+    # switch for testing a format hypothesis on the watch without a code change,
+    # "never" the way back to pure stream copy.
+    transcode_mode = (env.get("TRANSCODE_MODE") or DEFAULTS["TRANSCODE_MODE"]).strip().lower()
+    if transcode_mode not in ("auto", "always", "never"):
+        problems.append(f"TRANSCODE_MODE: '{transcode_mode}' is not auto, always or never")
+
+    # m4a keeps the container the watch already receives; mp3 is the fallback
+    # the one working reference implementation runs in production.
+    transcode_target = (env.get("TRANSCODE_TARGET") or DEFAULTS["TRANSCODE_TARGET"]).strip().lower()
+    if transcode_target not in ("m4a", "mp3"):
+        problems.append(f"TRANSCODE_TARGET: '{transcode_target}' is not m4a or mp3")
 
     if not seg_min <= target <= seg_max:
         problems.append(
@@ -131,6 +151,9 @@ def load(env: dict[str, str] | None = None) -> Config:
         segment_min_seconds=seg_min,
         segment_max_seconds=seg_max,
         cover_url_ttl_seconds=cover_ttl,
+        transcode_mode=transcode_mode,
+        transcode_target=transcode_target,
+        transcode_bitrate_kbps=bitrate,
         http_timeout_seconds=float(timeout),
         log_level=(env.get("LOG_LEVEL") or DEFAULTS["LOG_LEVEL"]).upper(),
     )

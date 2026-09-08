@@ -11,16 +11,18 @@ usage therefore stays at one source file plus its segments.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 
 from .abs_client import AbsClient, AbsError
 from .cache import Cache
 from .config import Config
-from .media import MediaError, cut
-from .models import Segment
+from .media import EncodeSpec, MediaError, conforms, cut, probe
+from .models import Encoding, Segment
 from .parsing import ItemUnusable
 from .segmenter import plan_segments
 
@@ -126,6 +128,29 @@ class Preparer:
             self.cache.discard(book_id)
             self._set(book_id, status=Status.ERROR, error="Unexpected error, see log")
 
+    async def _encode_for(self, work_file: Path, filename: str) -> EncodeSpec | None:
+        """Decide stream copy vs re-encode for one source file.
+
+        None means stream copy. The decision is logged either way: when a book
+        will not play on the watch, the first question is what actually went
+        onto it.
+        """
+        if self.config.transcode_mode == "never":
+            return None
+        spec = EncodeSpec(
+            target=self.config.transcode_target,
+            bitrate_kbps=self.config.transcode_bitrate_kbps,
+        )
+        if self.config.transcode_mode == "always":
+            log.info("%s: forced re-encode to %s", filename, spec.target)
+            return spec
+        probed = await probe(work_file)
+        if conforms(probed):
+            log.info("%s: %s -> stream copy", filename, probed.summary)
+            return None
+        log.info("%s: %s -> re-encode to %s", filename, probed.summary, spec.target)
+        return spec
+
     async def _prepare(self, book_id: str) -> None:
         item = await self.abs_client.get_item(book_id)
         plan = plan_segments(
@@ -170,7 +195,13 @@ class Preparer:
                 )
                 done_bytes += source.size or work_file.stat().st_size
 
+                # The codec name from ABS says nothing about sample rate, so the
+                # decision can only be made here, with the file on disk.
+                encode = await self._encode_for(work_file, source.filename)
+                encoding = source.encoding if encode is None else Encoding(encode.target)
+
                 for position, segment in enumerate(segments):
+                    segment = dataclasses.replace(segment, encoding=encoding)
                     destination = self.cache.segment_path(book_id, segment.filename)
                     size = await cut(
                         work_file,
@@ -181,6 +212,7 @@ class Preparer:
                         artist=item.author,
                         album=item.title,
                         track=segment.index + 1,
+                        encode=encode,
                     )
                     manifest_segments.append(
                         {

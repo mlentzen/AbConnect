@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from abconnect_proxy import media
@@ -45,3 +47,71 @@ async def test_probe_rejects_a_file_without_audio(tmp_path):
     broken.write_bytes(b"not mp4")
     with pytest.raises(MediaError):
         await media.probe(broken)
+
+
+class TestConformance:
+    """Where the line runs between stream copy and re-encode.
+
+    The measured failing case was AAC-LC at 22050 Hz mono: a file that decodes
+    perfectly on a computer and stays silent on the watch.
+    """
+
+    async def test_a_44100_source_is_passed_through(self, make_m4b):
+        book = make_m4b("conform-ok", 20, [(0, 20, "A")])
+        assert media.conforms(await media.probe(book))
+
+    async def test_a_22050_source_is_not(self, make_m4b):
+        book = make_m4b("conform-low", 20, [(0, 20, "A")], sample_rate=22050, channels=1)
+        probed = await media.probe(book)
+
+        assert probed.sample_rate == 22050
+        assert probed.channels == 1
+        assert not media.conforms(probed)
+
+    async def test_mono_alone_does_not_disqualify(self, make_m4b):
+        """Mono is fine and halves what goes over Bluetooth — only the rate counts."""
+        book = make_m4b("conform-mono", 20, [(0, 20, "A")], sample_rate=44100, channels=1)
+        assert media.conforms(await media.probe(book))
+
+
+class TestReencode:
+    @pytest.mark.parametrize(
+        "target,suffix,codec", [("m4a", ".m4a", "aac"), ("mp3", ".mp3", "mp3")]
+    )
+    async def test_cut_lifts_a_low_rate_source_to_44100(
+        self, make_m4b, tmp_path, target, suffix, codec
+    ):
+        book = make_m4b("reenc-src", 30, [(0, 30, "A")], sample_rate=22050, channels=1)
+        segment = tmp_path / f"0000{suffix}"
+
+        size = await media.cut(
+            book, segment, start=0, duration=20,
+            title="A", artist="Autor", album="Buch", track=1,
+            encode=media.EncodeSpec(target=target, bitrate_kbps=64),
+        )
+
+        assert size > 0
+        probed = await media.probe(segment)
+        assert probed.sample_rate == 44100
+        assert probed.codec == codec
+        assert probed.duration == pytest.approx(20, abs=0.5)
+        assert media.conforms(probed)
+
+    @pytest.mark.parametrize("target,suffix", [("m4a", ".m4a"), ("mp3", ".mp3")])
+    async def test_reencode_keeps_the_tags(self, make_m4b, tmp_path, target, suffix):
+        """Garmin says a file without metadata may not be shown at all."""
+        book = make_m4b("reenc-tags", 30, [(0, 30, "A")], sample_rate=22050, channels=1)
+        segment = tmp_path / f"0001{suffix}"
+
+        await media.cut(
+            book, segment, start=0, duration=20,
+            title="Kapitel Eins", artist="Franz Kafka", album="Der Process", track=2,
+            encode=media.EncodeSpec(target=target, bitrate_kbps=64),
+        )
+
+        raw = await media._run(
+            "ffprobe", "-v", "error", "-print_format", "json", "-show_format", str(segment)
+        )
+        tags = {k.lower(): v for k, v in json.loads(raw)["format"].get("tags", {}).items()}
+        assert tags.get("title") == "Kapitel Eins"
+        assert tags.get("album") == "Der Process"

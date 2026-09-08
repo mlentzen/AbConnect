@@ -39,6 +39,9 @@ def test_reports_every_problem_at_once():
         ({"SEGMENT_TARGET_SECONDS": "not a number"}, "not an integer"),
         ({"SEGMENT_TARGET_SECONDS": "10"}, "minimum"),
         ({"SEGMENT_MIN_SECONDS": "1200"}, "implausible"),
+        ({"TRANSCODE_MODE": "sometimes"}, "auto, always or never"),
+        ({"TRANSCODE_TARGET": "flac"}, "m4a or mp3"),
+        ({"TRANSCODE_BITRATE_KBPS": "8"}, "minimum"),
     ],
 )
 def test_rejects_implausible_values(env, expected):
@@ -51,3 +54,11 @@ def test_nothing_is_baked_in():
     """Without an environment, no default may supply a server address or a key."""
     with pytest.raises(ConfigError):
         load({})
+
+
+def test_transcoding_defaults_to_repairing_only_what_is_broken():
+    """auto/m4a keeps the fast path and the container the watch already gets."""
+    config = load(MINIMAL)
+    assert config.transcode_mode == "auto"
+    assert config.transcode_target == "m4a"
+    assert config.transcode_bitrate_kbps == 64

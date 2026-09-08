@@ -20,6 +20,11 @@ class Encoding(str, Enum):
 # ABS reports codecs, the watch knows containers. Anything not listed here
 # cannot be played by the device and leads to a clear error instead of a file
 # the player silently refuses.
+#
+# This is the gate on acceptable *source* codecs only. Which container a segment
+# actually leaves in is decided later, in preparer._encode_for(), once the file
+# has been probed — a conforming source keeps its own, a non-conforming one gets
+# whatever TRANSCODE_TARGET says.
 CODEC_TO_ENCODING = {
     "aac": Encoding.M4A,
     "mp4a": Encoding.M4A,
