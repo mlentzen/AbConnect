@@ -1,0 +1,25 @@
+<strings>
+    <string id="AppName">AbConnect</string>
+
+    <string id="settingProxyUrlTitle">Proxy URL</string>
+    <string id="settingProxyUrlPrompt">Base URL of abconnect-proxy, e.g. https://abconnect.example</string>
+    <string id="settingProxyTokenTitle">Proxy token</string>
+    <string id="settingProxyTokenPrompt">The ABCONNECT_TOKEN from the proxy</string>
+    <string id="settingDeleteFinishedTitle">Delete finished books</string>
+    <string id="settingDeleteFinishedPrompt">Remove a book from the watch once it has been played to the end</string>
+
+    <string id="menuSyncTitle">Books</string>
+    <string id="menuPlaybackTitle">Play</string>
+    <string id="loading">Loading…</string>
+    <string id="noBooks">No books found</string>
+    <string id="notConfigured">Enter proxy URL and token in the phone app first</string>
+    <string id="statusPreparing">preparing</string>
+    <string id="statusReady">on watch</string>
+    <string id="statusPending">not prepared</string>
+    <string id="statusError">error</string>
+    <string id="resume">Resume</string>
+    <string id="fromStart">From the start</string>
+    <string id="nothingOnWatch">No book on the watch yet</string>
+    <string id="syncNothingToDo">Nothing to sync</string>
+    <string id="syncStillPreparing">Still being prepared on the server</string>
+</strings>

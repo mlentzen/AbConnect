@@ -1,0 +1,57 @@
+name: build
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  proxy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: ffmpeg installieren
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Abhängigkeiten
+        run: pip install -e './proxy[dev]'
+      - name: Tests
+        run: python -m pytest proxy/tests
+
+  app:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Connect-IQ-SDK holen
+        run: |
+          set -euo pipefail
+          curl -sSL https://developer.garmin.com/downloads/connect-iq/sdks/sdks.json -o sdks.json
+          file=$(python3 -c "import json;print(json.load(open('sdks.json'))[-1]['linux'])")
+          curl -sSL "https://developer.garmin.com/downloads/connect-iq/sdks/$file" -o sdk.zip
+          mkdir -p "$HOME/ciq" && unzip -q sdk.zip -d "$HOME/ciq"
+
+      # Die echten Geräteprofile liefert nur der SDK-Manager nach Garmin-Login.
+      # Der Build hier prüft deshalb Syntax, API-Symbole und Ressourcen gegen ein
+      # Ersatzprofil — er ersetzt weder einen Build gegen das echte Profil noch
+      # einen Test auf der Uhr.
+      - name: Ersatz-Geräteprofil
+        run: python3 tools/stub_device.py
+
+      - name: Entwicklerschlüssel
+        run: |
+          mkdir -p "$HOME/.ciq"
+          openssl genrsa -out "$HOME/.ciq/dev.pem" 4096
+          openssl pkcs8 -topk8 -inform PEM -outform DER \
+            -in "$HOME/.ciq/dev.pem" -out "$HOME/.ciq/developer_key" -nocrypt
+
+      - name: Bauen
+        env:
+          CIQ_HOME: ${{ github.workspace }}/../ciq
+        run: CIQ_HOME="$HOME/ciq" ./app/build.sh

@@ -1,0 +1,23 @@
+<strings>
+    <string id="settingProxyUrlTitle">Proxy-URL</string>
+    <string id="settingProxyUrlPrompt">Basis-URL des abconnect-proxy, z. B. https://abconnect.example</string>
+    <string id="settingProxyTokenTitle">Proxy-Token</string>
+    <string id="settingProxyTokenPrompt">Der ABCONNECT_TOKEN des Proxy</string>
+    <string id="settingDeleteFinishedTitle">Gehörte Bücher löschen</string>
+    <string id="settingDeleteFinishedPrompt">Buch von der Uhr entfernen, sobald es zu Ende gehört ist</string>
+
+    <string id="menuSyncTitle">Bücher</string>
+    <string id="menuPlaybackTitle">Abspielen</string>
+    <string id="loading">Lädt…</string>
+    <string id="noBooks">Keine Bücher gefunden</string>
+    <string id="notConfigured">Proxy-URL und Token zuerst in der Handy-App eintragen</string>
+    <string id="statusPreparing">wird vorbereitet</string>
+    <string id="statusReady">auf der Uhr</string>
+    <string id="statusPending">nicht vorbereitet</string>
+    <string id="statusError">Fehler</string>
+    <string id="resume">Fortsetzen</string>
+    <string id="fromStart">Von vorn</string>
+    <string id="nothingOnWatch">Noch kein Buch auf der Uhr</string>
+    <string id="syncNothingToDo">Nichts zu synchronisieren</string>
+    <string id="syncStillPreparing">Wird auf dem Server noch vorbereitet</string>
+</strings>
