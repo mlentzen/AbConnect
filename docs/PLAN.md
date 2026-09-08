@@ -160,10 +160,11 @@ Umgebung, Geheimnisse über Podman-Secrets:
 |---|---|---|
 | `ABS_URL` | ja | Basis-URL der ABS-Instanz (stackintern erreichbar) |
 | `ABS_API_KEY` | ja | ABS-API-Key, als Podman-Secret eingehängt |
-| `ABCONNECT_TOKEN` | ja | Token für Uhr → Proxy, unabhängig vom ABS-Key |
+| `ABCONNECT_TOKEN` | ja | Token für Uhr → Proxy, unabhängig vom ABS-Key; Komma-Liste für Rotation |
 | `CACHE_DIR` | — | Segment-Cache, Default `/var/cache/abconnect` |
 | `WORK_DIR` | — | transienter Platz für die `.m4b` während des Jobs |
-| `CACHE_MAX_BYTES` | — | Obergrenze, darüber LRU-Verdrängung |
+| `CACHE_MAX_BYTES` | — | Obergrenze, darüber LRU-Verdrängung; großzügig ansetzen |
+| `RELEASE_TTL_DAYS` | — | wie lange freigegebene Bücher im Cache bleiben, Default 30 |
 | `SEGMENT_TARGET_SECONDS` / `_MIN_` / `_MAX_` | — | Segmentnormalisierung, Default 900 / 180 / 1500 |
 | `LOG_LEVEL` | — | |
 
@@ -244,7 +245,8 @@ proxy/                       abconnect-proxy (Python/FastAPI + ffmpeg, Podman)
   abs_client.py              ABS-REST mit API-Key, Metadaten-Cache
   segmenter.py               Kapitel -> normalisierte Segmenttabelle, 15-min-Fallback
   preparer.py                Job: download -> ffprobe -> cut -> m4b löschen -> ready
-  cache.py                   CACHE_DIR-Verwaltung, LRU gegen CACHE_MAX_BYTES, Pinning
+  cache.py                   CACHE_DIR-Verwaltung, Pinning, Release-TTL, LRU als Notbremse
+  auth.py                    Bearer-Prüfung (konstantzeitig), signierte Cover-URLs
   api.py                     /v1/* Vertrag zur Uhr, /healthz
   progress.py                Segment-Offset <-> absolute Buchzeit, Push an ABS
 
@@ -287,12 +289,47 @@ deploy/                      Quadlet-Unit, Beispiel-Secrets, Setup-Doku
 | `GET /v1/books/{id}/status` | `pending` \| `preparing` (+ Prozent) \| `ready` \| `error` (+ Grund) |
 | `GET /v1/books/{id}/segments` | Segmentliste: Index, Titel, Dauer, Bytes — nur bei `ready` |
 | `GET /v1/books/{id}/seg/{n}.m4a` | fertiges Segment aus dem Cache |
-| `GET /v1/books/{id}/cover.jpg?w=` | verkleinertes Cover |
+| `GET /v1/books/{id}/cover.jpg?w=&exp=&sig=` | verkleinertes Cover, vorsignierte URL (siehe Auth) |
 | `POST /v1/books/{id}/release` | Uhr meldet: Buch nicht mehr benötigt → Cache darf verdrängen |
 | `POST /v1/progress` | Batch-Upload, Umrechnung auf Buchzeit, Weitergabe an ABS |
 | `GET /healthz` | Konfiguration + ABS-Erreichbarkeit |
 
-Alle `/v1`-Endpunkte verlangen `Authorization: Bearer $ABCONNECT_TOKEN`.
+### Auth zwischen Uhr und Proxy
+
+Alle `/v1`-Endpunkte verlangen `Authorization: Bearer <ABCONNECT_TOKEN>`. Das ist
+die einzige Absicherung dieser Strecke — TLS liefert Vertraulichkeit, der Token
+liefert Zugangskontrolle.
+
+**Was er leistet:** Er verhindert, dass ein beliebiger Aufrufer die Bibliothek
+ausliest, Prepare-Jobs auslöst (CPU und Plattenlast) oder über `/v1/progress`
+fremden Hörfortschritt nach ABS schreibt. Vor allem trennt er die Vertrauensebenen:
+der ABS-API-Key bleibt im Proxy, die Uhr kennt ihn nie. Ein kompromittierter Token
+lässt sich rotieren, ohne ABS anzufassen, und sein Schaden endet an der
+`/v1`-Oberfläche.
+
+**Was er nicht leistet:** Er ist ein geteiltes Geheimnis, keine Identität. Es gibt
+keine Unterscheidung einzelner Geräte und keine Sitzung. Auf der Uhr liegt er als
+Klartext in den Connect-IQ-App-Einstellungen und läuft über Garmin Connect —
+brauchbar als Zugangsschranke für einen privaten Stack, kein Ersatz für ein
+Auth-System mit Benutzern.
+
+Umsetzung:
+
+* Vergleich mit `hmac.compare_digest`, nicht mit `==`.
+* `ABCONNECT_TOKEN` akzeptiert eine Komma-Liste, damit ein neuer Token gesetzt
+  werden kann, bevor der alte aus den Uhreneinstellungen verschwindet.
+* Backoff nach wiederholt fehlgeschlagener Auth, damit der Endpunkt kein
+  Rateorakel wird.
+* Kein Token in URLs (siehe unten) — Reverse-Proxy-Logs schreiben Query-Strings mit.
+
+**Ausnahme Cover:** `Communications.makeImageRequest` unterstützt **kein**
+`:headers` (im Gegensatz zu `makeWebRequest`, das `:headers` auch zusammen mit
+`:responseType => HTTP_RESPONSE_CONTENT_TYPE_AUDIO` erlaubt). Das Cover kann den
+Bearer-Header also nicht mitschicken. Statt den Token als Query-Parameter
+anzuhängen, liefert `/v1/books/{id}/segments` eine **vorsignierte Cover-URL**:
+`?exp=<unix-ts>&sig=<HMAC(token, bookId|exp)>`, gültig einige Stunden. Die Uhr
+benutzt die URL unverändert; der langlebige Token landet nie in einem Logfile.
+Alle anderen Downloads laufen über `makeWebRequest` und damit über den Header.
 
 ### Datenfluss
 
@@ -319,9 +356,13 @@ Playback:      Store -> ContentIterator -> ActiveContent(ref, meta, startPos)
   auch im Fehlerfall (`try/finally`).
 * Bücher in der aktuellen Auswahl der Uhr sind **gepinnt** und werden nicht
   verdrängt; `release` hebt den Pin auf.
-* Darüber hinaus LRU gegen `CACHE_MAX_BYTES`. Ein verdrängtes Buch geht zurück auf
-  `pending` und wird bei Bedarf neu vorbereitet.
-* Vor dem Start eines Jobs wird geprüft, ob Quellgröße + Segmente ins Budget passen;
+* Plattenplatz ist in dieser Umgebung reichlich vorhanden, `CACHE_MAX_BYTES` wird
+  entsprechend hoch gesetzt. Freigegebene Bücher bleiben deshalb `RELEASE_TTL_DAYS`
+  lang liegen — ein erneut angekreuztes Buch ist dann sofort `ready`, ohne zweiten
+  Download und Schnitt. Das ist der eigentliche Nutzen des großen Caches.
+* LRU gegen `CACHE_MAX_BYTES` bleibt als Sicherheitsnetz, nicht als Regelbetrieb.
+  Ein verdrängtes Buch geht zurück auf `pending` und wird bei Bedarf neu vorbereitet.
+* Vor dem Start eines Jobs wird trotzdem geprüft, ob Quellgröße + Segmente passen;
   sonst `error` mit klarer Meldung statt vollgelaufener Platte.
 
 ### Object-Store-Layout auf der Uhr (8-KB-Grenze pro Wert)
@@ -342,14 +383,15 @@ Playback:      Store -> ContentIterator -> ActiveContent(ref, meta, startPos)
 |---|---|---|---|
 | R1 | ffmpeg-Stream-Copy erzeugt Datei, die die Uhr ablehnt | Ansatz kippt komplett | **Spike in M0** vor allem anderen: Segment von Hand schneiden und auf der fēnix abspielen |
 | R2 | Prepare-Job dauert länger als die Geduld beim Sync | Buch fehlt beim Sync | Auslösung schon beim Ankreuzen (E2); Sync zeigt Status statt zu blockieren |
-| R3 | Plattenplatz im Stack | Job schlägt fehl, Volume läuft voll | `CACHE_MAX_BYTES` + LRU + Pinning; Vorabprüfung; `.m4b` sofort nach Schnitt löschen |
+| R3 | Volume läuft trotz reichlich Platz voll (Fehlkonfiguration, WORK_DIR-Leichen) | Job schlägt fehl | Vorabprüfung; `.m4b` im `finally` löschen; LRU als Sicherheitsnetz; `/healthz` meldet Cache-Füllstand |
 | R4 | Netzlast ABS → Proxy bei jedem Prepare | langsam bei großen Büchern | einmalig pro Buch statt pro Segment; Backlog: `ffmpeg` per HTTP-Range direkt gegen die ABS-URL, falls Range zuverlässig unterstützt wird |
 | R5 | Kapitelmarken doch unbrauchbar (nicht monoton, außerhalb der Dauer) | falsche Segmentgrenzen | Validierung in `segmenter.py`, automatischer 15-min-Fallback, Report in M1 |
 | R6 | Unbekannte `makeWebRequest`-Dateigrenze | Sync bricht auf Hardware ab, im Simulator nicht | 5–10-MB-Segmente halten weit darunter; Grenze im M0-Spike bestimmen |
 | R7 | 8-KB-Property-Limit bei großer Bibliothek | Datenverlust/Absturz | Key-pro-Buch-Layout; Serialisierungstest mit 500 Büchern |
 | R8 | ABS-API-Änderungen (2.26er Auth-Umbau) | Proxy bricht | Versionscheck beim Start, `/healthz`, Smoke-Test im Repo |
 | R9 | fēnix 7 Pro **ohne WLAN**-Variante | Sync über BLE unpraktikabel langsam | Nur WLAN-Varianten unterstützen, in der Beschreibung nennen |
-| R10 | Store-Freigabe für Audio-Provider-Apps | Release verzögert | Review-Anforderungen früh prüfen, Sideload-Weg dokumentieren |
+| R10 | `ABCONNECT_TOKEN` ist ein geteiltes Geheimnis im Klartext auf der Uhr | kein Geräte-Widerruf, Token in Garmin Connect | bewusst akzeptiert für einen privaten Stack; Rotation über Komma-Liste, vorsignierte Cover-URLs statt Token im Query-String |
+| R11 | Store-Freigabe für Audio-Provider-Apps | Release verzögert | Review-Anforderungen früh prüfen, Sideload-Weg dokumentieren |
 
 ---
 
@@ -365,7 +407,8 @@ allen vier Delegates als Stubs, Build für `fenix7xpro` grün, CI kompiliert.
 Env-Validierung und `/healthz`, ABS-Client mit API-Key, Kapitelvalidierung und
 Segmentnormalisierung inkl. 15-min-Fallback, Prepare-Job mit Download → Schnitt →
 sofortiges Löschen der `.m4b`, Cache mit LRU und Pinning, `/v1/books`,
-`/status`, `/segments`, `/seg/{n}.m4a`, `/cover.jpg`, `/release`. Dazu ein
+`/status`, `/segments`, `/seg/{n}.m4a`, `/cover.jpg` mit vorsignierter URL,
+`/release`, Bearer-Auth mit konstantzeitigem Vergleich. Dazu ein
 Smoke-Test gegen die echte Instanz und ein Report über die Kapitelqualität der
 Bibliothek (R5). *Ergebnis: `curl` liefert ein abspielbares Segment, Quadlet läuft.*
 
@@ -416,10 +459,8 @@ Testebenen:
 
 ## 7. Offene Punkte
 
-1. Wie groß darf der Segment-Cache im Stack werden (`CACHE_MAX_BYTES`)? Bestimmt,
-   wie oft neu vorbereitet werden muss.
-2. Podcasts aus ABS mitnehmen oder auf Bücher beschränken?
-3. Veröffentlichung im Connect IQ Store oder nur Sideload?
+1. Podcasts aus ABS mitnehmen oder auf Bücher beschränken?
+2. Veröffentlichung im Connect IQ Store oder nur Sideload?
 
 ---
 
