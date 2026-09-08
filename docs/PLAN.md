@@ -4,8 +4,12 @@ Planungsdokument. Stand: 2026-09-08.
 
 Ziel: eine Monkey-C-App vom Typ `audio-content-provider-app`, die Hörbücher aus
 einer selbst gehosteten [Audiobookshelf](https://www.audiobookshelf.org/)-Instanz
-auf Garmin-Musikuhren synchronisiert, offline abspielt und den Hörfortschritt
+auf die Garmin-Uhr synchronisiert, offline abspielt und den Hörfortschritt
 zurückschreibt.
+
+**Zielumgebung (festgelegt):** aktuelle ABS-Version (≥ 2.26, API-Keys verfügbar),
+Bibliothek überwiegend als Einzeldatei-`.m4b`, Testgerät **fēnix 7X Pro**
+(Connect IQ Device-ID `fenix7xpro`, API Level 5.2).
 
 ---
 
@@ -41,172 +45,213 @@ Diese Punkte bestimmen die Architektur — sie sind nicht verhandelbar:
 3. **HTTPS-Pflicht auf Hardware.** Das Gerät akzeptiert nur TLS mit einer von einer
    bekannten CA signierten Kette. Self-signed-Zertifikate scheitern (im Simulator
    über *Settings → Use Device HTTPS Requirements* abschaltbar, auf der Uhr nicht).
-   → ABS muss hinter einem Reverse Proxy mit z. B. Let's-Encrypt-Zertifikat liegen
-   und aus dem WLAN erreichbar sein, in dem die Uhr synchronisiert.
-4. **Object Store: 8 KB pro Wert.** Verschachtelte Strukturen sprengen das Limit
-   sofort. → flache Maps, kurze Schlüssel, Aufteilung über mehrere Properties.
-5. **App-Größe** sollte unter 128 KB bleiben, damit Nutzer mehrere Apps installieren
-   können. Grafiken und Strings entsprechend sparsam.
-6. **Nur Musik-Geräte.** Uhren ohne Musikspeicher unterstützen den App-Typ nicht.
+4. **JSON-Antworten sind eng limitiert.** `makeWebRequest` bricht bei großen
+   Antworten mit `-402` (zu groß) bzw. `-403` (Speicher) ab; in der Praxis wird es
+   schon im niedrigen zweistelligen KB-Bereich kritisch. Eine ungefilterte
+   ABS-Bibliotheksantwort ist damit nicht verarbeitbar.
+5. **Object Store: 8 KB pro Wert.** Verschachtelte Strukturen sprengen das Limit
+   sofort. → flache Maps, kurze Schlüssel, ein Key pro Buch statt einer globalen Struktur.
+6. **App-Größe** möglichst unter 128 KB.
 
 ### 1.3 Relevante API-Details (verifiziert in den Toybox-Docs)
 
-Drei Punkte, die den Unterschied zwischen „Musikplayer" und „brauchbarer
+Drei Funde, die den Unterschied zwischen „Musikplayer" und „brauchbarer
 Hörbuch-App" ausmachen:
 
 * **`Media.Content(contentRef, contentMetadata)`** — Metadaten (title, artist,
-  album, genre, trackNumber) können vom App-Code gesetzt werden. Wir sind also
-  *nicht* auf korrekte ID3-Tags in den ABS-Dateien angewiesen.
+  album, genre, trackNumber) sind vom App-Code setzbar. Wir sind *nicht* auf
+  korrekte Tags in den Audiodateien angewiesen.
 * **`Media.ActiveContent(contentRef, metadata, playbackStartPos)`** — Subklasse von
   `Media.Content` mit Startposition in Sekunden. Damit ist echtes Resume mitten im
-  Kapitel möglich; der `ContentIterator` gibt für den aktuellen Track ein
+  Kapitel möglich: der `ContentIterator` gibt für den aktuellen Track ein
   `ActiveContent` mit gespeicherter Position zurück.
 * **`PlaybackProfile.skipForwardTimeDelta` / `skipBackwardTimeDelta`** — Standard 30 s,
-  für Hörbücher konfigurierbar (z. B. 30 s vor / 15 s zurück).
+  für Hörbücher anpassbar (30 s vor / 15 s zurück).
 
-Weiteres: `Media.setAlbumArt()` für Cover, `Media.getCacheStatistics()` für freien
-Speicher, `Media.deleteCachedItem(ref)` zum Löschen, `Media.resetContentCache()` für
-Full-Reset.
+Weiteres: `Media.setAlbumArt()`, `Media.getCacheStatistics()` (freier Speicher),
+`Media.deleteCachedItem(ref)`, `Media.resetContentCache()`.
 
-**`Media.SyncDelegate` ist deprecated** (Entfernung nach System 9 angekündigt).
-Wir implementieren gegen **`Communications.SyncDelegate`** (API 3.1.0) und halten
-über ein `has`-Guard einen Fallback bereit, solange minSdkVersion < 3.1 unterstützt
-werden soll.
+`Media.SyncDelegate` ist deprecated (Entfernung nach System 9). Da die fēnix 7X Pro
+API Level 5.2 bietet, setzen wir `minSdkVersion` auf 5.0 und implementieren
+ausschließlich gegen **`Communications.SyncDelegate`** (ab API 3.1.0). Kein Fallback nötig.
 
 ### 1.4 Audiobookshelf-API
 
-Auth (ABS ≥ 2.26): **API-Key**, Header `Authorization: Bearer <key>`, bei
-GET-Requests alternativ `?token=<key>`. Wird im Admin-UI unter
-Settings → Users → API Keys erzeugt, hat optionales Ablaufdatum und erbt die
-Rechte des zugeordneten Users. Für uns deutlich praktikabler als der
-JWT-Access/Refresh-Flow, weil auf der Uhr kein Login-Formular existiert.
+Auth: **API-Key** (ABS ≥ 2.26), Header `Authorization: Bearer <key>`, bei GET
+alternativ `?token=<key>`. Erzeugt im Admin-UI unter Settings → Users → API Keys,
+erbt die Rechte des zugeordneten Users, optionales Ablaufdatum. Praktikabler als
+der JWT-Access/Refresh-Flow, weil kein interaktiver Login stattfindet.
 
-Verwendete Endpunkte:
+Genutzte Endpunkte (vom Proxy, nicht von der Uhr):
 
 | Zweck | Endpunkt |
 |---|---|
 | Bibliotheken | `GET /api/libraries` |
 | Buchliste | `GET /api/libraries/{id}/items?limit&page&sort&minified=1` |
-| Buchdetails inkl. `media.audioFiles[]` | `GET /api/items/{id}?expanded=1&include=progress` |
+| Buchdetails inkl. `media.audioFiles[]`, `media.chapters[]` | `GET /api/items/{id}?expanded=1&include=progress` |
 | Laufende Bücher | `GET /api/me/items-in-progress` |
-| Einzeldatei-Download | `GET /api/items/{id}/file/{ino}/download` |
+| Datei-Download | `GET /api/items/{id}/file/{ino}/download` |
 | Cover | `GET /api/items/{id}/cover?width=...&format=jpeg` |
-| Fortschritt schreiben | `PATCH /api/me/progress/{libraryItemId}` mit `{currentTime, duration, progress, isFinished}` |
-| Fortschritt lesen | `GET /api/me/progress/{libraryItemId}` |
+| Fortschritt schreiben / lesen | `PATCH` bzw. `GET /api/me/progress/{libraryItemId}` |
 
-> Die exakten Pfade und Feldnamen sind gegen die Version der Zielinstanz zu
-> verifizieren — ABS hat die Auth- und Session-Endpunkte in 2.26 umgebaut. Ein
-> Smoke-Test-Skript gegen eine echte Instanz ist Teil von M1.
+> Exakte Pfade und Feldnamen sind gegen die Zielinstanz zu verifizieren — ABS hat
+> Auth und Sessions in 2.26 umgebaut. Ein Smoke-Test-Skript ist Teil von M1.
 
-Bewusst **nicht** genutzt: `POST /api/items/{id}/play` und die Session-/HLS-
-Endpunkte. Die liefern Transcoding-Streams, die das Gerät nicht abspielen kann,
-und erzeugen serverseitig Sessions, die wir offline ohnehin nicht sauber pflegen
-können. Fortschritt geht direkt über `/api/me/progress`.
+Bewusst **nicht** genutzt: `POST /api/items/{id}/play` und die Session-/HLS-Endpunkte.
+Die liefern Transcoding-Streams, die das Gerät nicht abspielen kann. Fortschritt
+läuft direkt über `/api/me/progress`.
 
 ---
 
 ## 2. Zentrale Designentscheidungen
 
-### E1 — Ein Kapitel = ein „Song"
+### E1 — `abconnect-proxy` ist Kernkomponente, nicht Beiwerk
 
-Die Uhr denkt in Tracks. Jede ABS-Audiodatei eines Buchs wird ein Track, das Buch
-ist das „Album", der Autor der „Artist", `trackNumber` die Reihenfolge. Damit
-funktionieren Next/Previous, Fortschrittsanzeige und Resume ohne Sonderlogik.
+Eine Einzeldatei-`.m4b` ist auf der Uhr direkt nicht sinnvoll nutzbar: ein Track
+für 12 Stunden, keine Kapitelnavigation, ein einziger mehrere hundert MB großer
+Download, dessen Abbruch alles kostet. Da die Bibliothek überwiegend aus `.m4b`
+besteht, wird der Proxy zur Voraussetzung — er wandert von „optional, Phase 2"
+an den Anfang der Roadmap.
 
-### E2 — Nur Multi-File-Bücher in Phase 1
+Der Proxy löst dabei **drei** Probleme auf einmal:
 
-Ein Buch als einzelne 800-MB-`.m4b` ist auf der Uhr unbrauchbar: nicht teilbar,
-oft jenseits sinnvoller Dateigrößen, und ein Abbruch beim Download kostet alles.
-Phase 1 filtert Bücher, deren `media.audioFiles` mehrere Dateien mit Codec MP3
-oder AAC/M4A enthält. Einzeldatei-Bücher werden in der Liste als „nicht
-unterstützt" markiert statt still zu fehlen.
+1. **Kapitelschnitt.** `ffmpeg -ss <start> -to <ende> -i buch.m4b -map_chapters -1 -c copy kapitel.m4a`
+   schneidet verlustfrei per Stream-Copy — kein Re-Encode, Laufzeit im
+   Sekundenbruchteil, Ergebnis ist AAC im MP4-Container und damit `ENCODING_M4A`.
+   Weil nicht transkodiert wird, braucht es kein Vorwärmen und keine Job-Queue;
+   der Schnitt passiert im Request.
+2. **Schlanke JSON-Antworten.** Die Uhr sieht nie eine ABS-Antwort, sondern flache,
+   auf das Nötige reduzierte Listen (siehe Constraint 1.2.4).
+3. **Angriffsfläche.** Nur der Proxy muss per HTTPS mit gültigem Zertifikat nach
+   außen; die ABS-Instanz kann intern bleiben. Der ABS-API-Key liegt im Proxy,
+   nicht auf der Uhr.
 
-Phase 2 (optional, siehe M6): **Companion-Proxy** `abconnect-proxy` — ein kleiner
-Dienst vor ABS, der `.m4b` anhand der Kapitelmarken in MP3-Häppchen (~10–15 min)
-schneidet, Bitrate auf 64 kbps mono normalisiert und Tags setzt. Das löst
-gleichzeitig Codec-, Größen- und Metadatenprobleme. Bewusst als separates,
-optionales Deployment — die App muss ohne ihn funktionieren.
+**Segmentnormalisierung:** ABS-Kapitel schwanken stark. Zielgröße 10–20 min:
+Kapitel unter 3 min werden mit dem Folgekapitel zusammengefasst, Kapitel über
+25 min am festen Raster geteilt (Teil 1/2/…). Bei 64 kbps ergibt das ~5–10 MB pro
+Segment — klein genug, dass ein Abbruch billig ist und die unbekannte
+`makeWebRequest`-Dateigrenze keine Rolle spielt. Bücher ohne Kapitelmarken werden
+rein zeitbasiert in 15-min-Blöcke geschnitten.
 
-### E3 — Konfiguration über App-Settings, nicht auf der Uhr
+**Proxy-API (Vertrag zur Uhr):**
 
-`serverUrl` und `apiKey` kommen aus den Connect-IQ-App-Einstellungen (in Garmin
-Connect Mobile bzw. Garmin Express eingetippt). Kein OAuth: ABS ist kein
-OAuth-Provider für Drittanwendungen, und der `makeOAuthRequest`-Weg aus
-MonkeyMusic würde einen zusätzlichen Redirect-Dienst erfordern.
+| Endpunkt | Zweck |
+|---|---|
+| `GET /v1/books?page=&q=` | flache Liste: `id`, Titel, Autor, Segmentanzahl, Gesamtdauer, Fortschritt |
+| `GET /v1/books/{id}/segments` | Segmentliste: Index, Titel, Dauer, Bytes |
+| `GET /v1/books/{id}/seg/{n}.m4a` | verlustfreier ffmpeg-Ausschnitt, on-disk gecacht |
+| `GET /v1/books/{id}/cover.jpg?w=` | verkleinertes Cover |
+| `POST /v1/progress` | Batch-Upload, Umrechnung Segment-Offset → absolute Buchzeit, Weitergabe an ABS |
+
+Auth Uhr → Proxy: eigenes statisches Token im Header, unabhängig vom ABS-Key.
+Auslieferung als Docker-Container neben ABS.
+
+### E2 — Ein Segment = ein „Song"
+
+Die Uhr denkt in Tracks. Jedes Segment wird ein Track, das Buch ist das „Album",
+der Autor der „Artist", der Segmentindex die `trackNumber`. Damit funktionieren
+Next/Previous, Fortschrittsanzeige und Resume ohne Sonderlogik.
+
+Die Uhr rechnet **nie** in absoluten Buchzeiten. Sie kennt nur
+`(Segmentindex, Offset im Segment)`; die Umrechnung in ABS-`currentTime` macht der
+Proxy anhand der Segmenttabelle. Das hält die Logik auf dem Gerät klein und die
+Segmentierung serverseitig änderbar.
+
+### E3 — Konfiguration über App-Settings
+
+`proxyUrl` und `proxyToken` kommen aus den Connect-IQ-App-Einstellungen (Eingabe in
+Garmin Connect Mobile). Kein OAuth: ABS ist kein OAuth-Provider für
+Drittanwendungen, und der `makeOAuthRequest`-Weg aus MonkeyMusic bräuchte einen
+zusätzlichen Redirect-Dienst.
 
 ### E4 — Fortschritt wird gepuffert, nicht live gepusht
 
-Während der Wiedergabe ist keine WLAN-Verbindung aktiv. `ContentDelegate.onSong()`
-liefert `(refId, event, playbackPosition)`; wir schreiben Position + Zeitstempel
-flach in den Object Store und pushen die Queue beim nächsten Sync gegen
-`/api/me/progress`. Beim Sync wird umgekehrt der Serverstand geholt, damit
-Weiterhören auf dem Handy auf der Uhr ankommt. Konfliktregel: **jüngerer
-Zeitstempel gewinnt**.
+Während der Wiedergabe ist kein WLAN aktiv. `ContentDelegate.onSong()` liefert
+`(refId, event, playbackPosition)`; wir schreiben `(bookId, segIdx, sek, ts)` flach
+in den Object Store und pushen die Queue beim nächsten Sync an `POST /v1/progress`.
+Umgekehrt holt der Sync den Serverstand, damit Weiterhören auf dem Handy auf der
+Uhr ankommt. Konfliktregel: **jüngerer Zeitstempel gewinnt**.
 
-### E5 — Sync ist deltabasiert
+### E5 — Sync ist deltabasiert und abbruchfest
 
-Der Object Store hält, welche Tracks lokal liegen. Sync berechnet
-`toDownload` / `toDelete` aus der Auswahl des Nutzers. Zusatzoption
-„abgeschlossene Bücher automatisch löschen" hält den Speicher frei.
+Der Object Store hält den lokalen Bestand. Der Sync berechnet `toDownload` /
+`toDelete` aus der Auswahl. Ein abgebrochener Sync verliert nur das gerade laufende
+Segment, nicht das Buch. Option „abgeschlossene Bücher automatisch löschen".
+
+### E6 — Multi-File-Bücher später, nicht zuerst
+
+Bücher, die in ABS bereits als mehrere MP3/M4A-Dateien vorliegen, könnten ohne
+Proxy direkt geladen werden. Da sie hier die Ausnahme sind, führt der Proxy sie
+einfach durch (Segmente = vorhandene Dateien). Ein proxyloser Direktmodus ist
+Backlog, kein Milestone.
 
 ---
 
 ## 3. Architektur
 
 ```
-source/
-  AbConnectApp.mc          AudioContentProviderApp: liefert die vier Delegates/Views
-  Constants.mc             Property-Keys, Enums, Versionsstempel für Store-Migration
+proxy/                       abconnect-proxy (Python/FastAPI + ffmpeg, Docker)
+  abs_client.py              ABS-REST, API-Key, Caching der Item-Metadaten
+  segmenter.py               Kapitel -> normalisierte Segmenttabelle (10-20 min)
+  cutter.py                  ffmpeg -ss/-to -c copy, on-disk Cache, LRU
+  api.py                     /v1/* Vertrag zur Uhr
+  progress.py                Segment-Offset <-> absolute Buchzeit, Push an ABS
 
-  abs/
-    AbsClient.mc           REST-Aufrufe, Bearer-Header, Basis-URL
-    AbsModels.mc           Parsen von JSON -> flache Records (Book, Track)
-    RequestQueue.mc        serielle Request-Kette + Context-Injection (vgl. RequestDelegate)
+source/                      Connect-IQ-App (Monkey C)
+  AbConnectApp.mc            AudioContentProviderApp: die vier Delegates/Views
+  Constants.mc               Property-Keys, Enums, Schema-Version
+
+  net/
+    ProxyClient.mc           /v1-Aufrufe, Token-Header
+    RequestQueue.mc          serielle Request-Kette + Context-Injection
 
   sync/
-    SyncDelegate.mc        Communications.SyncDelegate: Plan -> Delete -> Download -> Progress-Push
-    SyncPlanner.mc         Delta-Berechnung Auswahl vs. lokaler Bestand
-    Downloader.mc          makeWebRequest mit mediaEncoding, Retry, Fortschrittsmeldung
+    SyncDelegate.mc          Communications.SyncDelegate: Plan -> Delete -> Download -> Progress
+    SyncPlanner.mc           Delta Auswahl vs. lokaler Bestand
+    Downloader.mc            makeWebRequest mit :mediaEncoding, Retry, Fortschritt
 
   ui/
-    SyncConfigView.mc      Bibliothek -> Buchliste (CheckboxMenu), Paging
-    PlaybackConfigView.mc  lokale Bücher, Auswahl + „von vorn / fortsetzen"
-    ErrorView.mc           lesbare Fehler statt stiller Abbrüche
+    SyncConfigView.mc        Buchliste (CheckboxMenu), Paging
+    PlaybackConfigView.mc    lokale Bücher, „fortsetzen" / „von vorn"
     ProgressView.mc
+    ErrorView.mc             lesbare Fehler statt stiller Abbrüche
 
   playback/
-    ContentDelegate.mc     Iterator liefern, onSong/onPlaybackComplete -> Progress-Buffer
-    ContentIterator.mc     Reihenfolge, Metadaten, ActiveContent mit Startposition
-    ProgressStore.mc       flacher Puffer + Flush-API
+    ContentDelegate.mc       Iterator liefern, onSong -> Progress-Puffer
+    ContentIterator.mc       Reihenfolge, Metadaten, ActiveContent mit Startposition
+    ProgressStore.mc         flacher Puffer + Flush-API
 
-resources/                 Strings (de/en), Icons, settings.xml (serverUrl, apiKey, Optionen)
-manifest.xml
+resources/                   Strings (de/en), Icons, settings.xml (proxyUrl, proxyToken, Optionen)
+manifest.xml                 type=audio-content-provider-app, fenix7xpro, minSdkVersion 5.0
 monkey.jungle
 ```
 
 Datenfluss:
 
 ```
-Sync-Config:   ABS /api/libraries + /items  ->  CheckboxMenu  ->  Store: SELECTION
-Sync:          SELECTION vs. LOCAL -> delete(Media) + download(/file/{ino}/download)
-                                   -> Cover via makeImageRequest -> Store: LOCAL
-                                   -> PROGRESS_QUEUE  ->  PATCH /api/me/progress
-Playback:      LOCAL + PROGRESS -> ContentIterator -> ActiveContent(ref, meta, startPos)
-               onSong(pos) -> PROGRESS_QUEUE
+ABS  <--API-Key--  abconnect-proxy  <--HTTPS+Token--  fenix 7X Pro
+
+Sync-Config:   GET /v1/books            -> CheckboxMenu -> Store: SEL
+Sync:          GET /v1/books/{id}/segments -> Delta
+               GET /v1/books/{id}/seg/{n}.m4a -> Media-Cache (ENCODING_M4A)
+               GET /v1/books/{id}/cover.jpg   -> makeImageRequest
+               POST /v1/progress  <- Store: PRG        -> ABS /api/me/progress
+Playback:      Store -> ContentIterator -> ActiveContent(ref, meta, startPos)
+               onSong(pos) -> Store: PRG
 ```
 
-### Object-Store-Layout (8-KB-Grenze beachten)
+### Object-Store-Layout (8-KB-Grenze pro Wert)
 
-| Key | Inhalt | Grenzen |
-|---|---|---|
-| `SEL` | Array ausgewählter Buch-IDs | ~150 IDs, unkritisch |
-| `LOC_<bookId>` | flache Map `refId -> "trackIdx|dauer"` | ein Key **pro Buch**, nicht ein globaler |
-| `BOOK_<bookId>` | Titel, Autor, Cover-Status, Trackanzahl | kurze Strings, ggf. gekürzt |
-| `PRG` | flache Map `bookId -> "trackIdx|sek|ts"` | Wachstum begrenzen: nur Bücher mit lokalem Bestand |
-| `VER` | Schema-Version → bei Mismatch `clearProperties()` + `resetContentCache()` | |
+| Key | Inhalt |
+|---|---|
+| `SEL` | Array ausgewählter Buch-IDs |
+| `LOC_<bookId>` | flache Map `refId -> "segIdx\|dauer"` — **ein Key pro Buch** |
+| `BOOK_<bookId>` | Titel, Autor, Segmentanzahl, Cover-Status (kurze Strings) |
+| `PRG` | flache Map `bookId -> "segIdx\|sek\|ts"`, nur für lokal vorhandene Bücher |
+| `VER` | Schema-Version → bei Mismatch `clearProperties()` + `resetContentCache()` |
 
-Bewusst ein Key pro Buch statt einer globalen Struktur: das ist der Hauptgrund,
-warum Provider-Apps am 8-KB-Limit scheitern.
+Der Key-pro-Buch-Zuschnitt ist der Hauptgrund, warum Provider-Apps nicht am
+8-KB-Limit scheitern.
 
 ---
 
@@ -214,79 +259,88 @@ warum Provider-Apps am 8-KB-Limit scheitern.
 
 | # | Risiko | Wirkung | Gegenmaßnahme |
 |---|---|---|---|
-| R1 | TLS-Kette wird vom Gerät abgelehnt | Sync unmöglich | Doku: Reverse Proxy + Let's Encrypt; Setup-Check-Screen mit klarer Fehlermeldung |
-| R2 | Einzeldatei-`.m4b` | Großteil mancher Bibliotheken nicht nutzbar | E2: Filter + sichtbare Kennzeichnung, Phase 2 Proxy |
-| R3 | Unbekannte Limits für Dateigröße/-anzahl pro Gerät | Sync bricht auf Hardware ab, im Simulator nicht | Früher Hardware-Test in M2; Dateien > X MB überspringen und melden |
-| R4 | 8-KB-Property-Limit bei großen Bibliotheken | Datenverlust/Absturz | Layout oben; Serialisierungstest mit 500 Büchern |
-| R5 | ABS-API-Änderungen (2.26 Auth-Umbau) | Client bricht | Versionscheck beim ersten Request, Smoke-Test-Skript im Repo |
-| R6 | Sync-Zeitfenster/WLAN-Timeout bei GB-Downloads | Teil-Sync | Resume-fähige Delta-Logik: abgebrochener Sync verliert nur den laufenden Track |
-| R7 | Store-Freigabe für Audio-Provider-Apps | Release verzögert | Review-Anforderungen früh prüfen; Sideload-Weg dokumentieren |
+| R1 | TLS-Kette wird vom Gerät abgelehnt | Sync unmöglich | Proxy hinter Reverse Proxy mit Let's Encrypt; Setup-Check-Screen mit klarer Meldung; im Simulator HTTPS-Requirement abschaltbar |
+| R2 | `.m4b` mit fehlenden/kaputten Kapitelmarken | Segmentierung unbrauchbar | Fallback auf zeitbasierte 15-min-Blöcke; Prüfung in M1 gegen die echte Bibliothek |
+| R3 | ffmpeg-Stream-Copy erzeugt Datei, die die Uhr ablehnt | kompletter Ansatz kippt | **Spike in M0** vor allem anderen: ein Segment von Hand schneiden und auf der fēnix abspielen |
+| R4 | Unbekannte `makeWebRequest`-Dateigrenze | Sync bricht auf Hardware ab, im Simulator nicht | 5–10-MB-Segmente halten weit darunter; Grenze im M0-Spike empirisch bestimmen |
+| R5 | 8-KB-Property-Limit bei großer Bibliothek | Datenverlust/Absturz | Layout oben; Serialisierungstest mit 500 Büchern |
+| R6 | ABS-API-Änderungen (2.26er Auth-Umbau) | Proxy bricht | Versionscheck beim Start, Smoke-Test-Skript im Repo |
+| R7 | Proxy als zusätzliche Betriebskomponente | Einstiegshürde, Wartung | Ein Docker-Container, eine Compose-Datei, Beispiel für Reverse-Proxy-Konfiguration |
+| R8 | fēnix 7 Pro **ohne WLAN**-Variante | Sync über BLE unpraktikabel langsam | Nur WLAN-Varianten unterstützen, in der Store-Beschreibung nennen |
+| R9 | Store-Freigabe für Audio-Provider-Apps | Release verzögert | Review-Anforderungen früh prüfen, Sideload-Weg dokumentieren |
 
 ---
 
 ## 5. Roadmap
 
-**M0 — Gerüst (klein halten)**
-SDK + Simulator, `manifest.xml` mit `audio-content-provider-app`, App-Klasse mit
-allen vier Delegates als Stubs, Build für `fr645m` grün, `monkey.jungle`,
-CI-Job der kompiliert.
+**M0 — Machbarkeits-Spike (zuerst, klein, entscheidet alles)**
+Ein Buch der echten Bibliothek von Hand mit ffmpeg `-c copy` in ein Segment
+schneiden, per Mini-HTTP-Server ausliefern, mit einer Wegwerf-App auf der
+fēnix 7X Pro herunterladen und abspielen. Beantwortet R3 und R4, bevor Code
+entsteht. Parallel: App-Gerüst mit allen vier Delegates als Stubs, Build für
+`fenix7xpro` grün, CI-Job der kompiliert.
 
-**M1 — ABS-Client + Sync-Konfiguration**
-`settings.xml` (serverUrl, apiKey), `AbsClient` mit Bearer-Auth, Bibliotheks- und
-Buchliste mit Paging, `CheckboxMenu` mit Vorauswahl aus dem Store, Fehlerview für
-401/404/TLS. Dazu ein Shell-/Python-Smoke-Test, der die genutzten Endpunkte gegen
-eine echte Instanz verifiziert. *Ergebnis: Auswahl landet im Object Store.*
+**M1 — `abconnect-proxy` v1**
+ABS-Client mit API-Key, Metadaten-Cache, Kapitel→Segment-Normalisierung,
+`/v1/books`, `/v1/books/{id}/segments`, `/v1/books/{id}/seg/{n}.m4a` mit
+On-Disk-Cache, `/v1/.../cover.jpg`. Dazu ein Smoke-Test gegen die echte Instanz,
+der die ABS-Endpunkte verifiziert, und ein Report über die Kapitelqualität der
+Bibliothek (R2). *Ergebnis: `curl` liefert ein abspielbares Segment.*
 
-**M2 — Sync**
-`Communications.SyncDelegate`, Delta-Planer, serielle Downloads mit
-`:mediaEncoding`, `notifySyncProgress`/`notifySyncComplete`, Löschen über
-`deleteCachedItem`, Cover via `makeImageRequest`. **Erster Test auf echter
-Hardware** — hier zeigen sich R1 und R3. *Ergebnis: Buch liegt auf der Uhr.*
+**M2 — Sync-Konfiguration und Sync**
+`settings.xml` (proxyUrl, proxyToken), `ProxyClient`, Buchliste mit Paging als
+`CheckboxMenu` mit Vorauswahl, `Communications.SyncDelegate` mit Delta-Planer,
+serielle Downloads mit `:mediaEncoding => Media.ENCODING_M4A`,
+`notifySyncProgress`/`notifySyncComplete`, `deleteCachedItem`, Cover via
+`makeImageRequest`, Speicherprüfung über `getCacheStatistics()` vor dem Sync.
+*Ergebnis: ein Buch liegt vollständig auf der Uhr.*
 
 **M3 — Wiedergabe**
-`ContentDelegate` + `ContentIterator`, Metadaten aus dem Store statt aus ID3,
-`PlaybackProfile` mit Hörbuch-Skips, `ActiveContent` mit Startposition,
-Playback-Konfiguration („fortsetzen" / „von vorn"). *Ergebnis: Kapitel spielt in
-richtiger Reihenfolge, Resume funktioniert.*
+`ContentDelegate` + `ContentIterator`, Metadaten aus dem Store statt aus Tags,
+`PlaybackProfile` mit Hörbuch-Skips (30 s / 15 s), `ActiveContent` mit
+Startposition, Playback-Konfiguration mit „fortsetzen" / „von vorn".
+*Ergebnis: Segmente laufen in richtiger Reihenfolge, Resume funktioniert.*
 
-**M4 — Fortschritt**
-`onSong`-Puffer, Flush beim Sync via `PATCH /api/me/progress`, Serverstand beim
-Sync einlesen, Konfliktregel jüngster Zeitstempel, „abgeschlossene löschen".
+**M4 — Fortschritt bidirektional**
+`onSong`-Puffer, Flush an `POST /v1/progress`, Umrechnung im Proxy, Serverstand
+beim Sync einlesen, Konfliktregel jüngster Zeitstempel, „abgeschlossene löschen".
 *Ergebnis: Handy und Uhr bleiben synchron.*
 
 **M5 — Härtung & Release**
-Weitere Geräte (venu2, fenix7, fr965 …), Speicherprüfung über
-`getCacheStatistics()` vor dem Sync, Strings de/en, Store-Migration über `VER`,
-Icon-Sets, Store-Einreichung bzw. Sideload-Anleitung.
+Fehlerpfade (401, Proxy offline, Speicher voll, Sync-Abbruch), Strings de/en,
+Store-Migration über `VER`, Icons, Compose-Datei und Setup-Doku für den Proxy,
+Store-Einreichung bzw. Sideload-Anleitung.
 
-**M6 — optional: `abconnect-proxy`**
-Kapitelweises Segmentieren und Transcodieren von `.m4b` (E2). Eigener
-Container, eigenes Verzeichnis im Repo, kein Zwang für Nutzer.
+**Backlog** (kein Milestone): weitere Geräte über `fenix7xpro` hinaus,
+proxyloser Direktmodus für Multi-File-Bibliotheken (E6), optionales Re-Encode auf
+niedrigere Bitrate, Podcast-Unterstützung.
 
 ---
 
-## 6. Zielgeräte und Test
+## 6. Zielgerät und Test
 
-Primär: Forerunner 645 Music (kleinster gemeinsamer Nenner, auch die Garmin-Referenz).
-Danach: Venu 2/3, Fenix 7/8 Serie, Forerunner 265/965, Vívoactive 5.
+Zielgerät: **fēnix 7X Pro** (`fenix7xpro`, API Level 5.2, 32 GB Speicher).
+`minSdkVersion` 5.0. Erst nach M5 weitere Geräte — jedes zusätzliche Gerät kostet
+Layout- und Testaufwand ohne neue Funktion.
 
 Testebenen:
-1. **Simulator** — Funktionslogik, alle vier Modi, HTTPS-Anforderung testweise aus.
-2. **Smoke-Test gegen echte ABS-Instanz** — API-Verträge, außerhalb von Monkey C.
-3. **Hardware** — ab M2 verpflichtend; TLS, Dateigrößen und Speicher lassen sich
-   im Simulator nicht validieren.
+1. **Simulator** — Funktionslogik, alle vier Modi, HTTPS-Requirement testweise aus.
+2. **Proxy-Tests** — Segmentierung und Schnitt gegen echte `.m4b`-Dateien,
+   außerhalb von Monkey C, schnell und automatisierbar.
+3. **Hardware** — ab M0 im Spiel und ab M2 verpflichtend: TLS, Dateigrößen,
+   Speicher und Codec-Akzeptanz lassen sich im Simulator nicht validieren.
 
 ---
 
 ## 7. Offene Punkte
 
-1. Welche ABS-Version läuft auf der Zielinstanz (< oder ≥ 2.26)? Bestimmt den Auth-Pfad.
-2. Wie sind die Bibliotheken beschaffen — überwiegend Multi-File-MP3 oder Einzeldatei-`.m4b`?
-   Entscheidet, ob M6 optional bleibt oder Pflicht wird.
-3. Welche Uhr steht real zum Testen zur Verfügung? Setzt `minSdkVersion` und die
-   Geräteliste im Manifest.
-4. Podcasts aus ABS mit aufnehmen oder auf Bücher beschränken?
-5. Veröffentlichung im Connect IQ Store oder nur Sideload?
+1. Wie zuverlässig sind die Kapitelmarken in der Bibliothek? Entscheidet, wie oft
+   der zeitbasierte Fallback greift (Messung in M1).
+2. Wo läuft der Proxy — auf demselben Host wie ABS oder getrennt? Bestimmt
+   Compose-Setup und Zugriff aufs Medienverzeichnis (direkter Dateizugriff wäre
+   schneller als der Umweg über die ABS-Download-API).
+3. Podcasts aus ABS mitnehmen oder auf Bücher beschränken?
+4. Veröffentlichung im Connect IQ Store oder nur Sideload?
 
 ---
 
@@ -300,5 +354,8 @@ Testebenen:
   [PlaybackProfile](https://developer.garmin.com/connect-iq/api-docs/Toybox/Media/PlaybackProfile.html)
 * [Toybox.Communications.SyncDelegate](https://developer.garmin.com/connect-iq/api-docs/Toybox/Communications/SyncDelegate.html)
 * [Creating Music Apps in Connect IQ 3](https://www.garmin.com/en-US/blog/developer/creating-music-apps-3x/)
+* [Connect IQ Compatible Devices](https://developer.garmin.com/connect-iq/compatible-devices/)
 * [Audiobookshelf API Reference](https://api.audiobookshelf.org/) ·
   [API Keys](https://audiobookshelf.org/docs/documentation/server-management/api-keys/)
+* [M4B verlustfrei nach Kapiteln schneiden](https://orsolabs.dev/audiobo/guides/split-m4b-into-chapters/) ·
+  [m4b-tool](https://github.com/sandreas/m4b-tool)

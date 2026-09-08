@@ -8,9 +8,19 @@ offline über den System-Mediaplayer ab und schreibt den Hörfortschritt zurück
 
 Status: **Planung**. Der Umsetzungsplan steht in [docs/PLAN.md](docs/PLAN.md).
 
-## Voraussetzungen (geplant)
+## Aufbau
 
-- Audiobookshelf-Server, per HTTPS mit gültigem CA-Zertifikat erreichbar
+AbConnect besteht aus zwei Teilen:
+
+- **`abconnect-proxy`** — Docker-Container neben Audiobookshelf. Schneidet `.m4b`
+  verlustfrei kapitelweise in Segmente, die die Uhr abspielen kann, liefert
+  schlanke JSON-Antworten und hält den ABS-API-Key.
+- **Connect-IQ-App** — App vom Typ `audio-content-provider-app`, die Segmente
+  herunterlädt, abspielt und den Fortschritt puffert.
+
+## Voraussetzungen
+
+- Audiobookshelf ≥ 2.26 mit API-Key
+- `abconnect-proxy`, per HTTPS mit gültigem CA-Zertifikat erreichbar
   (Garmin-Geräte lehnen selbstsignierte Zertifikate ab)
-- API-Key aus Audiobookshelf (Settings → Users → API Keys)
-- Garmin-Uhr mit Musikspeicher
+- Garmin-Uhr mit Musikspeicher und WLAN — Zielgerät zunächst fēnix 7X Pro
