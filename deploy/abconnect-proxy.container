@@ -1,0 +1,38 @@
+# Podman-Quadlet: nach ~/.config/containers/systemd/ legen,
+# dann `systemctl --user daemon-reload && systemctl --user start abconnect-proxy`.
+#
+# Im Image steht weder eine Serveradresse noch ein Schlüssel — beides kommt
+# von hier. Fehlt eine Pflichtvariable, startet der Container nicht.
+
+[Unit]
+Description=AbConnect proxy (Audiobookshelf -> Garmin)
+After=audiobookshelf.service
+Wants=audiobookshelf.service
+
+[Container]
+Image=localhost/abconnect-proxy:latest
+ContainerName=abconnect-proxy
+
+Environment=ABS_URL=https://audiobookshelf.internal
+Secret=abs-api-key,type=env,target=ABS_API_KEY
+Secret=abconnect-token,type=env,target=ABCONNECT_TOKEN
+
+# Platz ist vorhanden: großzügiges Budget, damit freigegebene Bücher liegen
+# bleiben und ein erneutes Ankreuzen ohne zweiten Download auskommt.
+Environment=CACHE_MAX_BYTES=214748364800
+Environment=RELEASE_TTL_DAYS=30
+Environment=LOG_LEVEL=INFO
+
+Volume=abconnect-cache:/var/cache/abconnect
+Volume=abconnect-work:/var/tmp/abconnect
+
+PublishPort=127.0.0.1:8080:8080
+HealthCmd=/usr/bin/curl -fsS http://localhost:8080/healthz
+HealthInterval=60s
+HealthStartPeriod=20s
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target
