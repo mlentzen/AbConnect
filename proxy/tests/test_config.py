@@ -57,8 +57,8 @@ def test_nothing_is_baked_in():
 
 
 def test_transcoding_defaults_to_repairing_only_what_is_broken():
-    """auto/m4a keeps the fast path and the container the watch already gets."""
+    """auto/mp3 keeps the fast path but re-encodes to the format proven to play."""
     config = load(MINIMAL)
     assert config.transcode_mode == "auto"
-    assert config.transcode_target == "m4a"
+    assert config.transcode_target == "mp3"
     assert config.transcode_bitrate_kbps == 64

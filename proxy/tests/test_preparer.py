@@ -367,7 +367,9 @@ class TestForcedRePrepare:
 
     async def test_force_recuts_and_picks_up_the_new_target(self, tmp_path, low_rate_source):
         item, source = low_rate_source
-        preparer, cache, abs_client, _ = await build(tmp_path, item, source)
+        # Cut first with the container the fallback below must move away from,
+        # independent of whatever the global default currently is.
+        preparer, cache, abs_client, _ = await build(tmp_path, item, source, transcode_target="m4a")
         assert (await run(preparer)).status is Status.READY
         assert cache.load_manifest("li_1")["segments"][0]["file"].endswith(".m4a")
 
@@ -389,7 +391,7 @@ class TestForcedRePrepare:
     async def test_force_leaves_stale_segment_files_behind_nowhere(self, tmp_path, low_rate_source):
         """A re-cut into a different container must not leave the old files."""
         item, source = low_rate_source
-        preparer, cache, abs_client, _ = await build(tmp_path, item, source)
+        preparer, cache, abs_client, _ = await build(tmp_path, item, source, transcode_target="m4a")
         await run(preparer)
 
         cfg = make_config(tmp_path, transcode_target="mp3")

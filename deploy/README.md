@@ -121,7 +121,7 @@ curl -s -H "Authorization: Bearer $TOKEN" localhost:18543/v1/books/<ID>/segments
 | `SEGMENT_MAX_SECONDS` | — | 1500 | above this, segments are split |
 | `COVER_URL_TTL_SECONDS` | — | 21600 | validity of the signed cover URLs |
 | `TRANSCODE_MODE` | — | `auto` | `auto` re-encodes only what the watch will not play, `always` everything, `never` nothing |
-| `TRANSCODE_TARGET` | — | `m4a` | container for re-encoded segments; `mp3` is the fallback |
+| `TRANSCODE_TARGET` | — | `mp3` | container for re-encoded segments; `m4a` keeps the original container |
 | `TRANSCODE_BITRATE_KBPS` | — | 64 | bitrate of a re-encoded segment |
 | `LOG_LEVEL` | — | INFO | |
 

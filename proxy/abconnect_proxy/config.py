@@ -24,7 +24,7 @@ DEFAULTS = {
     "SEGMENT_MAX_SECONDS": "1500",
     "COVER_URL_TTL_SECONDS": "21600",
     "TRANSCODE_MODE": "auto",
-    "TRANSCODE_TARGET": "m4a",
+    "TRANSCODE_TARGET": "mp3",
     "TRANSCODE_BITRATE_KBPS": "64",
     "HTTP_TIMEOUT_SECONDS": "60",
     "LOG_LEVEL": "INFO",
@@ -123,8 +123,10 @@ def load(env: dict[str, str] | None = None) -> Config:
     if transcode_mode not in ("auto", "always", "never"):
         problems.append(f"TRANSCODE_MODE: '{transcode_mode}' is not auto, always or never")
 
-    # m4a keeps the container the watch already receives; mp3 is the fallback
-    # the one working reference implementation runs in production.
+    # mp3 is what the one working reference implementation runs in production —
+    # unlike m4a/AAC it is proven to actually start on the watch. m4a stays
+    # selectable for a source that already conforms and would rather keep its
+    # container.
     transcode_target = (env.get("TRANSCODE_TARGET") or DEFAULTS["TRANSCODE_TARGET"]).strip().lower()
     if transcode_target not in ("m4a", "mp3"):
         problems.append(f"TRANSCODE_TARGET: '{transcode_target}' is not m4a or mp3")
