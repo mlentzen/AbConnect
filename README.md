@@ -54,7 +54,8 @@ python3 -m venv .venv && .venv/bin/pip install -e './proxy[dev]'
 # Proxy: installieren und betreiben -> deploy/README.md
 ./deploy/install.sh
 
-# App bauen -> app/README.md
+# App bauen -> app/README.md (URL und Token wandern in die .prg)
+PROXY_URL=https://abconnect.example PROXY_TOKEN=... \
 CIQ_HOME=/pfad/zum/sdk ./app/build.sh
 ```
 

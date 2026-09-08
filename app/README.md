@@ -30,6 +30,8 @@ im Kapitel fort.
 ## Bauen
 
 ```sh
+PROXY_URL=https://abconnect.example \
+PROXY_TOKEN=$ABCONNECT_TOKEN \
 CIQ_HOME=/pfad/zum/sdk ./build.sh
 ```
 
@@ -47,10 +49,48 @@ den nicht hat, kann mit `python3 ../tools/stub_device.py` ein **Ersatzprofil**
 erzeugen. Damit lässt sich übersetzen und typprüfen — Speicherlimits, Layout und
 Verhalten auf der Uhr sagt ein solcher Build aber nichts.
 
+### Warum die Zugangsdaten in den Build gehören
+
+Seitlich geladene Connect-IQ-Apps bekommen in Garmin Connect **keine**
+Einstellungsseite — die App käme auf der Uhr also nie an Proxy-URL und Token.
+Deshalb setzt `build.sh` beide als Vorgabewerte ins Paket:
+`resources/settings/properties.xml.in` ist die Vorlage im Git, die daraus
+erzeugte `properties.xml` steht in `.gitignore`, weil sie das Token enthält.
+
+| Variable | Pflicht | Default | Bedeutung |
+|---|---|---|---|
+| `PROXY_URL` | faktisch ja | leer | Basis-URL des Proxy |
+| `PROXY_TOKEN` | faktisch ja | leer | `ABCONNECT_TOKEN` des Proxy |
+| `DELETE_FINISHED` | — | `false` | gehörte Bücher von der Uhr entfernen |
+
+Ohne die beiden Werte baut das Skript weiter, warnt aber: die App meldet auf
+der Uhr dann *„Proxy-URL und Token zuerst in der Handy-App eintragen"*. Die
+Einstellungsseite bleibt erhalten und überschreibt die Vorgaben, falls die App
+je aus dem Connect-IQ-Store installiert wird.
+
+**Die fertige `.prg` enthält damit das Token** — nicht weitergeben.
+
+## Auf der Uhr
+
+Die App startet in vier Modi, und der Einstieg ist nicht der, den man erwartet.
+Wer den Anbieter einfach öffnet, landet in der Playback-Konfiguration und sieht
+„Noch kein Buch auf der Uhr", solange nichts geladen ist. Zur **Buchauswahl**
+führt der Download-Pfad:
+
+1. Auf einer beliebigen Seite **DOWN** gedrückt halten (Musikfunktionen)
+2. **MENU** gedrückt halten
+3. **Musikanbieter**
+4. **AbConnect**
+5. Bücher ankreuzen
+6. **BACK**, bis die Uhr zur Synchronisierung auffordert
+
+Geladen wird über WLAN, sinnvollerweise am Ladegerät.
+
 ## Stand
 
-Übersetzt sauber gegen SDK 9.2 bei Typprüfung Stufe 2 (informative). **Noch nie
-auf Hardware gelaufen** — der Spike aus M0 des [Plans](../docs/PLAN.md) steht aus.
+Übersetzt sauber gegen SDK 9.2 bei Typprüfung Stufe 2 (informative). Startet
+auf der fēnix 7X Pro und wird dort als Musikanbieter geführt; Sync und Playback
+sind noch nicht auf Hardware durchgespielt.
 
 Offen:
 - Typprüfung Stufe 3 (strict): 27 Meldungen, alle zu generischen Typparametern

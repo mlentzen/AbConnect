@@ -46,14 +46,19 @@ class ProxyClient {
         return _base + path;
     }
 
-    private function headers() as Dictionary {
+    //! Nicht `headers` nennen: der Name kollidiert mit dem Options-Schlüssel
+    //! `:headers` von makeWebRequest. Der Compiler liest das Symbol dann als
+    //! indirekten Verweis auf diese private Methode und warnt, dass er sie zur
+    //! Laufzeit nicht findet — im schlechtesten Fall geht der Request ohne
+    //! Authorization-Kopfzeile raus.
+    private function authHeaders() as Dictionary {
         return { "Authorization" => "Bearer " + _token };
     }
 
     private function jsonOptions() as Dictionary {
         return {
             :method => Communications.HTTP_REQUEST_METHOD_GET,
-            :headers => headers(),
+            :headers => authHeaders(),
             :responseType => Communications.HTTP_RESPONSE_CONTENT_TYPE_JSON
         };
     }
@@ -80,7 +85,7 @@ class ProxyClient {
             null,
             {
                 :method => Communications.HTTP_REQUEST_METHOD_POST,
-                :headers => headers(),
+                :headers => authHeaders(),
                 :responseType => Communications.HTTP_RESPONSE_CONTENT_TYPE_JSON
             },
             callback
@@ -97,7 +102,7 @@ class ProxyClient {
             null,
             {
                 :method => Communications.HTTP_REQUEST_METHOD_POST,
-                :headers => headers(),
+                :headers => authHeaders(),
                 :responseType => Communications.HTTP_RESPONSE_CONTENT_TYPE_JSON
             },
             callback
@@ -114,7 +119,7 @@ class ProxyClient {
             null,
             {
                 :method => Communications.HTTP_REQUEST_METHOD_GET,
-                :headers => headers(),
+                :headers => authHeaders(),
                 :responseType => Communications.HTTP_RESPONSE_CONTENT_TYPE_AUDIO,
                 :mediaEncoding => mediaEncoding(encoding)
             },

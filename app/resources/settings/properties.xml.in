@@ -1,0 +1,8 @@
+<!-- Vorlage. build.sh erzeugt daraus properties.xml und setzt die Platzhalter
+     aus der Umgebung ein; die erzeugte Datei ist absichtlich nicht im Git,
+     weil sie das Proxy-Token enthält. -->
+<properties>
+    <property id="proxyUrl" type="string">@PROXY_URL@</property>
+    <property id="proxyToken" type="string">@PROXY_TOKEN@</property>
+    <property id="deleteFinished" type="boolean">@DELETE_FINISHED@</property>
+</properties>
