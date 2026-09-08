@@ -51,8 +51,8 @@ Ansatz nicht — das gehört vor jede weitere Arbeit.
 python3 -m venv .venv && .venv/bin/pip install -e './proxy[dev]'
 .venv/bin/python -m pytest proxy/tests
 
-# Proxy: bauen und betreiben -> deploy/README.md
-podman build -t abconnect-proxy:latest ./proxy
+# Proxy: installieren und betreiben -> deploy/README.md
+./deploy/install.sh
 
 # App bauen -> app/README.md
 CIQ_HOME=/pfad/zum/sdk ./app/build.sh

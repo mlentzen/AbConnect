@@ -20,21 +20,25 @@ class AbConnectApp extends Application.AudioContentProviderApp {
 
     //! Modus 1: Nutzer wählt aus, was auf die Uhr soll.
     function getSyncConfigurationView() as [WatchUi.Views] or [WatchUi.Views, WatchUi.InputDelegates] {
+        Log.line("Modus: Sync-Konfiguration");
         return [new SyncConfigView()];
     }
 
     //! Modus 2: das System hat WLAN aktiviert und lässt uns laden.
     function getSyncDelegate() as Communications.SyncDelegate? {
+        Log.line("Modus: Sync");
         return new AbSyncDelegate();
     }
 
     //! Modus 3: Nutzer wählt aus, was abgespielt wird.
     function getPlaybackConfigurationView() as [WatchUi.Views] or [WatchUi.Views, WatchUi.InputDelegates] {
+        Log.line("Modus: Playback-Konfiguration");
         return [new PlaybackConfigView()];
     }
 
     //! Modus 4: der System-Player fragt uns nach den Tracks.
     function getContentDelegate(args as Application.PersistableType) as Media.ContentDelegate {
+        Log.line("Modus: Playback");
         return new AbContentDelegate();
     }
 

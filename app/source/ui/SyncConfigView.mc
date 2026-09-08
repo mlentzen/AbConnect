@@ -28,6 +28,7 @@ class SyncConfigView extends WatchUi.View {
             showMessage(Rez.Strings.notConfigured);
             return;
         }
+        Log.line("Konfig: hole Playlist");
         _client.playlist(method(:onPlaylist));
     }
 
@@ -44,6 +45,7 @@ class SyncConfigView extends WatchUi.View {
     }
 
     function onPlaylist(code as Number, data as Dictionary or String or Null) as Void {
+        Log.code("Konfig: playlist", code);
         if (code == 409) {
             showMessage(Rez.Strings.syncNoPlaylist);
             return;
@@ -134,9 +136,11 @@ class SyncConfigDelegate extends WatchUi.Menu2InputDelegate {
     }
 
     function onSelect(item as WatchUi.MenuItem) as Void {
+        // Die Liste ist reine Anzeige: ausgewählt wird in der Playlist.
     }
 
     function onBack() as Void {
+        Log.code("Konfig: zurück, Playlist-Stand", Store.desired().size());
         WatchUi.popView(WatchUi.SLIDE_IMMEDIATE);
     }
 }

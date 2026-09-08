@@ -14,8 +14,8 @@ class ProxyClient {
     private var _token as String;
 
     function initialize() {
-        _base = readSetting(Settings.PROXY_URL);
-        _token = readSetting(Settings.PROXY_TOKEN);
+        _base = readSetting(Settings.PROXY_URL, BuildDefaults.PROXY_URL);
+        _token = readSetting(Settings.PROXY_TOKEN, BuildDefaults.PROXY_TOKEN);
         _base = withoutTrailingSlash(_base);
     }
 
@@ -164,11 +164,16 @@ class ProxyClient {
         return Media.ENCODING_M4A;
     }
 
-    private static function readSetting(key as String) as String {
+    //! Die Telefon-Einstellung sticht die beim Bauen eingebackene Vorgabe.
+    //!
+    //! Ein leerer Wert zählt dabei wie keiner: Eine sideloadete App bekommt in
+    //! Garmin Connect keine Einstellungsmaske, sonst bliebe die Vorgabe
+    //! wirkungslos.
+    private static function readSetting(key as String, fallback as String) as String {
         var value = Application.Properties.getValue(key);
-        if (value instanceof String) {
+        if (value instanceof String && value.length() > 0) {
             return value;
         }
-        return "";
+        return fallback;
     }
 }

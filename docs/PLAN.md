@@ -221,7 +221,7 @@ Secret=abs-api-key,type=env,target=ABS_API_KEY
 Secret=abconnect-token,type=env,target=ABCONNECT_TOKEN
 Volume=abconnect-cache:/var/cache/abconnect
 Volume=abconnect-work:/var/tmp/abconnect
-PublishPort=8080:8080
+PublishPort=127.0.0.1:18543:8080   # 8080 ist auf dem Host belegt
 HealthCmd=/usr/bin/curl -fsS http://localhost:8080/healthz
 
 [Install]
