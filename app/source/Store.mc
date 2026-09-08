@@ -267,6 +267,40 @@ module Store {
         return entries;
     }
 
+    // --- Is the player playing? -------------------------------------------
+
+    //! How long a "playing" mark is believed without being refreshed.
+    //!
+    //! The position ticker refreshes it every 30 seconds, so a live player
+    //! keeps it fresh with room to spare. Nothing else can clear it when an app
+    //! is killed mid-chapter, and after this long a stale mark is more likely
+    //! than a listener who has heard nothing move for five minutes.
+    const PLAYING_TRUSTED_SECONDS = 300;
+
+    //! The configuration view runs as its own app instance and cannot ask the
+    //! player anything. Without this mark, a push that stops playback to free
+    //! the radio would not know whether there is anything to start again.
+    function markPlaying() as Void {
+        Application.Storage.setValue(Keys.PLAYING, Time.now().value());
+    }
+
+    function stoppedPlaying() as Void {
+        Application.Storage.deleteValue(Keys.PLAYING);
+    }
+
+    function isPlaying() as Boolean {
+        var stored = Application.Storage.getValue(Keys.PLAYING);
+        if (!(stored instanceof Number)) {
+            return false;
+        }
+        var age = Time.now().value() - stored;
+        if (age > PLAYING_TRUSTED_SECONDS) {
+            Log.code("Store: a playing mark this old is not believed", age);
+            return false;
+        }
+        return true;
+    }
+
     function clearProgress() as Void {
         Application.Storage.deleteValue(Keys.PROGRESS);
     }

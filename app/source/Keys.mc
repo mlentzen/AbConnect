@@ -20,6 +20,12 @@ module Keys {
     const SCHEMA = "VER";
     //! Book the player is currently playing.
     const CURRENT = "CUR";
+    //! When the player last said it was playing, as a timestamp.
+    //!
+    //! Deleted the moment it stops. A timestamp rather than a flag because an
+    //! app that dies mid-chapter never gets to clear it, and a stale "yes"
+    //! would start audio nobody asked for.
+    const PLAYING = "PLY";
     //! Books that have segments on the watch.
     //!
     //! Application.Storage cannot enumerate its keys. Without this list a

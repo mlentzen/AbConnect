@@ -112,6 +112,13 @@ class AbContentDelegate extends Media.ContentDelegate {
         _lastSeconds = seconds;
         _lastReportMs = System.getTimer();
         _playing = stillPlayingAfter(songEvent);
+        // Left where the configuration view can find it: that runs as its own
+        // app instance and has no way to ask the player anything.
+        if (_playing) {
+            Store.markPlaying();
+        } else {
+            Store.stoppedPlaying();
+        }
 
         if (songEvent == Media.SONG_EVENT_PAUSE || songEvent == Media.SONG_EVENT_STOP) {
             pushOverPhone();
@@ -160,6 +167,9 @@ class AbContentDelegate extends Media.ContentDelegate {
         }
         Log.code("Playback: estimated position", seconds);
         Store.rememberPosition(bookId, _segment, seconds, Time.now().value());
+        // Keeps the playing mark from ageing out while a chapter runs on
+        // without a single event.
+        Store.markPlaying();
     }
 
     //! Event numbers alone are unreadable, and reading them wrong sends the
