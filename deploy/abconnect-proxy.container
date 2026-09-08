@@ -1,5 +1,5 @@
-# Podman-Quadlet: nach ~/.config/containers/systemd/ legen,
-# dann `systemctl --user daemon-reload && systemctl --user start abconnect-proxy`.
+# Podman-Quadlet: gehört nach ~/.config/containers/systemd/ — am einfachsten
+# über deploy/install.sh.
 #
 # Im Image steht weder eine Serveradresse noch ein Schlüssel — beides kommt
 # von hier. Fehlt eine Pflichtvariable, startet der Container nicht.
@@ -9,11 +9,18 @@ Description=AbConnect proxy (Audiobookshelf -> Garmin)
 After=audiobookshelf.service
 Wants=audiobookshelf.service
 
+# Das Image entsteht aus abconnect-proxy.build; ein Handbuild entfällt.
+# Requires heißt auch: ein fehlgeschlagener Build (kaputter Commit) reißt den
+# laufenden Container mit. Wer lieber das alte Image weiterlaufen lässt,
+# ersetzt Requires durch Wants.
+Requires=abconnect-proxy-build.service
+After=abconnect-proxy-build.service
+
 [Container]
-Image=localhost/abconnect-proxy:latest
+Image=abconnect-proxy.build
 ContainerName=abconnect-proxy
 
-Environment=ABS_URL=https://audiobookshelf.internal
+Environment=ABS_URL=https://ab.ml-bn.de
 Secret=abs-api-key,type=env,target=ABS_API_KEY
 Secret=abconnect-token,type=env,target=ABCONNECT_TOKEN
 
@@ -26,7 +33,7 @@ Environment=LOG_LEVEL=INFO
 Volume=abconnect-cache:/var/cache/abconnect
 Volume=abconnect-work:/var/tmp/abconnect
 
-PublishPort=127.0.0.1:8080:8080
+PublishPort=127.0.0.1:18543:8080
 HealthCmd=/usr/bin/curl -fsS http://localhost:8080/healthz
 HealthInterval=60s
 HealthStartPeriod=20s

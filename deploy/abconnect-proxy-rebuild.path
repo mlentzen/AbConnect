@@ -1,0 +1,21 @@
+# Kein Quadlet, sondern eine gewöhnliche User-Unit: nach ~/.config/systemd/user/.
+#
+# Beobachtet die Branch-Spitze, nicht die Quelldateien: ein Rebuild läuft nach
+# Commit, `git pull` oder Checkout an — nicht mitten im Tippen. Branch und Pfad
+# trägt deploy/install.sh beim Installieren ein; nach einem Merge nach main ist
+# hier eine Zeile zu ändern (oder install.sh erneut auszuführen).
+#
+# Vorsicht: `git gc` bzw. `git pack-refs` kann die Ref-Datei entfernen. systemd
+# beobachtet dann das nächsthöhere vorhandene Verzeichnis und löst wieder aus,
+# sobald die Datei neu entsteht — ein Commit direkt nach dem Packen kann aber
+# durchrutschen. Dann hilft `systemctl --user start abconnect-proxy-rebuild`.
+
+[Unit]
+Description=AbConnect-Branch auf neue Commits beobachten
+
+[Path]
+PathChanged=%h/git/AbConnect/.git/refs/heads/claude/audiobookshelf-connectiq-garmin-uh247o
+Unit=abconnect-proxy-rebuild.service
+
+[Install]
+WantedBy=default.target
