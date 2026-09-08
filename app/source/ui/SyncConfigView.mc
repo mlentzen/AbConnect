@@ -81,6 +81,21 @@ class SyncConfigView extends WatchUi.View {
                 )
             );
         }
+        // The same row as in the playback configuration, so the progress can go
+        // out without opening the player first.
+        var pendingHint = null as String?;
+        if (ProgressPush.pending() == 0) {
+            pendingHint = WatchUi.loadResource(Rez.Strings.syncNothingToDo) as String;
+        }
+        menu.addItem(
+            new WatchUi.MenuItem(
+                WatchUi.loadResource(Rez.Strings.sendProgress) as String,
+                pendingHint,
+                $.PROGRESS_ITEM,
+                null
+            )
+        );
+
         _menuShown = true;
         WatchUi.pushView(menu, new SyncConfigDelegate(), WatchUi.SLIDE_IMMEDIATE);
     }
@@ -128,15 +143,25 @@ class SyncConfigView extends WatchUi.View {
     }
 }
 
-//! The list is display only — there is nothing to select.
+//! The book list is display only; the row below it is not.
 class SyncConfigDelegate extends WatchUi.Menu2InputDelegate {
+
+    //! Held rather than made on demand: the push outlives the press, and a
+    //! local one could be collected while its response is still in flight.
+    private var _push as ProgressPush;
 
     function initialize() {
         Menu2InputDelegate.initialize();
+        _push = new ProgressPush();
     }
 
     function onSelect(item as WatchUi.MenuItem) as Void {
-        // The list is display only: selection happens in the playlist.
+        // The books are display only: what is on the watch is decided by the
+        // playlist. Only the send-progress row does anything here.
+        if (item.getId() == $.PROGRESS_ITEM) {
+            Log.line("Config: sending progress over the phone");
+            _push.start();
+        }
     }
 
     function onBack() as Void {

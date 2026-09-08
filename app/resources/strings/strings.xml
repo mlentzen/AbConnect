@@ -23,6 +23,9 @@
     <string id="syncNoPlaylist">Playlist not found on the server</string>
     <string id="playlistEmpty">The playlist is empty</string>
     <string id="statusWaitingForSync">ready, waiting for sync</string>
+    <string id="sendProgress">Send progress</string>
+    <string id="noPhone">No phone connection</string>
+    <string id="progressSent">Progress sent</string>
     <string id="syncNow">Sync now</string>
     <string id="resetAll">Reset everything</string>
     <string id="resetConfirm">Delete all books and listening progress?</string>

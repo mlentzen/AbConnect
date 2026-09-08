@@ -37,6 +37,23 @@ class PlaybackConfigView extends WatchUi.View {
             menu.addItem(new WatchUi.MenuItem(info[0], info[1], books[i], null));
         }
 
+        // The small sibling of "Sync now": the positions go out over the phone
+        // connection, without sync mode and so without Wi-Fi. When there is
+        // nothing buffered the row says so rather than making it a press to
+        // find out.
+        var pendingHint = null as String?;
+        if (ProgressPush.pending() == 0) {
+            pendingHint = WatchUi.loadResource(Rez.Strings.syncNothingToDo) as String;
+        }
+        menu.addItem(
+            new WatchUi.MenuItem(
+                WatchUi.loadResource(Rez.Strings.sendProgress) as String,
+                pendingHint,
+                $.PROGRESS_ITEM,
+                null
+            )
+        );
+
         // The system leads into this view, not into the sync configuration —
         // without this entry there is no discoverable way on the watch to start
         // a sync by hand. As long as nothing is downloaded it is the only thing
@@ -83,8 +100,13 @@ class PlaybackConfigView extends WatchUi.View {
 
 class PlaybackConfigDelegate extends WatchUi.Menu2InputDelegate {
 
+    //! Held rather than made on demand: the push outlives the press, and a
+    //! local one could be collected while its response is still in flight.
+    private var _push as ProgressPush;
+
     function initialize() {
         Menu2InputDelegate.initialize();
+        _push = new ProgressPush();
     }
 
     function onSelect(item as WatchUi.MenuItem) as Void {
@@ -100,6 +122,11 @@ class PlaybackConfigDelegate extends WatchUi.Menu2InputDelegate {
                 new ChapterMenuDelegate(id),
                 WatchUi.SLIDE_IMMEDIATE
             );
+            return;
+        }
+        if (id == $.PROGRESS_ITEM) {
+            Log.line("Config: sending progress over the phone");
+            _push.start();
             return;
         }
         if (id == $.RESET_ITEM) {

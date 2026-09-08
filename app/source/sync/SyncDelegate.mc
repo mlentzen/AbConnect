@@ -258,35 +258,10 @@ class AbSyncDelegate extends Communications.SyncDelegate {
             // Only discard after confirmed acceptance — on an abort the
             // listening progress would otherwise be gone.
             Store.clearProgress();
-            adoptServerPositions(data);
+            Progress.adopt(data);
         }
         enterPhase(PHASE_PROGRESS_PUSHED);
         fetchPlaylist();
-    }
-
-    //! Where the server was ahead of the watch, the watch jumps to it.
-    private function adoptServerPositions(data as Dictionary or String or Null) as Void {
-        if (!(data instanceof Dictionary)) {
-            return;
-        }
-        var books = data["books"];
-        if (!(books instanceof Array)) {
-            return;
-        }
-        for (var i = 0; i < books.size(); ++i) {
-            var entry = books[i];
-            if (!(entry instanceof Dictionary)) {
-                continue;
-            }
-            var resume = entry["resume"];
-            var bookId = entry["id"];
-            if (resume instanceof Dictionary && bookId instanceof String) {
-                var segment = resume["segment"];
-                if (segment instanceof Number) {
-                    Store.rememberPosition(bookId, segment, numberOf(resume["offset"]), 0);
-                }
-            }
-        }
     }
 
     // --- Phase 2: read the playlist ---------------------------------------------
