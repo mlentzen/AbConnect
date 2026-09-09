@@ -191,8 +191,9 @@ class AbsClient:
         return payload if isinstance(payload, dict) else None
 
     async def set_progress(self, item_id: str, *, current_time: float, duration: float) -> None:
+        target = round(current_time, 2)
         body = {
-            "currentTime": round(current_time, 2),
+            "currentTime": target,
             "duration": round(duration, 2),
             "progress": round(current_time / duration, 6) if duration > 0 else 0.0,
             "isFinished": duration > 0 and current_time >= duration - 5,
@@ -205,3 +206,18 @@ class AbsClient:
             raise AbsAuthError("Audiobookshelf rejects the API key")
         if response.status_code >= 400:
             raise AbsError(f"PATCH /api/me/progress/{item_id} -> HTTP {response.status_code}")
+
+        # ABS answers 200 even when it quietly drops the update (stale session,
+        # a newer server-side position). Read it straight back so a no-op push
+        # is visible in the log instead of looking like a success.
+        stored = await self.get_progress(item_id)
+        actual = float((stored or {}).get("currentTime") or 0.0)
+        if stored is None:
+            log.warning("Progress readback for %s: ABS still reports nothing", item_id)
+        elif abs(actual - target) <= 1.0:
+            log.info("Progress readback for %s: ABS confirms %.1fs", item_id, actual)
+        else:
+            log.warning(
+                "Progress readback for %s: pushed %.1fs but ABS holds %.1fs",
+                item_id, target, actual,
+            )

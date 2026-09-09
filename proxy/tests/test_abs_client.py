@@ -121,7 +121,8 @@ class TestProgress:
         def handler(request):
             import json
 
-            sent.update(json.loads(request.content))
+            if request.method == "PATCH":
+                sent.update(json.loads(request.content))
             return httpx.Response(200, json={})
 
         await client_for(handler).set_progress("li_1", current_time=1800, duration=3600)
@@ -130,6 +131,28 @@ class TestProgress:
 
         await client_for(handler).set_progress("li_1", current_time=3599, duration=3600)
         assert sent["isFinished"] is True
+
+    async def test_patch_reads_the_progress_back(self):
+        seen = []
+
+        def handler(request):
+            seen.append((request.method, request.url.path))
+            if request.method == "GET":
+                return httpx.Response(200, json={"currentTime": 1800.0})
+            return httpx.Response(200, json={})
+
+        await client_for(handler).set_progress("li_1", current_time=1800, duration=3600)
+        assert ("GET", "/api/me/progress/li_1") in seen
+
+    async def test_patch_warns_when_the_readback_disagrees(self, caplog):
+        def handler(request):
+            if request.method == "GET":
+                return httpx.Response(200, json={"currentTime": 5.0})
+            return httpx.Response(200, json={})
+
+        with caplog.at_level("WARNING"):
+            await client_for(handler).set_progress("li_1", current_time=1800, duration=3600)
+        assert "readback" in caplog.text.lower()
 
     async def test_patch_surfaces_a_rejected_key(self):
         with pytest.raises(AbsAuthError):
