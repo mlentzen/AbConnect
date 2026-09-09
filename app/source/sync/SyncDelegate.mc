@@ -81,27 +81,33 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         _idleTicks = 0;
     }
 
-    //! Never — a sync happens because it was asked for, and only then.
+    //! Only when someone asked for it — the Sync row stamps a ticket in the
+    //! store, and a fresh ticket is the whole of the answer.
     //!
-    //! The system asks this to decide whether to schedule a sync of its own.
-    //! Saying yes was costing more than it bought: a sync brings up Wi-Fi and
-    //! then holds the watch for as long as the downloads take, which for a book
-    //! is minutes at best, and it did so on nothing more than the playlist
-    //! state being six hours old. An audiobook is not news; there is no hurry
-    //! that justifies deciding for the wearer when their watch goes on the
-    //! network.
+    //! The system asks this on every trigger, its own schedule included, and
+    //! the SDK is unambiguous about a false: "onStartSync will not be called
+    //! if a sync is triggered for this application." The trigger makes no
+    //! distinction between the system's own idea and the Sync row, and
+    //! startSync() overrules nothing despite the name — a plain false
+    //! therefore does not skip the sync, it freezes the sync screen at 0 %
+    //! with this app never hearing about it. (Seen on the fēnix: the screen
+    //! sits there, the log says nothing, and no amount of waiting helps.)
     //!
-    //! The Sync row in the menu calls Communications.startSync(), which forces
-    //! sync mode regardless of this answer. The Info screen shows how long ago
-    //! the playlist was last read, so the decision can be made with something
-    //! to go on.
+    //! So the answer is true exactly while a manual request is fresh, and no
+    //! otherwise — above all not for the playlist simply being old. A sync
+    //! brings up Wi-Fi and holds the watch for as long as the downloads take,
+    //! and that is not something to start on a schedule.
     function isSyncNeeded() as Boolean {
-        Log.debug("Sync: not needed, syncing is manual");
-        return false;
+        var requested = Store.syncRequested();
+        Log.debug("Sync: needed " + requested.toString());
+        return requested;
     }
 
     function onStartSync() as Void {
         Log.info("Sync: onStartSync");
+        // The ticket brought the sync this far; it does not get to bring the
+        // next one.
+        Store.clearSyncRequest();
         logEnvironment();
         enterPhase(PHASE_START);
         startWatchdog();

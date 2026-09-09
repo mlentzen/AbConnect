@@ -334,6 +334,42 @@ module Store {
         return true;
     }
 
+    // --- The manual sync ticket --------------------------------------------
+
+    //! How long a manual sync request is believed.
+    //!
+    //! startSync() ends the app and relaunches it in sync mode; the ticket is
+    //! how isSyncNeeded() can still tell that this sync was asked for by hand.
+    //! The relaunch takes seconds, so anything older is a leftover from an
+    //! attempt that never made it into sync mode — and must not bless a later
+    //! sync the system started on its own.
+    const SYNC_REQUEST_TRUSTED_SECONDS = 120;
+
+    //! The Sync row's half of the ticket, stamped just before startSync().
+    function requestSync() as Void {
+        Application.Storage.setValue(Keys.SYNC_REQUEST, Time.now().value());
+    }
+
+    //! isSyncNeeded()'s half: true only while a manual request is fresh.
+    function syncRequested() as Boolean {
+        var stamped = Application.Storage.getValue(Keys.SYNC_REQUEST);
+        if (!(stamped instanceof Number)) {
+            return false;
+        }
+        var age = Time.now().value() - stamped;
+        if (age > SYNC_REQUEST_TRUSTED_SECONDS) {
+            Log.warnCode("Store: a sync ticket this old is not believed", age);
+            return false;
+        }
+        return true;
+    }
+
+    //! Once the sync is actually running the ticket is spent: whatever the
+    //! system asks later must be decided without it.
+    function clearSyncRequest() as Void {
+        Application.Storage.deleteValue(Keys.SYNC_REQUEST);
+    }
+
     //! Discard only the progress that was just sent.
     //!
     //! Clearing everything after a push would also take a position that was

@@ -20,6 +20,15 @@ class SyncConfigView extends WatchUi.View {
     }
 
     function onShow() as Void {
+        // The way BACK out of here is the system's "Synchronize?" prompt, and
+        // that prompt is a sync trigger like any other: without a fresh ticket
+        // isSyncNeeded() answers no, and no freezes the sync screen at 0 % with
+        // onStartSync() never called. Stamped on every show — the second one is
+        // the view being dismissed on the way to that prompt — so the stamp is
+        // seconds old when the prompt arrives, however long the browsing took.
+        // Browsing without confirming merely leaves a ticket that expires in
+        // two minutes.
+        Store.requestSync();
         if (_menuShown) {
             WatchUi.popView(WatchUi.SLIDE_IMMEDIATE);
             return;

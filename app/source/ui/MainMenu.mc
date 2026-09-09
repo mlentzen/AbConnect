@@ -182,9 +182,12 @@ class MainMenuDelegate extends WatchUi.Menu2InputDelegate {
             return;
         }
 
-        // startSync() ends the app and restarts it in sync mode; whatever stood
-        // here after it would never run.
+        // The ticket comes first: startSync() ends the app and restarts it in
+        // sync mode, and the stamp is the only thing isSyncNeeded() can still
+        // see after that restart. Without it the answer there is no, and no
+        // means the sync screen sits at 0 % with onStartSync() never called.
         Log.info("Menu: startSync");
+        Store.requestSync();
         Communications.startSync();
     }
 

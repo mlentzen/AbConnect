@@ -26,6 +26,11 @@ module Keys {
     //! app that dies mid-chapter never gets to clear it, and a stale "yes"
     //! would start audio nobody asked for.
     const PLAYING = "PLY";
+    //! When the Sync row last asked for a sync, as a timestamp.
+    //!
+    //! startSync() ends the app and relaunches it in sync mode; this stamp is
+    //! how isSyncNeeded() can still tell that the sync was asked for by hand.
+    const SYNC_REQUEST = "SYN";
     //! Books that have segments on the watch.
     //!
     //! Application.Storage cannot enumerate its keys. Without this list a

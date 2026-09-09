@@ -107,9 +107,12 @@ AbConnect
 └─ Info             version, commit, build date, and what is on the watch
 ```
 
-A sync only ever runs because it was asked for: `isSyncNeeded()` says no, so the
-system never schedules one of its own. The Info screen shows how long ago the
-playlist was last read, which is the number to decide on.
+A sync only ever runs because it was asked for: `isSyncNeeded()` answers yes
+only while a manual request is fresh — the Sync row and the system's sync
+configuration each stamp one, good for two minutes — so the system never
+schedules one of its own. A plain no is not an option: the system then skips
+`onStartSync()` and the sync screen freezes at 0 %. The Info screen shows how
+long ago the playlist was last read, which is the number to decide on.
 
 The other way in is the system's own sync configuration, which is what shows the
 playlist and the state of each book on the server:
