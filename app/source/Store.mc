@@ -280,20 +280,40 @@ module Store {
     //! The configuration view runs as its own app instance and cannot ask the
     //! player anything. Without this mark, a push that stops playback to free
     //! the radio would not know whether there is anything to start again.
+    //!
+    //! Set on every tick while sound comes out, so only the transition from
+    //! "no mark" to "mark" is worth a line — one per session, not one per
+    //! half minute.
     function markPlaying() as Void {
+        if (!(Application.Storage.getValue(Keys.PLAYING) instanceof Number)) {
+            Log.line("Store: playing mark set");
+        }
         Application.Storage.setValue(Keys.PLAYING, Time.now().value());
     }
 
     function stoppedPlaying() as Void {
+        if (Application.Storage.getValue(Keys.PLAYING) instanceof Number) {
+            Log.line("Store: playing mark cleared");
+        }
         Application.Storage.deleteValue(Keys.PLAYING);
     }
 
-    function isPlaying() as Boolean {
+    //! Seconds since the player last said it was playing, or null when there
+    //! is no mark. The push decides on this basis whether the radio has to be
+    //! freed, so the raw value belongs in the trace — not just the verdict.
+    function playingMarkAge() as Number? {
         var stored = Application.Storage.getValue(Keys.PLAYING);
         if (!(stored instanceof Number)) {
+            return null;
+        }
+        return Time.now().value() - stored;
+    }
+
+    function isPlaying() as Boolean {
+        var age = playingMarkAge();
+        if (age == null) {
             return false;
         }
-        var age = Time.now().value() - stored;
         if (age > PLAYING_TRUSTED_SECONDS) {
             Log.code("Store: a playing mark this old is not believed", age);
             return false;

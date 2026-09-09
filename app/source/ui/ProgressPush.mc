@@ -1,3 +1,4 @@
+import Toybox.Communications;
 import Toybox.Lang;
 import Toybox.Media;
 import Toybox.System;
@@ -24,6 +25,12 @@ const PROGRESS_ITEM = :sendProgress;
 //! the way startPlayback() does — the SDK describes it only as stopping
 //! playback that the app itself started — so this code survives its own call,
 //! waits for the radio to return, sends, and starts the book again.
+//!
+//! The playing mark alone does not cover this: it says whether sound is
+//! coming out, not whether the player holds the radio. A session paused hours
+//! ago has no mark and still holds the connection — the push then fails with
+//! -104 although "nothing is playing". So a refusal with no route gets one
+//! reactive stopPlayback() even when the mark said there was nothing to stop.
 class ProgressPush {
 
     //! How long the radio is given to return once the player lets go of it.
@@ -45,6 +52,13 @@ class ProgressPush {
     private var _announce as Boolean;
     //! A book to ask the server about even when nothing of it is buffered.
     private var _extra as String?;
+    //! Whether this run already asked the player to let go of the radio.
+    private var _stoppedPlayback as Boolean;
+    //! When the run began and when the current request left. An answer that
+    //! comes back within milliseconds was refused on the watch itself — it
+    //! never had a route out. A slow one went somewhere and failed there.
+    private var _startedMs as Number;
+    private var _requestMs as Number;
 
     function initialize() {
         _client = new ProxyClient();
@@ -53,6 +67,9 @@ class ProgressPush {
         _resumeAfter = null;
         _announce = true;
         _extra = null;
+        _stoppedPlayback = false;
+        _startedMs = 0;
+        _requestMs = 0;
     }
 
     //! The menu row.
@@ -89,6 +106,13 @@ class ProgressPush {
             finish(Rez.Strings.notConfigured);
             return;
         }
+        _startedMs = System.getTimer();
+        _stoppedPlayback = false;
+        var markAge = Store.playingMarkAge();
+        Log.line(
+            "Push: playing mark "
+                + ((markAge == null) ? "absent" : markAge.toString() + " s old")
+        );
         if (Store.isPlaying()) {
             // stopPlayback() only ever stops what this app started, so the mark
             // is what says there is anything of ours to stop — and what says
@@ -97,6 +121,7 @@ class ProgressPush {
             if (_resumeAfter == null) {
                 _resumeAfter = Current.bookId();
             }
+            _stoppedPlayback = true;
             Media.stopPlayback();
         } else {
             Log.line("Push: nothing playing, the radio should already be free");
@@ -112,7 +137,15 @@ class ProgressPush {
     function onAttempt() as Void {
         _attempts += 1;
         Log.code("Push: attempt", _attempts);
+        Log.code("Push: ms since start", System.getTimer() - _startedMs);
         logConnection();
+        if (!System.getDeviceSettings().phoneConnected) {
+            // The BLE link is down — retrying cannot fix that, the phone has to
+            // come back on its own. Say so instead of counting through attempts.
+            Log.line("Push: phone not connected, giving up");
+            finish(Rez.Strings.noPhone);
+            return;
+        }
         var extra = _extra;
         var entries = (extra == null) ? Store.progressEntries() : entriesIncluding(extra);
         Log.code("Push: buffered books", entries.size());
@@ -120,17 +153,33 @@ class ProgressPush {
             finish(Rez.Strings.syncNothingToDo);
             return;
         }
+        _requestMs = System.getTimer();
         _client.pushProgress(entries, method(:onPushed));
     }
 
     function onPushed(code as Number, data as Dictionary or String or Null) as Void {
         Log.code("Push: progress", code);
+        Log.code("Push: answer after ms", System.getTimer() - _requestMs);
         if (code == 200) {
             // Only discard after confirmed acceptance — on a failure the
             // listening progress would otherwise be gone for good.
             Store.clearProgress();
             Progress.adopt(data);
             finish(Rez.Strings.progressSent);
+            return;
+        }
+        // Refused with no route although nothing was stopped? Then a player
+        // session the mark does not know about — paused long ago, or restarted
+        // by the system — is holding the radio. Ask it to let go, once per
+        // run. Nothing is resumed here on purpose: the mark said nothing was
+        // playing, so there is nothing to start again.
+        if (code == Communications.BLE_CONNECTION_UNAVAILABLE
+                && !_stoppedPlayback && _attempts < MAX_ATTEMPTS
+                && System.getDeviceSettings().phoneConnected) {
+            Log.line("Push: no route with nothing playing, stopping playback after all");
+            _stoppedPlayback = true;
+            Media.stopPlayback();
+            _timer.start(method(:onAttempt), SETTLE_MS, false);
             return;
         }
         // A negative code is the radio's, not the server's: no route out. That
@@ -221,13 +270,37 @@ class ProgressPush {
     //! Both flags were once used to refuse the attempt outright, and both were
     //! telling the truth — there was no route out of the media player. They are
     //! logged rather than obeyed so that the claim and the outcome can always
-    //! be read next to each other.
+    //! be read next to each other. The per-connection states join them: the
+    //! flags say "no", the states say whether "no" means the phone is gone or
+    //! the radio is busy.
     private static function logConnection() as Void {
         var settings = System.getDeviceSettings();
         Log.line(
             "Push: connection available " + settings.connectionAvailable.toString()
                 + ", phone " + settings.phoneConnected.toString()
         );
+        var connections = settings.connectionInfo;
+        Log.line(
+            "Push: bluetooth " + connectionState(connections, :bluetooth)
+                + ", wifi " + connectionState(connections, :wifi)
+                + ", lte " + connectionState(connections, :lte)
+        );
+    }
+
+    //! One connection's state as a word, or "absent" when the device does not
+    //! have that path at all.
+    private static function connectionState(connections as Dictionary, key as Symbol) as String {
+        var info = connections[key];
+        if (!(info instanceof System.ConnectionInfo)) {
+            return "absent";
+        }
+        if (info.state == System.CONNECTION_STATE_CONNECTED) {
+            return "connected";
+        }
+        if (info.state == System.CONNECTION_STATE_NOT_CONNECTED) {
+            return "not connected";
+        }
+        return "not initialized";
     }
 
     private static function show(resource as Lang.ResourceId) as Void {
