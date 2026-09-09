@@ -106,11 +106,13 @@ async def require_token(request: Request) -> None:
 
     remaining = failures.locked(client)
     if remaining:
+        log.warning("%s locked out for %d more s (too many failed attempts)", client, int(remaining))
         raise HTTPException(429, f"Too many failed attempts, locked for {int(remaining)} s")
 
     presented = auth.token_from_header(request.headers.get("authorization"))
     if not presented or not auth.verify_token(presented, config.tokens):
         failures.record_failure(client)
+        log.warning("%s presented a missing or invalid token", client)
         raise HTTPException(401, "Token missing or invalid")
     failures.record_success(client)
 
@@ -121,6 +123,7 @@ def _book_id(book_id: str) -> str:
 
         return check_id(book_id)
     except UnsafeBookId as error:
+        log.warning("Rejected unsafe book id %r: %s", book_id, error)
         raise HTTPException(400, str(error)) from None
 
 
@@ -256,7 +259,9 @@ def _register(app: FastAPI) -> None:
         # force=true re-cuts a book that is already ready. Needed whenever the
         # encoder settings change: the segment cache survives a restart, so
         # without it the old files stay in place indefinitely.
-        state = request.app.state.preparer.request(_book_id(book_id), force=force)
+        book_id = _book_id(book_id)
+        log.info("Prepare requested for %s%s", book_id, " (forced)" if force else "")
+        state = request.app.state.preparer.request(book_id, force=force)
         return {"status": state.status.value, "percent": state.percent}
 
     @app.get("/v1/books/{book_id}/status", dependencies=guarded)
@@ -359,6 +364,7 @@ def _register(app: FastAPI) -> None:
     @app.post("/v1/books/{book_id}/release", dependencies=guarded)
     async def release(request: Request, book_id: str):
         book_id = _book_id(book_id)
+        log.info("Releasing %s", book_id)
         request.app.state.cache.release(book_id)
         return {"released": book_id}
 
@@ -388,11 +394,17 @@ def _register(app: FastAPI) -> None:
             except AbsError:
                 stored = None
 
+            server_time = float((stored or {}).get("currentTime") or 0.0)
+            server_ts = progress.server_timestamp(stored)
             winner, winning_time = progress.reconcile(
                 watch_time=watch_time,
                 watch_ts=entry.ts,
-                server_time=float((stored or {}).get("currentTime") or 0.0),
-                server_ts=progress.server_timestamp(stored),
+                server_time=server_time,
+                server_ts=server_ts,
+            )
+            log.info(
+                "%s: watch %.1fs@%.0f vs server %.1fs@%.0f -> %s wins (%.1fs)",
+                book_id, watch_time, entry.ts, server_time, server_ts, winner, winning_time,
             )
 
             result = {"id": book_id, "accepted": True, "source": winner}
@@ -402,6 +414,7 @@ def _register(app: FastAPI) -> None:
                         book_id, current_time=winning_time, duration=float(manifest["duration"])
                     )
                 except AbsError as error:
+                    log.warning("Progress push for %s failed: %s", book_id, error)
                     result.update(accepted=False, reason=str(error))
             else:
                 # The server is ahead — the watch should jump there.
