@@ -27,3 +27,18 @@ class MessageView extends WatchUi.View {
         );
     }
 }
+
+//! A pushed View gets no input of its own, so BACK would not return to
+//! whatever is underneath it. Every view in this app that is pushed rather
+//! than switched to is pushed with one of these.
+class BackDelegate extends WatchUi.BehaviorDelegate {
+
+    function initialize() {
+        BehaviorDelegate.initialize();
+    }
+
+    function onBack() as Boolean {
+        WatchUi.popView(WatchUi.SLIDE_IMMEDIATE);
+        return true;
+    }
+}

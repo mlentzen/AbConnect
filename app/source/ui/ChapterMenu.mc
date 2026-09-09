@@ -22,7 +22,7 @@ class ChapterMenu extends WatchUi.Menu2 {
 
         var refs = Store.orderedRefs(bookId);
         var position = Store.position(bookId);
-        Log.code("Chapters: building for segments", refs.size());
+        Log.debugCode("Chapters: building for segments", refs.size());
 
         // Resuming comes first, and only when there is something to resume. Its
         // subtitle says where it will land, which is worth more than a mark
@@ -118,7 +118,7 @@ class ChapterMenuDelegate extends WatchUi.Menu2InputDelegate {
     function onSelect(item as WatchUi.MenuItem) as Void {
         var id = item.getId();
         if (id == $.RESUME_ITEM) {
-            Log.line("Chapters: agreeing with the server before playing");
+            Log.info("Chapters: agreeing with the server before playing");
             _push.syncThenPlay(_bookId);
             return;
         }
@@ -154,7 +154,7 @@ class ChapterMenuDelegate extends WatchUi.Menu2InputDelegate {
         Current.set(_bookId);
         // startPlayback() ends the app and restarts it in playback mode;
         // anything after it would no longer run.
-        Log.line("Chapters: startPlayback " + _bookId);
+        Log.info("Chapters: startPlayback " + _bookId);
         Media.startPlayback(_bookId);
     }
 

@@ -14,7 +14,7 @@ Object Store — flat, because each value there is limited to 8 KB.
 |---|---|
 | `ui/SyncConfigView.mc` | sync configuration: shows the playlist and its state |
 | `sync/SyncDelegate.mc` | sync: report progress, read the playlist, mirror it |
-| `ui/PlaybackConfigView.mc` | playback configuration: which book |
+| `ui/PlaybackConfigView.mc`, `MainMenu.mc`, `BookMenu.mc`, `ChapterMenu.mc`, `InfoView.mc` | playback configuration: the app menu |
 | `playback/ContentDelegate.mc`, `ContentIterator.mc` | playback |
 
 Selection does not happen on the watch but in Audiobookshelf: the playlist
@@ -62,6 +62,7 @@ token.
 |---|---|---|---|
 | `PROXY_URL` | effectively yes | empty | base URL of the proxy |
 | `PROXY_TOKEN` | effectively yes | empty | the proxy's `ABCONNECT_TOKEN` |
+| `LOG_LEVEL` | — | `0` | 0 errors, 1 warnings, 2 course of events, 3 everything |
 | `DELETE_FINISHED` | — | `false` | remove finished books from the watch |
 
 Without the two values the script still builds, but warns: the app then reports
@@ -70,12 +71,48 @@ defaults, should the app ever be installed from the Connect IQ store.
 
 **The finished `.prg` therefore contains the token** — do not share it.
 
+### Version
+
+`source/Version.mc` holds `APP_VERSION` and is bumped by hand. `build.sh` adds
+the short commit hash (with a `+` when the tree was dirty) and the build date,
+which is what actually identifies a build — the version number alone cannot tell
+two builds of `0.1.0` apart. All three are on the Info screen.
+
+### Logging
+
+`LOG_LEVEL=0` is the default and prints errors only. Every line costs on the
+watch, and the loud paths run per segment and per tick, so the trace is
+something you ask for:
+
+```sh
+LOG_LEVEL=3 CIQ_HOME=/path/to/sdk ./build.sh
+```
+
+Because Monkey C builds a message before it calls the function that would drop
+it, the call sites in loops and tickers guard on `Log.LEVEL` themselves rather
+than leaving it to `Log`. `probeCache()` in the iterator is skipped entirely
+below `DEBUG`: it walks the whole media cache to produce nothing but a trace.
+
 ## On the watch
 
-The app starts in four modes, and the entry point is not the one you would
-expect. Opening the provider directly lands you in playback configuration and
-shows "No book on the watch yet" as long as nothing has been downloaded. The
-download path is what leads to **book selection**:
+Opening the provider lands on the app menu:
+
+```
+AbConnect
+├─ Continue         the book that was last playing, one press  (only when there is one)
+├─ Books            everything playable on the watch → chapters → Resume / From the start
+├─ Send progress    positions out over the phone, no Wi-Fi, no sync mode
+├─ Sync             Wi-Fi: report progress, read the playlist, mirror it
+├─ Reset everything media cache and store, after a confirmation
+└─ Info             version, commit, build date, and what is on the watch
+```
+
+A sync only ever runs because it was asked for: `isSyncNeeded()` says no, so the
+system never schedules one of its own. The Info screen shows how long ago the
+playlist was last read, which is the number to decide on.
+
+The other way in is the system's own sync configuration, which is what shows the
+playlist and the state of each book on the server:
 
 1. On any page, press and hold **DOWN** (music functions)
 2. Press and hold **MENU**
@@ -93,8 +130,10 @@ the fēnix 7X Pro and is listed there as a music provider; sync and playback
 have not yet been run through on hardware.
 
 Open:
-- Type check level 3 (strict): 27 messages, all about generic type parameters
-  of `Storage`, `Dictionary` and `Method`.
+- Type check level 3 (strict): 141 messages, of two kinds only — generic type
+  parameters of `Storage`, `Dictionary` and `Method`, and "value not available
+  in all function scopes" for `WatchUi` names reached through `import`. Level 2
+  is clean.
 - The launcher icon is a transparent placeholder.
 - The playlist view shows up to 100 books without paging.
 - The progress push on pause is untested: whether the watch holds a phone

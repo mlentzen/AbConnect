@@ -42,10 +42,6 @@ module Keys {
     //! 2: selection of individual books replaced by the playlist.
     const SCHEMA_VERSION = 2;
 
-    //! The playlist is re-read at least this often, even when everything is
-    //! fine locally — otherwise a newly added book would go unnoticed.
-    const PLAYLIST_MAX_AGE_SECONDS = 21600;
-
     function local(bookId as String) as String {
         return LOCAL_PREFIX + bookId;
     }

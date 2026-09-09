@@ -28,7 +28,7 @@ class SyncConfigView extends WatchUi.View {
             showMessage(Rez.Strings.notConfigured);
             return;
         }
-        Log.line("Config: fetching playlist");
+        Log.info("Config: fetching playlist");
         _client.playlist(method(:onPlaylist));
     }
 
@@ -45,7 +45,7 @@ class SyncConfigView extends WatchUi.View {
     }
 
     function onPlaylist(code as Number, data as Dictionary or String or Null) as Void {
-        Log.code("Config: playlist", code);
+        Log.response("Config: playlist", code);
         if (code == 409) {
             showMessage(Rez.Strings.syncNoPlaylist);
             return;
@@ -159,13 +159,13 @@ class SyncConfigDelegate extends WatchUi.Menu2InputDelegate {
         // The books are display only: what is on the watch is decided by the
         // playlist. Only the send-progress row does anything here.
         if (item.getId() == $.PROGRESS_ITEM) {
-            Log.line("Config: sending progress over the phone");
+            Log.info("Config: sending progress over the phone");
             _push.start();
         }
     }
 
     function onBack() as Void {
-        Log.code("Config: back, playlist state", Store.desired().size());
+        Log.debugCode("Config: back, playlist state", Store.desired().size());
         WatchUi.popView(WatchUi.SLIDE_IMMEDIATE);
     }
 }

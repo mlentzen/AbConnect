@@ -10,8 +10,8 @@ import Toybox.Media;
 //!
 //! Every step is traced. The player says nothing about why it does not play,
 //! so the only account of what it was handed is the one this class writes
-//! itself. Log.detail() carries the per-segment flood; Log.line() the few
-//! lines that stay worth reading once it is over.
+//! itself. Log.debug() carries the per-segment flood; the levels above it
+//! carry the few lines that stay worth reading once it is over.
 class AbContentIterator extends Media.ContentIterator {
 
     private var _bookId as String;
@@ -28,33 +28,47 @@ class AbContentIterator extends Media.ContentIterator {
         _bookId = bookId;
         _refs = [] as Array;
         _titles = [] as Array<String>;
-        Log.line("Iterator: opening book " + bookId);
+        Log.info("Iterator: opening book " + bookId);
 
         var info = Store.bookInfo(bookId);
         _album = info[0];
         _artist = info[1];
-        Log.line(
-            "Iterator: album '" + _album + "'"
-                + " artist '" + _artist + "'"
-                + " segments on the server " + info[2]
-        );
+        if (Log.LEVEL >= Log.DEBUG) {
+            Log.debug(
+                "Iterator: album '" + _album + "'"
+                    + " artist '" + _artist + "'"
+                    + " segments on the server " + info[2]
+            );
+        }
 
         buildPlaylist();
-        Log.code("Iterator: segments", _refs.size());
-        probeCache();
+        if (_refs.size() == 0) {
+            Log.error("Iterator: the book has no segments on the watch");
+        } else {
+            Log.debugCode("Iterator: segments", _refs.size());
+        }
+        // Guarded as a whole, not merely quietened: probing walks the entire
+        // media cache and resolves every segment in it against the store. That
+        // is a price worth paying to find out why nothing plays, and none at
+        // all when the answer would not be printed.
+        if (Log.LEVEL >= Log.DEBUG) {
+            probeCache();
+        }
 
         _index = 0;
         _startPosition = 0;
         _startApplied = false;
         var position = Store.position(bookId);
         if (position == null) {
-            Log.line("Iterator: nothing remembered, starting at the beginning");
+            Log.debug("Iterator: nothing remembered, starting at the beginning");
         } else {
-            Log.line(
-                "Iterator: remembered segment " + position[0].toString()
-                    + " offset " + position[1].toString() + " s"
-                    + " stamped " + position[2].toString()
-            );
+            if (Log.LEVEL >= Log.DEBUG) {
+                Log.debug(
+                    "Iterator: remembered segment " + position[0].toString()
+                        + " offset " + position[1].toString() + " s"
+                        + " stamped " + position[2].toString()
+                );
+            }
             var wanted = indexOfSegment(position[0]);
             if (wanted >= 0) {
                 _index = wanted;
@@ -63,11 +77,11 @@ class AbContentIterator extends Media.ContentIterator {
             } else {
                 // Remembered, but not on the watch: the segment was deleted or
                 // never downloaded. Beginning of the book is all that is left.
-                Log.code("Iterator: no local segment numbered", position[0]);
+                Log.errorCode("Iterator: no local segment numbered", position[0]);
             }
         }
-        Log.code("Iterator: starting at", _index);
-        Log.code("Iterator: start position", _startPosition);
+        Log.debugCode("Iterator: starting at", _index);
+        Log.debugCode("Iterator: start position", _startPosition);
     }
 
     //! A segment listened to the end is not a starting point.
@@ -78,38 +92,40 @@ class AbContentIterator extends Media.ContentIterator {
     //! sound of the segment and be over immediately.
     private function skipFinishedSegment() as Void {
         var duration = durationAt(_index);
-        Log.line(
-            "Iterator: resume check at " + _index.toString()
-                + ", offset " + _startPosition.toString()
-                + " of " + duration.toString() + " s"
-        );
+        if (Log.LEVEL >= Log.DEBUG) {
+            Log.debug(
+                "Iterator: resume check at " + _index.toString()
+                    + ", offset " + _startPosition.toString()
+                    + " of " + duration.toString() + " s"
+            );
+        }
         if (duration <= 0 || _startPosition < duration) {
-            Log.line("Iterator: segment " + _index.toString() + " still has sound left");
+            Log.debugCode("Iterator: segment still has sound left", _index);
             return;
         }
         if (_index + 1 < _refs.size()) {
             _index += 1;
             _startPosition = 0;
-            Log.code("Iterator: segment was finished, moving on to", _index);
+            Log.debugCode("Iterator: segment was finished, moving on to", _index);
             return;
         }
         // The last segment was listened through: the book is finished.
         // Starting over is the only choice that does not end in silence.
-        Log.line("Iterator: last segment finished, starting the book over");
+        Log.info("Iterator: last segment finished, starting the book over");
         _index = 0;
         _startPosition = 0;
     }
 
     private function durationAt(position as Number) as Number {
         if (position < 0 || position >= _refs.size()) {
-            Log.code("Iterator: duration asked outside the playlist for", position);
+            Log.errorCode("Iterator: duration asked outside the playlist for", position);
             return 0;
         }
         var parts = Store.trackInfo(_bookId, _refs[position]);
         if (parts == null) {
             // The playlist was built from the same store, so this means the
             // entry changed shape underneath us — worth a line of its own.
-            Log.line("Iterator: no store entry for " + Log.describe(_refs[position]));
+            Log.error("Iterator: no store entry for " + Log.describe(_refs[position]));
             return 0;
         }
         return Store.toNumber(parts[1]);
@@ -124,11 +140,13 @@ class AbContentIterator extends Media.ContentIterator {
         for (var i = 0; i < _refs.size(); ++i) {
             var parts = Store.trackInfo(_bookId, _refs[i]);
             _titles.add((parts == null) ? "" : parts[2]);
-            Log.detail(
-                "playlist " + i.toString()
-                    + " " + Log.describe(_refs[i])
-                    + " '" + _titles[i] + "'"
-            );
+            if (Log.LEVEL >= Log.DEBUG) {
+                Log.debug(
+                    "playlist " + i.toString()
+                        + " " + Log.describe(_refs[i])
+                        + " '" + _titles[i] + "'"
+                );
+            }
         }
     }
 
@@ -140,7 +158,7 @@ class AbContentIterator extends Media.ContentIterator {
     //! there at all".
     private function probeCache() as Void {
         var stats = Media.getCacheStatistics();
-        Log.line("Cache: " + stats.size.toString() + " of " + stats.capacity.toString() + " bytes");
+        Log.debug("Cache: " + stats.size.toString() + " of " + stats.capacity.toString() + " bytes");
         var count = 0;
         var ours = 0;
         var iterator = Media.getContentRefIter({ :contentType => Media.CONTENT_TYPE_AUDIO });
@@ -151,7 +169,7 @@ class AbContentIterator extends Media.ContentIterator {
             try {
                 id = ref.getId();
             } catch (ex) {
-                Log.line("Cache: an entry would not give up its ID");
+                Log.warn("Cache: an entry would not give up its ID");
             }
             var mine = indexOfRef(id);
             if (mine >= 0) {
@@ -160,15 +178,15 @@ class AbContentIterator extends Media.ContentIterator {
             // Whose file this is decides everything: a cache full of audio the
             // store knows no ID for looks, from the player's side, exactly like
             // an empty one.
-            Log.detail(
+            Log.debug(
                 "cache " + Log.describe(id)
                     + ((mine >= 0) ? (" = playlist " + mine.toString()) : " (not this book)")
             );
             ref = iterator.next();
         }
-        Log.code("Cache: audio entries", count);
-        Log.code("Cache: entries of this book", ours);
-        Log.code("Iterator: resolvable", resolvableCount());
+        Log.debugCode("Cache: audio entries", count);
+        Log.debugCode("Cache: entries of this book", ours);
+        Log.debugCode("Iterator: resolvable", resolvableCount());
     }
 
     //! Where a cache ID sits in the playlist, or -1.
@@ -201,7 +219,7 @@ class AbContentIterator extends Media.ContentIterator {
                 );
             } catch (ex) {
                 var message = ex.getErrorMessage();
-                Log.line(
+                Log.error(
                     "Iterator: cache threw for " + Log.describe(_refs[i])
                         + ": " + ((message == null) ? "?" : message)
                 );
@@ -209,11 +227,11 @@ class AbContentIterator extends Media.ContentIterator {
             }
             if (content != null) {
                 found += 1;
-                Log.detail("segment " + i.toString() + " " + Log.describe(_refs[i]) + " resolves");
+                Log.debug("segment " + i.toString() + " " + Log.describe(_refs[i]) + " resolves");
             } else {
                 // The type is worth having: it is what a broken round trip
                 // through the store would show up as.
-                Log.line("Iterator: unresolved " + Log.describe(_refs[i]));
+                Log.error("Iterator: unresolved " + Log.describe(_refs[i]));
             }
         }
         return found;
@@ -223,14 +241,11 @@ class AbContentIterator extends Media.ContentIterator {
         for (var i = 0; i < _refs.size(); ++i) {
             var parts = Store.trackInfo(_bookId, _refs[i]);
             if (parts != null && Store.toNumber(parts[0]) == segment) {
-                Log.line(
-                    "Iterator: segment " + segment.toString()
-                        + " is playlist position " + i.toString()
-                );
+                Log.debugCode("Iterator: segment " + segment.toString() + " is playlist position", i);
                 return i;
             }
         }
-        Log.code("Iterator: the playlist has no segment numbered", segment);
+        Log.errorCode("Iterator: the playlist has no segment numbered", segment);
         return -1;
     }
 
@@ -248,7 +263,7 @@ class AbContentIterator extends Media.ContentIterator {
         var metadata = content.getMetadata();
         if (metadata == null) {
             // Nothing to preserve; a fresh object is all there is to give.
-            Log.line("Iterator: cache metadata is null, building one");
+            Log.warn("Iterator: cache metadata is null, building one");
             content.setMetadata(metadataFor(position));
             return;
         }
@@ -278,9 +293,9 @@ class AbContentIterator extends Media.ContentIterator {
     //! single SONG_EVENT. Only the object from getCachedContentObj() carries
     //! what it needs to play the file.
     private function contentAt(position as Number) as Media.Content? {
-        Log.code("Iterator: content asked for", position);
+        Log.debugCode("Iterator: content asked for", position);
         if (position < 0 || position >= _refs.size()) {
-            Log.line(
+            Log.error(
                 "Iterator: " + position.toString() + " is outside a playlist of "
                     + _refs.size().toString()
             );
@@ -293,11 +308,11 @@ class AbContentIterator extends Media.ContentIterator {
             );
         } catch (ex) {
             var message = ex.getErrorMessage();
-            Log.line("Iterator: cache threw " + ((message == null) ? "?" : message));
+            Log.error("Iterator: cache threw " + ((message == null) ? "?" : message));
             return null;
         }
         if (content == null) {
-            Log.code("Iterator: nothing in cache for", position);
+            Log.errorCode("Iterator: nothing in cache for", position);
             return null;
         }
         // Full account of the object handed to the player. If the ref it
@@ -316,20 +331,27 @@ class AbContentIterator extends Media.ContentIterator {
                 kind = "ActiveContent";
             }
         } catch (ex) {
-            Log.line("Iterator: inspecting the content threw");
+            Log.warn("Iterator: inspecting the content threw");
         }
-        Log.line(
-            "Iterator: resolved " + position.toString()
-                + " asked " + Log.describe(_refs[position])
-                + " carries " + Log.describe(carried)
-                + " start " + startAt
-                + " kind " + kind
-        );
-        describeMetadata("before", content);
+        if (Log.LEVEL >= Log.DEBUG) {
+            Log.debug(
+                "Iterator: resolved " + position.toString()
+                    + " asked " + Log.describe(_refs[position])
+                    + " carries " + Log.describe(carried)
+                    + " start " + startAt
+                    + " kind " + kind
+            );
+            describeMetadata("before", content);
+        }
         // The titles stay ours: the file holds the chapter name, but only the
         // store knows book, author and ordering.
         applyMetadata(content, position);
-        describeMetadata("after", content);
+        // Reading the metadata back is the proof that our write survived —
+        // proof nobody reads in a build that prints nothing, and it costs a
+        // getMetadata() per track to produce.
+        if (Log.LEVEL >= Log.DEBUG) {
+            describeMetadata("after", content);
+        }
         return content;
     }
 
@@ -337,18 +359,18 @@ class AbContentIterator extends Media.ContentIterator {
     private function describeMetadata(when as String, content as Media.Content) as Void {
         var meta = content.getMetadata();
         if (meta == null) {
-            Log.line("Iterator: metadata " + when + " is null");
+            Log.warn("Iterator: metadata " + when + " is null");
             return;
         }
-        Log.line(
+        Log.debug(
             "Iterator: metadata " + when
                 + " title=" + ((meta.title == null) ? "null" : meta.title)
                 + " album=" + ((meta.album == null) ? "null" : meta.album)
                 + " track=" + ((meta.trackNumber == null) ? "null" : meta.trackNumber.toString())
         );
-        // The remaining fields only in the verbose build: the player shows them
-        // too, and an empty artist line on the watch is answered here.
-        Log.detail(
+        // The player shows these too, and an empty artist line on the watch is
+        // answered here.
+        Log.debug(
             "metadata " + when
                 + " artist=" + ((meta.artist == null) ? "null" : meta.artist)
                 + " genre=" + ((meta.genre == null) ? "null" : meta.genre)
@@ -356,10 +378,10 @@ class AbContentIterator extends Media.ContentIterator {
     }
 
     function get() as Media.Content? {
-        Log.code("Iterator: get at", _index);
+        Log.debugCode("Iterator: get at", _index);
         var content = contentAt(_index);
         if (content == null) {
-            Log.line("Iterator: get returns null");
+            Log.error("Iterator: get returns null");
             return null;
         }
         // ActiveContent only when there really is a mid-segment point to
@@ -368,7 +390,7 @@ class AbContentIterator extends Media.ContentIterator {
         // At position 0 the plain Content from the cache is the right thing.
         if (_startPosition > 0 && !_startApplied) {
             _startApplied = true;
-            Log.code("Iterator: ActiveContent from", _startPosition);
+            Log.debugCode("Iterator: ActiveContent from", _startPosition);
             // The ref comes from the cached Content itself, not freshly built.
             // contentAt()'s own doc note applies here too: a hand-made
             // `new Media.Content(ref, metadata)` carries the same ContentRef and
@@ -382,43 +404,47 @@ class AbContentIterator extends Media.ContentIterator {
                 _startPosition
             );
         }
-        Log.line(
-            "Iterator: get returns the cache object for " + _index.toString()
-                + " (offset " + _startPosition.toString()
-                + ", start " + (_startApplied ? "already used" : "not used") + ")"
-        );
+        if (Log.LEVEL >= Log.DEBUG) {
+            Log.debug(
+                "Iterator: get returns the cache object for " + _index.toString()
+                    + " (offset " + _startPosition.toString()
+                    + ", start " + (_startApplied ? "already used" : "not used") + ")"
+            );
+        }
         return content;
     }
 
     function next() as Media.Content? {
-        Log.code("Iterator: next from", _index);
+        Log.debugCode("Iterator: next from", _index);
         if (_index + 1 >= _refs.size()) {
-            Log.line("Iterator: next returns null (end of book)");
+            Log.info("Iterator: next returns null (end of book)");
             return null;
         }
         _index += 1;
         _startPosition = 0;
         var content = contentAt(_index);
-        Log.line(
-            "Iterator: next returns " + ((content == null) ? "null" : "content")
-                + " for " + _index.toString()
-        );
+        if (content == null) {
+            Log.errorCode("Iterator: next has no content for", _index);
+        } else {
+            Log.debugCode("Iterator: next returns content for", _index);
+        }
         return content;
     }
 
     function previous() as Media.Content? {
-        Log.code("Iterator: previous from", _index);
+        Log.debugCode("Iterator: previous from", _index);
         if (_index - 1 < 0) {
-            Log.line("Iterator: previous returns null (start of book)");
+            Log.debug("Iterator: previous returns null (start of book)");
             return null;
         }
         _index -= 1;
         _startPosition = 0;
         var content = contentAt(_index);
-        Log.line(
-            "Iterator: previous returns " + ((content == null) ? "null" : "content")
-                + " for " + _index.toString()
-        );
+        if (content == null) {
+            Log.errorCode("Iterator: previous has no content for", _index);
+        } else {
+            Log.debugCode("Iterator: previous returns content for", _index);
+        }
         return content;
     }
 
@@ -426,22 +452,22 @@ class AbContentIterator extends Media.ContentIterator {
     //! all, and how often, is half the answer to why nothing starts — so the
     //! peeks are traced as loudly as the real moves.
     function peekNext() as Media.Content? {
-        Log.code("Iterator: peekNext after", _index);
+        Log.debugCode("Iterator: peekNext after", _index);
         var content = contentAt(_index + 1);
-        Log.line("Iterator: peekNext returns " + ((content == null) ? "null" : "content"));
+        Log.debug((content == null) ? "Iterator: peekNext returns null" : "Iterator: peekNext returns content");
         return content;
     }
 
     function peekPrevious() as Media.Content? {
-        Log.code("Iterator: peekPrevious before", _index);
+        Log.debugCode("Iterator: peekPrevious before", _index);
         var content = contentAt(_index - 1);
-        Log.line("Iterator: peekPrevious returns " + ((content == null) ? "null" : "content"));
+        Log.debug((content == null) ? "Iterator: peekPrevious returns null" : "Iterator: peekPrevious returns content");
         return content;
     }
 
     function shuffling() as Boolean {
         // An audiobook in random order is no longer an audiobook.
-        Log.line("Iterator: shuffling -> false");
+        Log.debug("Iterator: shuffling -> false");
         return false;
     }
 
@@ -454,12 +480,12 @@ class AbContentIterator extends Media.ContentIterator {
     //! called, immediately after the iterator is built. Back to an explicit
     //! value; whatever is silencing playback, null is not the way there.
     function repeatMode() as Media.RepeatMode? {
-        Log.line("Iterator: repeatMode -> off");
+        Log.debug("Iterator: repeatMode -> off");
         return Media.REPEAT_MODE_OFF;
     }
 
     function canSkip() as Boolean {
-        Log.line("Iterator: canSkip -> true");
+        Log.debug("Iterator: canSkip -> true");
         return true;
     }
 
@@ -475,7 +501,7 @@ class AbContentIterator extends Media.ContentIterator {
     //! back: the silence was the metadata write in applyMetadata() destroying
     //! the track duration, and with that fixed the same profile plays through.
     function getPlaybackProfile() as Media.PlaybackProfile? {
-        Log.line("Iterator: getPlaybackProfile -> custom");
+        Log.debug("Iterator: getPlaybackProfile -> custom");
         var profile = new Media.PlaybackProfile();
         // Order matters, and membership matters more. The SDK says this array
         // "determines which native media player control options are rendered

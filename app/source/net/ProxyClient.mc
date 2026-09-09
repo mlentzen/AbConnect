@@ -17,10 +17,16 @@ class ProxyClient {
         _base = readSetting(Settings.PROXY_URL, BuildDefaults.PROXY_URL);
         _token = readSetting(Settings.PROXY_TOKEN, BuildDefaults.PROXY_TOKEN);
         _base = withoutTrailingSlash(_base);
-        Log.line("Net: proxy " + ((_base.length() == 0) ? "not set" : _base));
+        if (_base.length() == 0 || _token.length() == 0) {
+            // Nothing this client is asked to do can work. Said once, at the
+            // level a silent build still prints.
+            Log.error("Net: proxy not configured");
+        } else {
+            Log.info("Net: proxy " + _base);
+        }
         // Only the length: it tells "no token" from "token present" without
         // giving the token away.
-        Log.code("Net: token length", _token.length());
+        Log.debugCode("Net: token length", _token.length());
     }
 
     //! substring() returns null when the bounds do not fit — without this
@@ -65,7 +71,12 @@ class ProxyClient {
     //! never comes, nothing at all. The token is never included: the log file
     //! sits in the open on the watch and travels on while debugging.
     private static function trace(verb as String, path as String) as Void {
-        Log.line("Net: " + verb + " " + withoutQuery(path));
+        // Guarded rather than left to Log: withoutQuery() searches and cuts the
+        // string, and that would happen on every request in a build that prints
+        // nothing.
+        if (Log.LEVEL >= Log.INFO) {
+            Log.info("Net: " + verb + " " + withoutQuery(path));
+        }
     }
 
     //! The query string stays out: the cover URL carries a signature.
@@ -184,7 +195,7 @@ class ProxyClient {
 
     function pushProgress(entries as Array, callback as Method) as Void {
         trace("POST", "/v1/progress");
-        Log.code("Net: entries", entries.size());
+        Log.debugCode("Net: entries", entries.size());
         Communications.makeWebRequest(
             url("/v1/progress"),
             { "entries" => entries },

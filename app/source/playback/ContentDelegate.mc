@@ -24,6 +24,9 @@ class AbContentDelegate extends Media.ContentDelegate {
     private var _client as ProxyClient;
     private var _lastPush as Number;
     private var _pushing as Boolean;
+    //! The progress entries in flight, so the clear after acceptance takes
+    //! exactly what was sent and nothing buffered while the request was out.
+    private var _sentEntries as Array;
     private var _lastEvent as Number;
     private var _timer as Timer.Timer?;
     private var _playing as Boolean;
@@ -37,6 +40,7 @@ class AbContentDelegate extends Media.ContentDelegate {
         _client = new ProxyClient();
         _lastPush = 0;
         _pushing = false;
+        _sentEntries = [] as Array;
         _lastEvent = System.getTimer();
         _bookId = Current.bookId();
         if (_bookId == null) {
@@ -50,26 +54,36 @@ class AbContentDelegate extends Media.ContentDelegate {
         _lastReportMs = System.getTimer();
         _segment = -1;
         _segmentDuration = 0;
-        Log.line("Playback: book " + ((_bookId == null) ? "none" : _bookId));
+        if (_bookId == null) {
+            Log.error("Playback: no book to play");
+        } else {
+            Log.info("Playback: book " + _bookId);
+        }
         resetContentIterator();
         _timer = new Timer.Timer();
         _timer.start(method(:onTick), TICK_MS, true);
-        Log.code("Playback: position ticker every ms", TICK_MS);
+        Log.debugCode("Playback: position ticker every ms", TICK_MS);
     }
 
     function getContentIterator() as Media.ContentIterator? {
         // A null iterator goes back to the system as soon as there is no book.
         // Whether it can cope with that, only the watch will tell.
-        Log.line("Playback: getContentIterator " + ((_iterator == null) ? "null" : "present"));
+        if (_iterator == null) {
+            Log.error("Playback: getContentIterator has nothing to hand over");
+        } else {
+            Log.debug("Playback: getContentIterator");
+        }
         return _iterator;
     }
 
     function resetContentIterator() as Media.ContentIterator? {
-        Log.line("Playback: resetContentIterator");
+        Log.debug("Playback: resetContentIterator");
         if (_bookId != null) {
             _iterator = new AbContentIterator(_bookId);
         }
-        Log.line("Playback: iterator " + ((_iterator == null) ? "null" : "present"));
+        if (_iterator == null) {
+            Log.error("Playback: no iterator was built");
+        }
         return _iterator;
     }
 
@@ -80,12 +94,14 @@ class AbContentDelegate extends Media.ContentDelegate {
         // played: a segment lasts minutes. If COMPLETE arrives a few
         // milliseconds after START, the player only passed the file through
         // instead of playing it.
-        Log.line(
-            "Playback: onSong " + eventName(songEvent)
-                + " ref " + ((contentRefId instanceof Number) ? contentRefId.toString() : "?")
-                + " at " + ((playbackPosition instanceof Number) ? playbackPosition.toString() : "?")
-                + " after " + sinceLastEvent().toString() + " ms"
-        );
+        if (Log.LEVEL >= Log.DEBUG) {
+            Log.debug(
+                "Playback: onSong " + eventName(songEvent)
+                    + " ref " + ((contentRefId instanceof Number) ? contentRefId.toString() : "?")
+                    + " at " + ((playbackPosition instanceof Number) ? playbackPosition.toString() : "?")
+                    + " after " + sinceLastEvent().toString() + " ms"
+            );
+        }
         var bookId = _bookId;
         if (bookId == null) {
             return;
@@ -155,7 +171,7 @@ class AbContentDelegate extends Media.ContentDelegate {
         if (elapsed < 0) {
             // System.getTimer() counts from device start and wraps. One tick is
             // not worth a position from the far side of the wrap.
-            Log.line("Playback: the timer wrapped, waiting for the next event");
+            Log.warn("Playback: the timer wrapped, waiting for the next event");
             _lastReportMs = now;
             return;
         }
@@ -165,7 +181,7 @@ class AbContentDelegate extends Media.ContentDelegate {
         if (_segmentDuration > 0 && seconds >= _segmentDuration) {
             seconds = _segmentDuration - 1;
         }
-        Log.code("Playback: estimated position", seconds);
+        Log.debugCode("Playback: estimated position", seconds);
         Store.rememberPosition(bookId, _segment, seconds, Time.now().value());
         // Keeps the playing mark from ageing out while a chapter runs on
         // without a single event.
@@ -205,15 +221,20 @@ class AbContentDelegate extends Media.ContentDelegate {
         if (now - _lastPush < PUSH_THROTTLE_SECONDS) {
             return;
         }
-        if (!System.getDeviceSettings().phoneConnected) {
-            return;
-        }
+        // No flag is asked first. This runs inside the player, which is the one
+        // context where phoneConnected is known to read false whether or not a
+        // request would get through — gating on it here is what kept this path
+        // from ever firing, and so what kept the buffer from ever draining
+        // except by hand. Nothing is stopped to make room: the wearer is
+        // listening, and a push is not worth interrupting a book for. It tries,
+        // and a refusal costs one unanswered request per pause.
         var entries = Store.progressEntries();
         if (entries.size() == 0) {
             return;
         }
         _lastPush = now;
         _pushing = true;
+        _sentEntries = entries;
         _client.pushProgress(entries, method(:onPushed));
     }
 
@@ -223,13 +244,13 @@ class AbContentDelegate extends Media.ContentDelegate {
             // Discard nothing: the sync over Wi-Fi catches up on it.
             return;
         }
-        Store.clearProgress();
+        Store.clearSent(_sentEntries);
         Progress.adopt(data);
     }
 
     function onShuffle() as Void {
         // Audiobooks are not shuffled.
-        Log.line("Playback: onShuffle");
+        Log.debug("Playback: onShuffle");
     }
 
     // --- Remaining ContentDelegate contract ----------------------------------
@@ -240,22 +261,22 @@ class AbContentDelegate extends Media.ContentDelegate {
     // leaves no trace.
 
     function onRepeat() as Void {
-        Log.line("Playback: onRepeat");
+        Log.debug("Playback: onRepeat");
     }
 
     function onThumbsUp(contentRefId as Object) as Void {
-        Log.line("Playback: onThumbsUp");
+        Log.debug("Playback: onThumbsUp");
     }
 
     function onThumbsDown(contentRefId as Object) as Void {
-        Log.line("Playback: onThumbsDown");
+        Log.debug("Playback: onThumbsDown");
     }
 
     function onCustomButton(button as Media.CustomButton) as Void {
-        Log.line("Playback: onCustomButton");
+        Log.debug("Playback: onCustomButton");
     }
 
     function onAdAction(adContext as Object) as Void {
-        Log.line("Playback: onAdAction");
+        Log.debug("Playback: onAdAction");
     }
 }

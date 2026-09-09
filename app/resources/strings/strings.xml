@@ -7,7 +7,6 @@
     <string id="settingProxyTokenPrompt">The ABCONNECT_TOKEN from the proxy</string>
 
     <string id="menuSyncTitle">Books</string>
-    <string id="menuPlaybackTitle">Play</string>
     <string id="loading">Loading…</string>
     <string id="noBooks">No books found</string>
     <string id="notConfigured">Settings needed</string>
@@ -26,7 +25,20 @@
     <string id="sendProgress">Send progress</string>
     <string id="noPhone">No phone connection</string>
     <string id="progressSent">Progress sent</string>
-    <string id="syncNow">Sync now</string>
     <string id="resetAll">Reset everything</string>
     <string id="resetConfirm">Delete all books and listening progress?</string>
+    <string id="menuContinue">Continue</string>
+    <string id="menuBooks">Books</string>
+    <string id="menuInfo">Info</string>
+    <string id="menuSync">Sync</string>
+    <string id="booksCount">on the watch</string>
+    <string id="progressPending">waiting</string>
+    <string id="infoBooks">Books</string>
+    <string id="infoCache">Cache</string>
+    <string id="infoPending">Waiting</string>
+    <string id="infoChecked">Playlist</string>
+    <string id="infoNever">never</string>
+    <string id="infoAgo">ago</string>
+    <string id="progressNotSent">Progress not sent</string>
+    <string id="tries">tries</string>
 </strings>

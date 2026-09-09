@@ -7,7 +7,6 @@
     <string id="settingProxyTokenPrompt">Der ABCONNECT_TOKEN des Proxy</string>
 
     <string id="menuSyncTitle">Bücher</string>
-    <string id="menuPlaybackTitle">Abspielen</string>
     <string id="loading">Lädt…</string>
     <string id="noBooks">Keine Bücher gefunden</string>
     <string id="notConfigured">Proxy-URL und Token zuerst in der Handy-App eintragen</string>
@@ -26,7 +25,20 @@
     <string id="sendProgress">Fortschritt senden</string>
     <string id="noPhone">Keine Telefonverbindung</string>
     <string id="progressSent">Fortschritt gesendet</string>
-    <string id="syncNow">Jetzt synchronisieren</string>
     <string id="resetAll">Alles zurücksetzen</string>
     <string id="resetConfirm">Alle Bücher und den Hörfortschritt löschen?</string>
+    <string id="menuContinue">Fortsetzen</string>
+    <string id="menuBooks">Bücher</string>
+    <string id="menuInfo">Info</string>
+    <string id="menuSync">Synchronisieren</string>
+    <string id="booksCount">auf der Uhr</string>
+    <string id="progressPending">wartend</string>
+    <string id="infoBooks">Bücher</string>
+    <string id="infoCache">Cache</string>
+    <string id="infoPending">Wartend</string>
+    <string id="infoChecked">Playlist</string>
+    <string id="infoNever">nie</string>
+    <string id="infoAgo">her</string>
+    <string id="progressNotSent">Fortschritt nicht gesendet</string>
+    <string id="tries">Versuche</string>
 </strings>

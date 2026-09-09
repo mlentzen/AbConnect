@@ -101,7 +101,7 @@ module Store {
     //! lives here so the two can never disagree about what segment 3 is.
     function orderedRefs(bookId as String) as Array {
         var refIds = localTracks(bookId).keys();
-        Log.code("Store: entries for the book", refIds.size());
+        Log.debugCode("Store: entries for the book", refIds.size());
         var highest = -1;
         var indices = [] as Array<Number>;
 
@@ -111,14 +111,21 @@ module Store {
             indices.add(index);
             // The raw row, before any ordering. If the result comes out shorter
             // than expected, the reason is one of these lines.
-            Log.detail(
-                "store " + Log.describe(refIds[i])
-                    + " segment " + index.toString()
-                    + " duration " + ((parts == null) ? "?" : parts[1]) + " s"
-                    + " title '" + ((parts == null) ? "" : parts[2]) + "'"
-            );
+            //
+            // Guarded, unlike most of the app: this loop runs once per segment
+            // every time a book is opened, and Monkey C builds the message
+            // before the call whether or not anything prints it. The whole
+            // point of a silent build is lost in a line like this one.
+            if (Log.LEVEL >= Log.DEBUG) {
+                Log.debug(
+                    "store " + Log.describe(refIds[i])
+                        + " segment " + index.toString()
+                        + " duration " + ((parts == null) ? "?" : parts[1]) + " s"
+                        + " title '" + ((parts == null) ? "" : parts[2]) + "'"
+                );
+            }
             if (parts == null) {
-                Log.line("Store: unreadable entry for " + Log.describe(refIds[i]));
+                Log.error("Store: unreadable entry for " + Log.describe(refIds[i]));
             }
             if (index > highest) {
                 highest = index;
@@ -132,7 +139,7 @@ module Store {
                 if (slots[slot] != null) {
                     // Two files claiming the same segment: the second wins and
                     // the first is silently gone. Not silently, now.
-                    Log.line(
+                    Log.warn(
                         "Store: segment " + slot.toString() + " claimed twice, "
                             + Log.describe(slots[slot]) + " replaced by " + Log.describe(refIds[i])
                     );
@@ -146,15 +153,21 @@ module Store {
             if (slots[slot] == null) {
                 // A hole in the numbering: that segment never made it onto the
                 // watch. Everything after it moves up without a word otherwise.
-                Log.code("Store: no file for segment", slot);
+                Log.warnCode("Store: no file for segment", slot);
             } else {
                 ordered.add(slots[slot]);
             }
         }
-        Log.line(
-            "Store: " + ordered.size().toString()
-                + " of " + slots.size().toString() + " segments present"
-        );
+        if (ordered.size() < slots.size()) {
+            // Fewer files than segment numbers: the book has gaps, and that is
+            // the reason a chapter goes missing mid-listen.
+            Log.warn(
+                "Store: only " + ordered.size().toString()
+                    + " of " + slots.size().toString() + " segments present"
+            );
+        } else {
+            Log.debugCode("Store: segments present", ordered.size());
+        }
         return ordered;
     }
 
@@ -286,14 +299,14 @@ module Store {
     //! half minute.
     function markPlaying() as Void {
         if (!(Application.Storage.getValue(Keys.PLAYING) instanceof Number)) {
-            Log.line("Store: playing mark set");
+            Log.debug("Store: playing mark set");
         }
         Application.Storage.setValue(Keys.PLAYING, Time.now().value());
     }
 
     function stoppedPlaying() as Void {
         if (Application.Storage.getValue(Keys.PLAYING) instanceof Number) {
-            Log.line("Store: playing mark cleared");
+            Log.debug("Store: playing mark cleared");
         }
         Application.Storage.deleteValue(Keys.PLAYING);
     }
@@ -315,14 +328,65 @@ module Store {
             return false;
         }
         if (age > PLAYING_TRUSTED_SECONDS) {
-            Log.code("Store: a playing mark this old is not believed", age);
+            Log.warnCode("Store: a playing mark this old is not believed", age);
             return false;
         }
         return true;
     }
 
-    function clearProgress() as Void {
-        Application.Storage.deleteValue(Keys.PROGRESS);
+    //! Discard only the progress that was just sent.
+    //!
+    //! Clearing everything after a push would also take a position that was
+    //! buffered while the request was out, and that listening would be gone
+    //! for good. Progress adopts what the server is ahead in afterwards, so
+    //! books that leave here come back only where the server knows better.
+    function clearSent(entries as Array) as Void {
+        var all = progress();
+        for (var i = 0; i < entries.size(); ++i) {
+            var entry = entries[i];
+            if (!(entry instanceof Dictionary)) {
+                continue;
+            }
+            var bookId = entry["book_id"];
+            if (bookId instanceof String && all.hasKey(bookId)) {
+                all.remove(bookId);
+            }
+        }
+        Application.Storage.setValue(Keys.PROGRESS, all);
+    }
+
+    //! The book that "Continue" offers, or null when there is nothing to carry
+    //! on with.
+    //!
+    //! Current.bookId() is what the player last opened, and it is the answer
+    //! whenever it still means anything — but it can name a book that has since
+    //! left the playlist and been deleted from the watch, so it only counts
+    //! while segments of it are still here.
+    //!
+    //! Failing that, the newest position stamped on this watch. Positions
+    //! adopted from the server carry timestamp 0 on purpose (see
+    //! Progress.adopt), and being told where the phone got to is not the same
+    //! as having listened here.
+    function resumableBook() as String? {
+        var current = Current.bookId();
+        if (current != null && localTracks(current).size() > 0) {
+            return current;
+        }
+        var best = null as String?;
+        var bestStamp = 0;
+        var bookIds = progress().keys();
+        for (var i = 0; i < bookIds.size(); ++i) {
+            var bookId = bookIds[i];
+            if (!(bookId instanceof String) || localTracks(bookId).size() == 0) {
+                continue;
+            }
+            var spot = position(bookId);
+            if (spot != null && spot[2] > bestStamp) {
+                best = bookId;
+                bestStamp = spot[2];
+            }
+        }
+        return best;
     }
 
     // --- Helpers --------------------------------------------------------------

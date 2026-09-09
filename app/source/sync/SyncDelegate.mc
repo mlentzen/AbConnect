@@ -2,7 +2,6 @@ import Toybox.Communications;
 import Toybox.Lang;
 import Toybox.Media;
 import Toybox.System;
-import Toybox.Time;
 import Toybox.Timer;
 import Toybox.WatchUi;
 
@@ -38,6 +37,9 @@ class AbSyncDelegate extends Communications.SyncDelegate {
     private var _client as ProxyClient;
     private var _bookQueue as Array<String>;
     private var _downloads as Array<Dictionary>;
+    //! The progress entries in flight, so the clear after acceptance takes
+    //! exactly what was sent and nothing buffered while the request was out.
+    private var _sentEntries as Array;
     private var _pending as Dictionary?;
     private var _currentBook as String?;
     private var _booksTotal as Number;
@@ -60,6 +62,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         _client = new ProxyClient();
         _bookQueue = [] as Array<String>;
         _downloads = [] as Array<Dictionary>;
+        _sentEntries = [] as Array;
         _pending = null;
         _currentBook = null;
         _booksTotal = 0;
@@ -78,33 +81,27 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         _idleTicks = 0;
     }
 
-    //! A sync is worthwhile when progress is pending, the last known state of
-    //! the playlist does not match the local inventory — or when that state is
-    //! simply too old.
+    //! Never — a sync happens because it was asked for, and only then.
     //!
-    //! The last point is the important one: without it a book newly added to
-    //! the playlist would go unnoticed, because the watch knows nothing about
-    //! it while offline.
+    //! The system asks this to decide whether to schedule a sync of its own.
+    //! Saying yes was costing more than it bought: a sync brings up Wi-Fi and
+    //! then holds the watch for as long as the downloads take, which for a book
+    //! is minutes at best, and it did so on nothing more than the playlist
+    //! state being six hours old. An audiobook is not news; there is no hurry
+    //! that justifies deciding for the wearer when their watch goes on the
+    //! network.
+    //!
+    //! The Sync row in the menu calls Communications.startSync(), which forces
+    //! sync mode regardless of this answer. The Info screen shows how long ago
+    //! the playlist was last read, so the decision can be made with something
+    //! to go on.
     function isSyncNeeded() as Boolean {
-        Log.code("Sync: playlist state", Store.desired().size());
-        Log.code("Sync: known", Store.knownBooks().size());
-        if (Store.progress().size() > 0) {
-            return true;
-        }
-        if (Time.now().value() - Store.lastCheck() > Keys.PLAYLIST_MAX_AGE_SECONDS) {
-            return true;
-        }
-        var wanted = Store.desired();
-        for (var i = 0; i < wanted.size(); ++i) {
-            if (Store.localTracks(wanted[i]).size() == 0) {
-                return true;
-            }
-        }
-        return orphans(wanted).size() > 0;
+        Log.debug("Sync: not needed, syncing is manual");
+        return false;
     }
 
     function onStartSync() as Void {
-        Log.line("Sync: onStartSync");
+        Log.info("Sync: onStartSync");
         logEnvironment();
         enterPhase(PHASE_START);
         startWatchdog();
@@ -118,7 +115,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
     }
 
     function onStopSync() as Void {
-        Log.line("Sync: onStopSync");
+        Log.info("Sync: onStopSync");
         _stopped = true;
         Communications.cancelAllRequests();
         finish(null);
@@ -133,11 +130,11 @@ class AbSyncDelegate extends Communications.SyncDelegate {
     //! far slower — Bluetooth by way of the phone.
     private function logEnvironment() as Void {
         var connections = System.getDeviceSettings().connectionInfo;
-        Log.code("Sync: Wi-Fi", stateOf(connections, :wifi));
-        Log.code("Sync: Bluetooth", stateOf(connections, :bluetooth));
-        Log.code("Sync: LTE", stateOf(connections, :lte));
+        Log.debugCode("Sync: Wi-Fi", stateOf(connections, :wifi));
+        Log.debugCode("Sync: Bluetooth", stateOf(connections, :bluetooth));
+        Log.debugCode("Sync: LTE", stateOf(connections, :lte));
         var stats = System.getSystemStats();
-        Log.code("Sync: free memory", stats.freeMemory);
+        Log.debugCode("Sync: free memory", stats.freeMemory);
     }
 
     //! -1 means: this path does not exist on the device.
@@ -159,7 +156,11 @@ class AbSyncDelegate extends Communications.SyncDelegate {
     //! Ends the sync by exactly one route — otherwise the watchdog keeps running.
     private function finish(error as String?) as Void {
         stopWatchdog();
-        Log.line("Sync: end, error=" + ((error == null) ? "none" : error));
+        if (error == null) {
+            Log.info("Sync: end, no error");
+        } else {
+            Log.error("Sync: end, error=" + error);
+        }
         Communications.notifySyncComplete(error);
     }
 
@@ -176,7 +177,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         } catch (ex) {
             // No timer in sync mode: then without one. That is the state as it
             // was before, not worse.
-            Log.line("Sync: no watchdog available");
+            Log.warn("Sync: no watchdog available");
             _watchdog = null;
         }
     }
@@ -199,7 +200,9 @@ class AbSyncDelegate extends Communications.SyncDelegate {
             return;
         }
         _idleTicks += 1;
-        Log.code("Sync: quiet in phase " + _phase.toString() + ", ticks", _idleTicks);
+        if (Log.LEVEL >= Log.WARN) {
+            Log.warnCode("Sync: quiet in phase " + _phase.toString() + ", ticks", _idleTicks);
+        }
         if (_idleTicks < WATCHDOG_MAX_IDLE_TICKS) {
             return;
         }
@@ -242,22 +245,24 @@ class AbSyncDelegate extends Communications.SyncDelegate {
             return;
         }
         var entries = Store.progressEntries();
-        Log.code("Sync: progress entries", entries.size());
+        Log.debugCode("Sync: progress entries", entries.size());
         if (entries.size() == 0) {
             enterPhase(PHASE_PROGRESS_PUSHED);
             fetchPlaylist();
             return;
         }
+        _sentEntries = entries;
         _client.pushProgress(entries, method(:onProgressPushed));
     }
 
     function onProgressPushed(code as Number, data as Dictionary or String or Null) as Void {
         stirred();
-        Log.code("Sync: progress", code);
+        Log.response("Sync: progress", code);
         if (code == 200) {
-            // Only discard after confirmed acceptance — on an abort the
-            // listening progress would otherwise be gone.
-            Store.clearProgress();
+            // Only discard after confirmed acceptance, and only what was sent —
+            // on an abort the listening progress would otherwise be gone, and
+            // so would anything buffered while the request was out.
+            Store.clearSent(_sentEntries);
             Progress.adopt(data);
         }
         enterPhase(PHASE_PROGRESS_PUSHED);
@@ -270,13 +275,13 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         if (_stopped) {
             return;
         }
-        Log.line("Sync: fetching playlist");
+        Log.info("Sync: fetching playlist");
         _client.playlist(method(:onPlaylist));
     }
 
     function onPlaylist(code as Number, data as Dictionary or String or Null) as Void {
         stirred();
-        Log.code("Sync: playlist", code);
+        Log.response("Sync: playlist", code);
         if (_stopped) {
             return;
         }
@@ -335,13 +340,13 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         var bookId = _bookQueue[0];
         _bookQueue.remove(bookId);
         _currentBook = bookId;
-        Log.line("Sync: segments for " + bookId);
+        Log.info("Sync: segments for " + bookId);
         _client.segments(bookId, method(:onSegments));
     }
 
     function onSegments(code as Number, data as Dictionary or String or Null) as Void {
         stirred();
-        Log.code("Sync: segments", code);
+        Log.response("Sync: segments", code);
         if (_stopped) {
             return;
         }
@@ -385,7 +390,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         }
         _downloadsTotal = _downloads.size();
         _downloadsDone = 0;
-        Log.code("Sync: segments total", segments.size());
+        Log.debugCode("Sync: segments total", segments.size());
         Log.code("Sync: of those to download", _downloadsTotal);
         enterPhase(PHASE_SEGMENTS);
         downloadNext();
@@ -421,7 +426,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         _pending = segment;
         _segmentBytes = 0;
         _segmentSize = 0;
-        Log.line("Sync: downloading " + path);
+        Log.info("Sync: downloading " + path);
         _client.downloadSegment(
             path,
             SyncConfigView.stringOr(segment["encoding"], "m4a"),
@@ -446,8 +451,8 @@ class AbSyncDelegate extends Communications.SyncDelegate {
 
     function onSegmentDownloaded(code as Number, data as Object?) as Void {
         stirred();
-        Log.code("Sync: segment downloaded", code);
-        Log.code("Sync: bytes", _segmentBytes);
+        Log.response("Sync: segment downloaded", code);
+        Log.debugCode("Sync: bytes", _segmentBytes);
         if (_stopped) {
             return;
         }
@@ -502,7 +507,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         _reported = percent;
         // The reported number belongs in the log: if the watch shows 0 % while
         // this says 6 %, the fault is not in this calculation.
-        Log.code("Sync: reported", percent);
+        Log.debugCode("Sync: reported", percent);
         Communications.notifySyncProgress(percent);
     }
 
