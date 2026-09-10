@@ -409,13 +409,17 @@ def _register(app: FastAPI) -> None:
 
             result = {"id": book_id, "accepted": True, "source": winner}
             if winner == "watch":
-                try:
-                    await abs_client.set_progress(
-                        book_id, current_time=winning_time, duration=float(manifest["duration"])
-                    )
-                except AbsError as error:
-                    log.warning("Progress push for %s failed: %s", book_id, error)
-                    result.update(accepted=False, reason=str(error))
+                # Timestamp 0 is the watch asking, not reporting: it holds
+                # nothing newer than what it was last told. Written back, a book
+                # never started anywhere would land in ABS at 0 s, "in progress".
+                if entry.ts > 0:
+                    try:
+                        await abs_client.set_progress(
+                            book_id, current_time=winning_time, duration=float(manifest["duration"])
+                        )
+                    except AbsError as error:
+                        log.warning("Progress push for %s failed: %s", book_id, error)
+                        result.update(accepted=False, reason=str(error))
             else:
                 # The server is ahead — the watch should jump there.
                 spot = progress.position(manifest["segments"], winning_time)

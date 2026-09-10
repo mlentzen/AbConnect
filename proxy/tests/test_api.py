@@ -304,6 +304,31 @@ class TestProgress:
         assert entry["source"] == "server"
         assert entry["resume"] == {"segment": 1, "offset": 600.0}
 
+    def test_a_zero_timestamp_only_asks_and_writes_nothing(self, config):
+        prepared_book(config)
+        sent = {}
+        with build_client(config, abs_handler(on_patch=sent.update)) as client:
+            payload = client.post(
+                "/v1/progress",
+                headers=HEAD,
+                json={"entries": [{"book_id": "li_a", "segment": 0, "offset": 0, "ts": 0}]},
+            ).json()
+
+        assert payload["books"][0] == {"id": "li_a", "accepted": True, "source": "watch"}
+        assert sent == {}
+
+    def test_a_zero_timestamp_learns_the_server_position(self, config):
+        prepared_book(config)
+        handler = abs_handler(progress_payload={"currentTime": 1500.0, "lastUpdate": 1_800_000_000_000})
+        with build_client(config, handler) as client:
+            payload = client.post(
+                "/v1/progress",
+                headers=HEAD,
+                json={"entries": [{"book_id": "li_a", "segment": 0, "offset": 0, "ts": 0}]},
+            ).json()
+
+        assert payload["books"][0]["resume"] == {"segment": 1, "offset": 600.0}
+
     def test_an_unknown_book_is_reported_not_crashed(self, config):
         with build_client(config) as client:
             payload = client.post(
