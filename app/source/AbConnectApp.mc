@@ -48,9 +48,12 @@ class AbConnectApp extends Application.AudioContentProviderApp {
         return delegate;
     }
 
+    //! Its own copy of the launcher icon, cut down to the icon's two colours.
+    //! The system sync screen drew the full-colour launcher icon black; Garmin's
+    //! MonkeyMusic sample hands over a palette-limited bitmap here too.
     function getProviderIconInfo() as Media.ProviderIconInfo? {
         Log.debug("Icon: requested");
-        return new Media.ProviderIconInfo(Rez.Drawables.LauncherIcon, Graphics.COLOR_BLUE);
+        return new Media.ProviderIconInfo(Rez.Drawables.ProviderIcon, Graphics.COLOR_BLUE);
     }
 
     //! What every mode hangs on: what is on the watch at all.

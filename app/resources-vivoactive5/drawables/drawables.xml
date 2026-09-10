@@ -1,0 +1,11 @@
+<drawables>
+    <!-- The vivoactive 5 wants a 56 px launcher icon: 140 % of the 40 x 40 that
+         ab.svg declares. Otherwise as in resources/drawables/drawables.xml. -->
+    <bitmap id="LauncherIcon" filename="../../resources/drawables/ab.svg" dithering="none" scaleX="140%" scaleY="140%" scaleRelativeTo="image"/>
+    <bitmap id="ProviderIcon" filename="../../resources/drawables/ab.svg" dithering="none" scaleX="140%" scaleY="140%" scaleRelativeTo="image">
+        <palette>
+            <color>000000</color>
+            <color>F1F1F0</color>
+        </palette>
+    </bitmap>
+</drawables>

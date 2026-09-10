@@ -1,3 +1,15 @@
 <drawables>
-    <bitmap id="LauncherIcon" filename="launcher_icon.png"/>
+    <!-- ab.svg declares 40 x 40, the launcher size of the fenix 7 range, so it
+         is rasterised at exactly that size. A bare scaleX="40" is not read as
+         pixels: the resource compiler ran out of heap on it. -->
+    <bitmap id="LauncherIcon" filename="ab.svg" dithering="none"/>
+    <!-- For getProviderIconInfo(): the system sync screen wants a
+         palette-limited bitmap, as in Garmin's MonkeyMusic sample. The two
+         colours are exactly the SVG's two fills. -->
+    <bitmap id="ProviderIcon" filename="ab.svg" dithering="none">
+        <palette>
+            <color>000000</color>
+            <color>F1F1F0</color>
+        </palette>
+    </bitmap>
 </drawables>
