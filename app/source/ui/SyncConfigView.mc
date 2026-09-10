@@ -90,16 +90,12 @@ class SyncConfigView extends WatchUi.View {
                 )
             );
         }
-        // The same row as in the playback configuration, so the progress can go
-        // out without opening the player first.
-        var pendingHint = null as String?;
-        if (ProgressPush.pending() == 0) {
-            pendingHint = WatchUi.loadResource(Rez.Strings.syncNothingToDo) as String;
-        }
+        // The same row as in the playback configuration, so the progress can be
+        // synced without opening the player first.
         menu.addItem(
             new WatchUi.MenuItem(
                 WatchUi.loadResource(Rez.Strings.sendProgress) as String,
-                pendingHint,
+                ProgressPush.rowSubtitle(),
                 $.PROGRESS_ITEM,
                 null
             )
@@ -168,7 +164,7 @@ class SyncConfigDelegate extends WatchUi.Menu2InputDelegate {
         // The books are display only: what is on the watch is decided by the
         // playlist. Only the send-progress row does anything here.
         if (item.getId() == $.PROGRESS_ITEM) {
-            Log.info("Config: sending progress over the phone");
+            Log.info("Config: syncing progress over the phone");
             _push.start();
         }
     }

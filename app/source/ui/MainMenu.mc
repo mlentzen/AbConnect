@@ -21,8 +21,48 @@ const INFO_ITEM = :info;
 //! scrolling for something to listen to.
 class MainMenu extends WatchUi.Menu2 {
 
+    //! What the rows were built from, so a return to the menu can tell whether
+    //! they still say the truth.
+    private var _state as String;
+
     function initialize() {
         Menu2.initialize({ :title => Rez.Strings.AppName });
+        _state = "";
+        build();
+    }
+
+    //! Every return to the menu checks the store again.
+    //!
+    //! The rows were once built only here, and what they report is changed
+    //! elsewhere — a Wi-Fi sync, a progress sync, the player. Coming back from
+    //! the sync to the old book count is how the menu came to be out of date.
+    //! Unchanged is the common case, back from the book list or the info
+    //! screen, and there a rebuild would only throw the cursor to the top.
+    function onShow() as Void {
+        Menu2.onShow();
+        if (state().equals(_state)) {
+            return;
+        }
+        Log.info("Menu: the store changed, rebuilding");
+        var removed = deleteItem(0);
+        while (removed == true) {
+            removed = deleteItem(0);
+        }
+        build();
+        setFocus(0);
+    }
+
+    //! Everything the rows say, in one comparable string.
+    private static function state() as String {
+        var resumable = Store.resumableBook();
+        return ((resumable == null) ? "" : resumable)
+            + "|" + Store.localBooks().size().toString()
+            + "|" + ProgressPush.pending().toString()
+            + "|" + (Media.getCacheStatistics().size / 1048576).toString();
+    }
+
+    private function build() as Void {
+        _state = state();
 
         // Only when there is something to carry on with. A row that explains
         // why it cannot do anything is worse here than no row: this is the
@@ -40,6 +80,7 @@ class MainMenu extends WatchUi.Menu2 {
         }
 
         var books = Store.localBooks();
+        Log.debugCode("Menu: playable", books.size());
         addItem(
             new WatchUi.MenuItem(
                 WatchUi.loadResource(Rez.Strings.menuBooks) as String,
@@ -49,17 +90,14 @@ class MainMenu extends WatchUi.Menu2 {
             )
         );
 
-        // The small sibling of the sync: the positions go out over the phone
-        // connection, without sync mode and so without Wi-Fi. When there is
-        // nothing buffered the row says so rather than making it a press to
-        // find out.
-        var pending = ProgressPush.pending();
+        // The small sibling of the sync: positions both ways over the phone
+        // connection, without sync mode and so without Wi-Fi. The row says how
+        // many are waiting to go out, and nothing when none are — there may
+        // still be something to learn from the server.
         addItem(
             new WatchUi.MenuItem(
                 WatchUi.loadResource(Rez.Strings.sendProgress) as String,
-                (pending == 0)
-                    ? WatchUi.loadResource(Rez.Strings.syncNothingToDo) as String
-                    : pending.toString() + " " + (WatchUi.loadResource(Rez.Strings.progressPending) as String),
+                ProgressPush.rowSubtitle(),
                 $.PROGRESS_ITEM,
                 null
             )
@@ -161,7 +199,7 @@ class MainMenuDelegate extends WatchUi.Menu2InputDelegate {
         }
 
         if (id == $.PROGRESS_ITEM) {
-            Log.info("Menu: sending progress over the phone");
+            Log.info("Menu: syncing progress over the phone");
             _push.start();
             return;
         }

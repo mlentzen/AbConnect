@@ -24,8 +24,8 @@ class AbContentDelegate extends Media.ContentDelegate {
     private var _client as ProxyClient;
     private var _lastPush as Number;
     private var _pushing as Boolean;
-    //! The progress entries in flight, so the clear after acceptance takes
-    //! exactly what was sent and nothing buffered while the request was out.
+    //! The progress entries in flight, so that only what was sent is marked as
+    //! agreed, and nothing buffered while the request was out.
     private var _sentEntries as Array;
     private var _lastEvent as Number;
     private var _timer as Timer.Timer?;
@@ -228,7 +228,9 @@ class AbContentDelegate extends Media.ContentDelegate {
         // except by hand. Nothing is stopped to make room: the wearer is
         // listening, and a push is not worth interrupting a book for. It tries,
         // and a refusal costs one unanswered request per pause.
-        var entries = Store.progressEntries();
+        // Only what is new: a position the server already agrees with has
+        // nothing to say at every pause.
+        var entries = Store.pendingEntries();
         if (entries.size() == 0) {
             return;
         }
@@ -244,8 +246,7 @@ class AbContentDelegate extends Media.ContentDelegate {
             // Discard nothing: the sync over Wi-Fi catches up on it.
             return;
         }
-        Store.clearSent(_sentEntries);
-        Progress.adopt(data);
+        Progress.settle(_sentEntries, data);
     }
 
     function onShuffle() as Void {

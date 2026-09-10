@@ -256,9 +256,9 @@ module Store {
         return [toNumber(parts[0]), toNumber(parts[1]), toNumber(parts[2])] as Array<Number>;
     }
 
-    //! The buffered progress in the shape that /v1/progress expects.
-    //! Sync and pause push send the same data — hence here and not twice at
-    //! the call sites.
+    //! Every stored position in the shape that /v1/progress expects, pending
+    //! or not. pendingEntries() and syncEntries() build on it, so the three
+    //! paths that push can never disagree about the shape.
     function progressEntries() as Array<Dictionary> {
         var entries = [] as Array<Dictionary>;
         var bookIds = progress().keys();
@@ -282,17 +282,9 @@ module Store {
 
     // --- Is the player playing? -------------------------------------------
 
-    //! How long a "playing" mark is believed without being refreshed.
-    //!
-    //! The position ticker refreshes it every 30 seconds, so a live player
-    //! keeps it fresh with room to spare. Nothing else can clear it when an app
-    //! is killed mid-chapter, and after this long a stale mark is more likely
-    //! than a listener who has heard nothing move for five minutes.
-    const PLAYING_TRUSTED_SECONDS = 300;
-
     //! The configuration view runs as its own app instance and cannot ask the
-    //! player anything. Without this mark, a push that stops playback to free
-    //! the radio would not know whether there is anything to start again.
+    //! player anything. This mark is how its log can still say whether sound
+    //! was coming out when a push stopped playback to free the radio.
     //!
     //! Set on every tick while sound comes out, so only the transition from
     //! "no mark" to "mark" is worth a line — one per session, not one per
@@ -312,26 +304,13 @@ module Store {
     }
 
     //! Seconds since the player last said it was playing, or null when there
-    //! is no mark. The push decides on this basis whether the radio has to be
-    //! freed, so the raw value belongs in the trace — not just the verdict.
+    //! is no mark.
     function playingMarkAge() as Number? {
         var stored = Application.Storage.getValue(Keys.PLAYING);
         if (!(stored instanceof Number)) {
             return null;
         }
         return Time.now().value() - stored;
-    }
-
-    function isPlaying() as Boolean {
-        var age = playingMarkAge();
-        if (age == null) {
-            return false;
-        }
-        if (age > PLAYING_TRUSTED_SECONDS) {
-            Log.warnCode("Store: a playing mark this old is not believed", age);
-            return false;
-        }
-        return true;
     }
 
     // --- The manual sync ticket --------------------------------------------
@@ -370,25 +349,58 @@ module Store {
         Application.Storage.deleteValue(Keys.SYNC_REQUEST);
     }
 
-    //! Discard only the progress that was just sent.
+    //! The server now holds this position: keep it, stop reporting it.
     //!
-    //! Clearing everything after a push would also take a position that was
-    //! buffered while the request was out, and that listening would be gone
-    //! for good. Progress adopts what the server is ahead in afterwards, so
-    //! books that leave here come back only where the server knows better.
-    function clearSent(entries as Array) as Void {
-        var all = progress();
+    //! Deleting it, as this once did, cost the watch its own place every time
+    //! the watch won — the proxy only hands a position back when the server is
+    //! ahead, so the book started over at its first segment. Timestamp 0 is the
+    //! mark for "the same as the server", the one Progress already uses for
+    //! positions it adopts.
+    //!
+    //! Only while the stored stamp is still the one that was sent: a position
+    //! written while the request was out is news, and stays pending.
+    function markSynced(bookId as String, sentTs as Number) as Void {
+        var spot = position(bookId);
+        if (spot == null || sentTs == 0 || spot[2] != sentTs) {
+            return;
+        }
+        rememberPosition(bookId, spot[0], spot[1], 0);
+    }
+
+    //! The positions the server has not confirmed yet: listened to here, with
+    //! a real timestamp. What the pause push sends and what "waiting" counts.
+    function pendingEntries() as Array<Dictionary> {
+        var pending = [] as Array<Dictionary>;
+        var entries = progressEntries();
         for (var i = 0; i < entries.size(); ++i) {
-            var entry = entries[i];
-            if (!(entry instanceof Dictionary)) {
-                continue;
-            }
-            var bookId = entry["book_id"];
-            if (bookId instanceof String && all.hasKey(bookId)) {
-                all.remove(bookId);
+            if ((entries[i]["ts"] as Number) > 0) {
+                pending.add(entries[i]);
             }
         }
-        Application.Storage.setValue(Keys.PROGRESS, all);
+        return pending;
+    }
+
+    //! Everything the watch knows, plus a question about each of these books.
+    //!
+    //! /v1/progress answers only about the books it was sent, so a book with
+    //! nothing stored would be pushed and nothing learned back about it. Sent
+    //! with timestamp 0 it loses every reconciliation on purpose, and the proxy
+    //! never writes it: whatever the server holds wins.
+    function syncEntries(bookIds as Array<String>) as Array<Dictionary> {
+        var entries = progressEntries();
+        for (var i = 0; i < bookIds.size(); ++i) {
+            if (position(bookIds[i]) != null) {
+                continue;
+            }
+            Log.debug("Store: asking about " + bookIds[i] + " with nothing of our own");
+            entries.add({
+                "book_id" => bookIds[i],
+                "segment" => 0,
+                "offset" => 0,
+                "ts" => 0
+            });
+        }
+        return entries;
     }
 
     //! The book that "Continue" offers, or null when there is nothing to carry
@@ -399,10 +411,10 @@ module Store {
     //! left the playlist and been deleted from the watch, so it only counts
     //! while segments of it are still here.
     //!
-    //! Failing that, the newest position stamped on this watch. Positions
-    //! adopted from the server carry timestamp 0 on purpose (see
-    //! Progress.adopt), and being told where the phone got to is not the same
-    //! as having listened here.
+    //! Failing that, the newest position stamped on this watch. Positions at
+    //! timestamp 0 agree with the server (see Progress.settle) and may be where
+    //! the phone got to, and being told that is not the same as having
+    //! listened here.
     function resumableBook() as String? {
         var current = Current.bookId();
         if (current != null && localTracks(current).size() > 0) {

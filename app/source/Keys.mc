@@ -15,6 +15,9 @@ module Keys {
     //! Time of the last successful playlist query.
     const LAST_CHECK = "CHK";
     //! Flat map bookId -> "segIdx|seconds|timestamp".
+    //!
+    //! A timestamp above 0 is listening the server has not confirmed yet; 0 is
+    //! a position that agrees with the server, adopted from it or accepted by it.
     const PROGRESS = "PRG";
     //! Schema version; if it changes, the store is discarded.
     const SCHEMA = "VER";
@@ -22,9 +25,9 @@ module Keys {
     const CURRENT = "CUR";
     //! When the player last said it was playing, as a timestamp.
     //!
-    //! Deleted the moment it stops. A timestamp rather than a flag because an
-    //! app that dies mid-chapter never gets to clear it, and a stale "yes"
-    //! would start audio nobody asked for.
+    //! Deleted the moment it stops, and only ever read into the log. A
+    //! timestamp rather than a flag because an app that dies mid-chapter never
+    //! gets to clear it, and its age says how stale the "yes" is.
     const PLAYING = "PLY";
     //! When the Sync row last asked for a sync, as a timestamp.
     //!

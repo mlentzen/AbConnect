@@ -5,15 +5,21 @@ import Toybox.System;
 import Toybox.Timer;
 import Toybox.WatchUi;
 
-//! Identifier of the send-progress entry. A symbol, so it can never collide
+//! Identifier of the sync-progress entry. A symbol, so it can never collide
 //! with a book ID — those are always strings.
 const PROGRESS_ITEM = :sendProgress;
 
-//! Getting the listening progress to the server without a sync.
+//! Getting the watch and the server to agree on the listening progress without
+//! a sync.
 //!
 //! The small sibling of the Wi-Fi sync: positions only, no downloads, no sync
 //! mode. It never calls Communications.startSync(), the one call in this app
 //! that puts the watch into sync mode and so brings Wi-Fi up.
+//!
+//! It goes both ways. What the watch listened to goes out, and every book on
+//! the watch is asked about, so that listening done on the phone comes back:
+//! /v1/progress answers only about the books it was sent, and a push of what
+//! the watch has buffered would never learn that the server has moved on.
 //!
 //! What stood in the way is that the media player holds the phone connection.
 //! Launched from the player, this app reports connectionAvailable false and
@@ -37,9 +43,9 @@ const PROGRESS_ITEM = :sendProgress;
 //! nothing when nothing is playing — the SDK describes it only as stopping
 //! playback that the app itself started — and does not end the app the way
 //! startPlayback() does, so this code survives its own call, waits for the
-//! radio to return, sends, and starts the book again. The mark still decides
-//! whether there is a book to start again: a session stopped although it was
-//! paused for hours is not brought back to life.
+//! radio to return, and sends. The menu row starts nothing again afterwards:
+//! startPlayback() would end the app, and the row is pressed to stay in the
+//! menu with the answer. Playing is what the Resume and Continue rows are for.
 //!
 //! The second thing in the way is silence. makeWebRequest() does not promise a
 //! callback: a request that goes out into a connection which then dies is never
@@ -66,14 +72,14 @@ class ProgressPush {
     //! standing there holding their wrist up: the answer may be no, but it has
     //! to arrive.
     private const DEADLINE_MS = 45000;
-    //! Long enough to read the result before the book starts again.
+    //! Long enough to read the result before it makes way for the menu.
     private const READ_RESULT_MS = 2500;
 
     private var _client as ProxyClient;
-    //! The retry and resume timer, and the attempt watchdog beside it: an
-    //! attempt is being waited on at the same time as nothing else, but the
-    //! two are armed and stopped independently and sharing one would have each
-    //! cancel the other.
+    //! The retry timer, and the attempt watchdog beside it: an attempt is
+    //! being waited on at the same time as nothing else, but the two are armed
+    //! and stopped independently and sharing one would have each cancel the
+    //! other.
     private var _timer as Timer.Timer;
     private var _watchdog as Timer.Timer;
     private var _attempts as Number;
@@ -85,19 +91,23 @@ class ProgressPush {
     //! reach after asking, not a precondition to check before.
     private var _lastCode as Number;
 
-    //! The book to start again when this is over, or null to stay put.
+    //! The book to play when this is over, or null to stay put. Only the
+    //! Resume and Continue rows set it.
     private var _resumeAfter as String?;
     //! Whether the outcome belongs on screen. The Resume row says nothing and
     //! simply plays; the menu row reports what happened.
     private var _announce as Boolean;
-    //! A book to ask the server about even when nothing of it is buffered.
-    private var _extra as String?;
+    //! The books to ask the server about, whether or not anything of them is
+    //! buffered.
+    private var _ask as Array<String>;
     //! Whether this run already asked the player to let go of the radio.
     private var _stoppedPlayback as Boolean;
     //! What the run reports, frozen before stopPlayback() has a chance to
     //! touch the store, or null when there is nothing to send. Sent verbatim
     //! on every attempt; the store itself is not read again.
     private var _entries as Array?;
+    //! The wait on screen, while there is one. The result takes its place.
+    private var _loading as MessageView?;
     //! When the run began and when the current request left. An answer that
     //! comes back within milliseconds was refused on the watch itself — it
     //! never had a route out. A slow one went somewhere and failed there.
@@ -113,9 +123,10 @@ class ProgressPush {
         _lastCode = 0;
         _resumeAfter = null;
         _announce = true;
-        _extra = null;
+        _ask = [] as Array<String>;
         _stoppedPlayback = false;
         _entries = null;
+        _loading = null;
         _startedMs = 0;
         _requestMs = 0;
     }
@@ -128,7 +139,7 @@ class ProgressPush {
     function start() as Void {
         _announce = true;
         _resumeAfter = null;
-        _extra = null;
+        _ask = Store.localBooks();
         begin();
     }
 
@@ -140,15 +151,15 @@ class ProgressPush {
     //! unable to hear a book that is already on the watch.
     function syncThenPlay(bookId as String) as Void {
         _announce = false;
-        // This book plays whatever happens, so it is what we come back to —
-        // not whatever happened to be playing before.
         _resumeAfter = bookId;
-        _extra = bookId;
+        _ask = [bookId] as Array<String>;
         begin();
     }
 
     //! Free the radio, then send.
     private function begin() as Void {
+        _entries = null;
+        _loading = null;
         if (!_client.isConfigured()) {
             Log.error("Push: not configured");
             finish(Rez.Strings.notConfigured);
@@ -170,30 +181,23 @@ class ProgressPush {
         // first. Read at the attempt instead, as it once was, and a paused
         // player that wakes up to stop sends its stale position back instead
         // of the fresh one this run was started to report. Every attempt
-        // resends this same snapshot; only what was sent is cleared at the
+        // resends this same snapshot; only what was sent is settled at the
         // end.
-        var extra = _extra;
-        _entries = (extra == null) ? Store.progressEntries() : entriesIncluding(extra);
-        if (_entries.size() == 0) {
-            _entries = null;
+        var entries = Store.syncEntries(_ask);
+        if (entries.size() == 0) {
             finish(Rez.Strings.syncNothingToDo);
             return;
         }
-        Log.debugCode("Push: buffered books", _entries.size());
+        _entries = entries;
+        Log.debugCode("Push: entries", entries.size());
         // Unconditional, mark or no mark: the mark says whether sound came
         // out, not whether the player holds the radio, and a session paused
-        // hours ago or restarted by the system holds it without one. The mark
-        // still decides whether there is a book of ours to start again
-        // afterwards — a session stopped although it was paused for hours is
-        // not brought back to life.
-        if (Store.isPlaying() && _resumeAfter == null) {
-            _resumeAfter = Current.bookId();
-        }
+        // hours ago or restarted by the system holds it without one.
         Log.info("Push: stopping playback to free the radio");
         _stoppedPlayback = true;
         Media.stopPlayback();
         _attempts = 0;
-        show(Rez.Strings.loading);
+        showLoading();
         _timer.start(method(:onAttempt), SETTLE_MS, false);
     }
 
@@ -256,14 +260,13 @@ class ProgressPush {
         Log.response("Push: progress", code);
         Log.debugCode("Push: answer after ms", System.getTimer() - _requestMs);
         if (code == 200) {
-            // Only discard after confirmed acceptance, and only what was sent:
-            // a position buffered while the request was out stays for the next
-            // push. Clearing everything would take it with the rest.
+            // Only what the server accepted stops being pending, and only if
+            // it has not moved since it was sent: a position buffered while
+            // the request was out stays for the next push.
             var sent = _entries;
             if (sent != null) {
-                Store.clearSent(sent);
+                Progress.settle(sent, data);
             }
-            Progress.adopt(data);
             finish(Rez.Strings.progressSent);
             return;
         }
@@ -351,24 +354,37 @@ class ProgressPush {
 
     //! Every announced ending goes through here, so the attempt count can never
     //! be on the good news and missing from the bad.
+    //!
+    //! The result closes itself and the menu underneath comes back, rebuilt on
+    //! the way. It takes the place of the wait while that is still up — and
+    //! only then: BACK can dismiss the wait while the run goes on, and
+    //! replacing whatever is on top at that point would replace the menu.
     private function finishWith(text as String) as Void {
         if (_announce) {
-            WatchUi.switchToView(new MessageView(withAttempts(text)), null, WatchUi.SLIDE_IMMEDIATE);
+            var result = new MessageView(withAttempts(text));
+            result.closeAfter(READ_RESULT_MS);
+            var loading = _loading;
+            if (loading != null && loading.isShown()) {
+                WatchUi.switchToView(result, new BackDelegate(), WatchUi.SLIDE_IMMEDIATE);
+            } else {
+                WatchUi.pushView(result, new BackDelegate(), WatchUi.SLIDE_IMMEDIATE);
+            }
         }
         done();
     }
 
     //! The run is over, whichever way it went: nothing more is owed an answer,
-    //! and the book goes back on.
+    //! and a book that was asked for goes on.
     private function done() as Void {
         _awaiting = false;
         _stoppedPlayback = false;
+        _loading = null;
         _timer.stop();
         _watchdog.stop();
         resume();
     }
 
-    //! "Progress sent (3 tries)". Silent about a run that worked first time —
+    //! "Progress synced (3 tries)". Silent about a run that worked first time —
     //! there is nothing to report about the normal case, and the count is only
     //! interesting as the answer to "why did that take so long".
     private function withAttempts(text as String) as String {
@@ -379,25 +395,12 @@ class ProgressPush {
             + " " + (WatchUi.loadResource(Rez.Strings.tries) as String) + ")";
     }
 
-    //! Whatever happened, the book goes back on.
+    //! The Resume and Continue rows play whatever happened; the menu row
+    //! starts nothing.
     private function resume() as Void {
-        if (_resumeAfter == null) {
-            Log.debug("Push: nothing to start again");
-            return;
-        }
-        if (!_announce) {
-            onResume();
-            return;
-        }
-        // startPlayback() ends this app at once, and a result nobody has read
-        // yet would go with it. When there is something on screen it gets its
-        // moment first.
-        _timer.start(method(:onResume), READ_RESULT_MS, false);
-    }
-
-    function onResume() as Void {
         var bookId = _resumeAfter;
         if (bookId == null) {
+            Log.debug("Push: nothing to start");
             return;
         }
         Current.set(bookId);
@@ -407,30 +410,6 @@ class ProgressPush {
         // push just found it ahead.
         Log.info("Push: startPlayback " + bookId);
         Media.startPlayback(bookId);
-    }
-
-    //! The buffered entries, with this book among them whatever happens.
-    //!
-    //! /v1/progress answers only about the books it was sent, so a book with
-    //! nothing buffered would be pushed and nothing learned back about the one
-    //! that is about to play. Sent with timestamp 0 it loses every
-    //! reconciliation on purpose: whatever the server holds wins.
-    private static function entriesIncluding(bookId as String) as Array {
-        var entries = Store.progressEntries();
-        for (var i = 0; i < entries.size(); ++i) {
-            var known = entries[i]["book_id"];
-            if (known instanceof String && bookId.equals(known)) {
-                return entries;
-            }
-        }
-        Log.debug("Push: asking about " + bookId + " with nothing of our own");
-        entries.add({
-            "book_id" => bookId,
-            "segment" => 0,
-            "offset" => 0,
-            "ts" => 0
-        });
-        return entries;
     }
 
     //! What the device says about its connections, beside what it then does.
@@ -453,16 +432,27 @@ class ProgressPush {
         }
     }
 
-    private static function show(resource as Lang.ResourceId) as Void {
-        WatchUi.switchToView(
-            new MessageView(WatchUi.loadResource(resource) as String),
-            null,
-            WatchUi.SLIDE_IMMEDIATE
-        );
+    //! The wait, pushed on top of the menu that started this, so the menu is
+    //! still there when the run is over.
+    private function showLoading() as Void {
+        var view = new MessageView(WatchUi.loadResource(Rez.Strings.loading) as String);
+        _loading = view;
+        WatchUi.pushView(view, new BackDelegate(), WatchUi.SLIDE_IMMEDIATE);
     }
 
-    //! How many books are waiting to be reported, for the row that offers this.
+    //! How many positions are waiting to be reported.
     static function pending() as Number {
-        return Store.progressEntries().size();
+        return Store.pendingEntries().size();
+    }
+
+    //! The subtitle of the row that offers this: what is waiting, or nothing.
+    //! "Nothing to sync" would be untrue now — there may always be something
+    //! to learn from the server.
+    static function rowSubtitle() as String? {
+        var count = pending();
+        if (count == 0) {
+            return null;
+        }
+        return count.toString() + " " + (WatchUi.loadResource(Rez.Strings.progressPending) as String);
     }
 }

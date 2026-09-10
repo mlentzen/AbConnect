@@ -95,13 +95,17 @@ below `DEBUG`: it walks the whole media cache to produce nothing but a trace.
 
 ## On the watch
 
-Opening the provider lands on the app menu:
+Opening AbConnect from the apps list, or through **Music providers →
+AbConnect**, lands on the app menu. Holding **DOWN** opens the watch's music
+controls instead, and those always show the now-playing screen of the active
+provider — no Connect IQ API changes that. From there the menu is behind the
+controls' own menu → **Library**.
 
 ```
 AbConnect
 ├─ Continue         the book that was last playing, one press  (only when there is one)
 ├─ Books            everything playable on the watch → chapters → Resume / From the start
-├─ Send progress    positions out over the phone, no Wi-Fi, no sync mode
+├─ Sync progress    positions both ways over the phone, no Wi-Fi, no sync mode
 ├─ Sync             Wi-Fi: report progress, read the playlist, mirror it
 ├─ Reset everything media cache and store, after a confirmation
 └─ Info             version, commit, build date, and what is on the watch
@@ -137,7 +141,6 @@ Open:
   parameters of `Storage`, `Dictionary` and `Method`, and "value not available
   in all function scopes" for `WatchUi` names reached through `import`. Level 2
   is clean.
-- The launcher icon is a transparent placeholder.
 - The playlist view shows up to 100 books without paging.
 - The progress push on pause is untested: whether the watch holds a phone
   connection at all during playback will only be shown by hardware.

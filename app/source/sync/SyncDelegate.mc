@@ -37,8 +37,8 @@ class AbSyncDelegate extends Communications.SyncDelegate {
     private var _client as ProxyClient;
     private var _bookQueue as Array<String>;
     private var _downloads as Array<Dictionary>;
-    //! The progress entries in flight, so the clear after acceptance takes
-    //! exactly what was sent and nothing buffered while the request was out.
+    //! The progress entries in flight, so that only what was sent is marked as
+    //! agreed, and nothing buffered while the request was out.
     private var _sentEntries as Array;
     private var _pending as Dictionary?;
     private var _currentBook as String?;
@@ -250,7 +250,9 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         if (_stopped) {
             return;
         }
-        var entries = Store.progressEntries();
+        // Every book on the watch is asked about, not only the ones with
+        // something buffered: listening done on the phone comes back this way.
+        var entries = Store.syncEntries(Store.localBooks());
         Log.debugCode("Sync: progress entries", entries.size());
         if (entries.size() == 0) {
             enterPhase(PHASE_PROGRESS_PUSHED);
@@ -265,11 +267,9 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         stirred();
         Log.response("Sync: progress", code);
         if (code == 200) {
-            // Only discard after confirmed acceptance, and only what was sent —
-            // on an abort the listening progress would otherwise be gone, and
-            // so would anything buffered while the request was out.
-            Store.clearSent(_sentEntries);
-            Progress.adopt(data);
+            // Only what the server accepted stops being pending, and only if
+            // it has not moved since it was sent.
+            Progress.settle(_sentEntries, data);
         }
         enterPhase(PHASE_PROGRESS_PUSHED);
         fetchPlaylist();
