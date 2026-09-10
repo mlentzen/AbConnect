@@ -224,9 +224,13 @@ class MainMenuDelegate extends WatchUi.Menu2InputDelegate {
         // sync mode, and the stamp is the only thing isSyncNeeded() can still
         // see after that restart. Without it the answer there is no, and no
         // means the sync screen sits at 0 % with onStartSync() never called.
-        Log.info("Menu: startSync");
+        // startSync2 rather than startSync: only this one hands the sync screen
+        // a message, and without one the centre of that screen stays blank.
+        Log.info("Menu: startSync2");
         Store.requestSync();
-        Communications.startSync();
+        Communications.startSync2({
+            :message => WatchUi.loadResource(Rez.Strings.AppName) as String
+        });
     }
 
     function onBack() as Void {

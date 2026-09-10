@@ -48,11 +48,17 @@ class AbConnectApp extends Application.AudioContentProviderApp {
         return delegate;
     }
 
-    //! Its own copy of the launcher icon, cut down to the icon's two colours.
-    //! The system sync screen drew the full-colour launcher icon black; Garmin's
-    //! MonkeyMusic sample hands over a palette-limited bitmap here too.
+    //! What the watch shows on the entry that opens this app's menu.
+    //!
+    //! Not the launcher icon: the apps list and the music providers list show
+    //! that one already, and this entry sits among the system's own, so it is
+    //! a plain menu symbol in their style. The sync screen never asks for it —
+    //! the log of a sync has no request — and shows the startSync2 message.
     function getProviderIconInfo() as Media.ProviderIconInfo? {
-        Log.debug("Icon: requested");
+        // Info, not debug: whether and when the system asks for the icon is
+        // the whole question behind a blank sync screen, and a debug build
+        // floods the log file past rotation before a sync is over.
+        Log.info("Icon: requested");
         return new Media.ProviderIconInfo(Rez.Drawables.ProviderIcon, Graphics.COLOR_BLUE);
     }
 
