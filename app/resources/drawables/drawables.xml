@@ -12,4 +12,11 @@
             <color>AAAAAA</color>
         </palette>
     </bitmap>
+    <!-- Row icons of the app menu, on the same 40 x 40 grid and in the same
+         grey as the system's own menu icons. -->
+    <bitmap id="IconContinue" filename="icon_play.svg" dithering="none"/>
+    <bitmap id="IconBooks" filename="icon_books.svg" dithering="none"/>
+    <bitmap id="IconSync" filename="icon_sync.svg" dithering="none"/>
+    <bitmap id="IconReset" filename="icon_reset.svg" dithering="none"/>
+    <bitmap id="IconInfo" filename="icon_info.svg" dithering="none"/>
 </drawables>

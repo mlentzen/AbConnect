@@ -1,4 +1,5 @@
 import Toybox.Communications;
+import Toybox.Graphics;
 import Toybox.Lang;
 import Toybox.Media;
 import Toybox.System;
@@ -69,73 +70,64 @@ class MainMenu extends WatchUi.Menu2 {
         // first thing on screen, and it should be the thing that plays.
         var resumable = Store.resumableBook();
         if (resumable != null) {
-            addItem(
-                new WatchUi.MenuItem(
-                    WatchUi.loadResource(Rez.Strings.menuContinue) as String,
-                    Store.bookInfo(resumable)[0],
-                    $.CONTINUE_ITEM,
-                    null
-                )
-            );
+            addItem(row(
+                Rez.Strings.menuContinue, Store.bookInfo(resumable)[0],
+                $.CONTINUE_ITEM, Rez.Drawables.IconContinue
+            ));
         }
 
         var books = Store.localBooks();
         Log.debugCode("Menu: playable", books.size());
-        addItem(
-            new WatchUi.MenuItem(
-                WatchUi.loadResource(Rez.Strings.menuBooks) as String,
-                booksSubtitle(books.size()),
-                $.BOOKS_ITEM,
-                null
-            )
-        );
+        addItem(row(
+            Rez.Strings.menuBooks, booksSubtitle(books.size()),
+            $.BOOKS_ITEM, Rez.Drawables.IconBooks
+        ));
 
         // The small sibling of the sync: positions both ways over the phone
         // connection, without sync mode and so without Wi-Fi. The row says how
         // many are waiting to go out, and nothing when none are — there may
         // still be something to learn from the server.
-        addItem(
-            new WatchUi.MenuItem(
-                WatchUi.loadResource(Rez.Strings.sendProgress) as String,
-                ProgressPush.rowSubtitle(),
-                $.PROGRESS_ITEM,
-                null
-            )
-        );
+        addItem(row(
+            Rez.Strings.sendProgress, ProgressPush.rowSubtitle(),
+            $.PROGRESS_ITEM, Rez.Drawables.IconSync
+        ));
 
         // The system leads into this view, not into the sync configuration —
         // without this entry there is no discoverable way on the watch to start
         // a sync by hand, and since isSyncNeeded() says no, by hand is the only
         // way one ever starts.
-        addItem(
-            new WatchUi.MenuItem(
-                WatchUi.loadResource(Rez.Strings.menuSync) as String,
-                null,
-                $.SYNC_ITEM,
-                null
-            )
-        );
+        addItem(row(
+            Rez.Strings.menuSync, null,
+            $.SYNC_ITEM, Rez.Drawables.IconSync
+        ));
 
         // The way out of a stuck state: orphaned segments in the media cache
         // and listening progress that points at nothing any more cannot be
         // repaired by hand. The subtitle shows what is at stake.
         var stats = Media.getCacheStatistics();
-        addItem(
-            new WatchUi.MenuItem(
-                WatchUi.loadResource(Rez.Strings.resetAll) as String,
-                (stats.size / 1048576).toString() + " MB",
-                $.RESET_ITEM,
-                null
-            )
-        );
+        addItem(row(
+            Rez.Strings.resetAll, (stats.size / 1048576).toString() + " MB",
+            $.RESET_ITEM, Rez.Drawables.IconReset
+        ));
 
-        addItem(
-            new WatchUi.MenuItem(
-                WatchUi.loadResource(Rez.Strings.menuInfo) as String,
-                null,
-                $.INFO_ITEM,
-                null
-            )
+        // With an icon like every other row, so the labels line up.
+        addItem(row(
+            Rez.Strings.menuInfo, null,
+            $.INFO_ITEM, Rez.Drawables.IconInfo
+        ));
+    }
+
+    //! A row with its icon on the left, the way the system's own menus have
+    //! them.
+    private static function row(
+        label as Lang.ResourceId, subLabel as String?, id as Symbol, icon as Lang.ResourceId
+    ) as WatchUi.IconMenuItem {
+        return new WatchUi.IconMenuItem(
+            WatchUi.loadResource(label) as String,
+            subLabel,
+            id,
+            new MenuIcon(icon),
+            null
         );
     }
 
@@ -146,6 +138,32 @@ class MainMenu extends WatchUi.Menu2 {
             return WatchUi.loadResource(Rez.Strings.nothingOnWatch) as String;
         }
         return count.toString() + " " + (WatchUi.loadResource(Rez.Strings.booksCount) as String);
+    }
+}
+
+//! A row icon the menu can draw.
+//!
+//! IconMenuItem is documented to take a bitmap, but handed a plain
+//! BitmapResource the app crashed on the fēnix with "Symbol Not Found" and an
+//! empty stack, and no row showed an icon. Garmin's Menu2Sample hands over a
+//! Drawable, and so does this: the menu gives it a dc the size of the icon
+//! slot, and the bitmap is centred in it — 40 x 56 on the fēnix, 65 x 96 on
+//! the vívoactive 5.
+class MenuIcon extends WatchUi.Drawable {
+
+    private var _bitmap as WatchUi.BitmapResource;
+
+    function initialize(rezId as Lang.ResourceId) {
+        Drawable.initialize({});
+        _bitmap = WatchUi.loadResource(rezId) as WatchUi.BitmapResource;
+    }
+
+    function draw(dc as Graphics.Dc) as Void {
+        dc.drawBitmap(
+            (dc.getWidth() - _bitmap.getWidth()) / 2,
+            (dc.getHeight() - _bitmap.getHeight()) / 2,
+            _bitmap
+        );
     }
 }
 

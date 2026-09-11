@@ -81,13 +81,13 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         _idleTicks = 0;
     }
 
-    //! Only when someone asked for it — the Sync row stamps a ticket in the
+    //! Only when someone asked for it — the Download books row stamps a ticket in the
     //! store, and a fresh ticket is the whole of the answer.
     //!
     //! The system asks this on every trigger, its own schedule included, and
     //! the SDK is unambiguous about a false: "onStartSync will not be called
     //! if a sync is triggered for this application." The trigger makes no
-    //! distinction between the system's own idea and the Sync row, and
+    //! distinction between the system's own idea and the Download books row, and
     //! startSync() overrules nothing despite the name — a plain false
     //! therefore does not skip the sync, it freezes the sync screen at 0 %
     //! with this app never hearing about it. (Seen on the fēnix: the screen

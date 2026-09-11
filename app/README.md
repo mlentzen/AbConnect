@@ -106,13 +106,13 @@ AbConnect
 ├─ Continue         the book that was last playing, one press  (only when there is one)
 ├─ Books            everything playable on the watch → chapters → Resume / From the start
 ├─ Sync progress    positions both ways over the phone, no Wi-Fi, no sync mode
-├─ Sync             Wi-Fi: report progress, read the playlist, mirror it
+├─ Download books   Wi-Fi: report progress, read the playlist, mirror it
 ├─ Reset everything media cache and store, after a confirmation
 └─ Info             version, commit, build date, and what is on the watch
 ```
 
 A sync only ever runs because it was asked for: `isSyncNeeded()` answers yes
-only while a manual request is fresh — the Sync row and the system's sync
+only while a manual request is fresh — the Download books row and the system's sync
 configuration each stamp one, good for two minutes — so the system never
 schedules one of its own. A plain no is not an option: the system then skips
 `onStartSync()` and the sync screen freezes at 0 %. The Info screen shows how

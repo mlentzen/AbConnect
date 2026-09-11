@@ -324,7 +324,8 @@ module Store {
     //! sync the system started on its own.
     const SYNC_REQUEST_TRUSTED_SECONDS = 120;
 
-    //! The Sync row's half of the ticket, stamped just before startSync().
+    //! The Download books row's half of the ticket, stamped just before
+    //! startSync2().
     function requestSync() as Void {
         Application.Storage.setValue(Keys.SYNC_REQUEST, Time.now().value());
     }

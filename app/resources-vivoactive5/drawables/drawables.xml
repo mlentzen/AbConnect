@@ -8,4 +8,10 @@
             <color>AAAAAA</color>
         </palette>
     </bitmap>
+    <!-- Its menu rows have a 65 px icon slot: 160 % of 40 = 64 px. -->
+    <bitmap id="IconContinue" filename="../../resources/drawables/icon_play.svg" dithering="none" scaleX="160%" scaleY="160%" scaleRelativeTo="image"/>
+    <bitmap id="IconBooks" filename="../../resources/drawables/icon_books.svg" dithering="none" scaleX="160%" scaleY="160%" scaleRelativeTo="image"/>
+    <bitmap id="IconSync" filename="../../resources/drawables/icon_sync.svg" dithering="none" scaleX="160%" scaleY="160%" scaleRelativeTo="image"/>
+    <bitmap id="IconReset" filename="../../resources/drawables/icon_reset.svg" dithering="none" scaleX="160%" scaleY="160%" scaleRelativeTo="image"/>
+    <bitmap id="IconInfo" filename="../../resources/drawables/icon_info.svg" dithering="none" scaleX="160%" scaleY="160%" scaleRelativeTo="image"/>
 </drawables>

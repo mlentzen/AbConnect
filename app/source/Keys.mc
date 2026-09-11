@@ -29,7 +29,7 @@ module Keys {
     //! timestamp rather than a flag because an app that dies mid-chapter never
     //! gets to clear it, and its age says how stale the "yes" is.
     const PLAYING = "PLY";
-    //! When the Sync row last asked for a sync, as a timestamp.
+    //! When the Download books row last asked for a sync, as a timestamp.
     //!
     //! startSync() ends the app and relaunches it in sync mode; this stamp is
     //! how isSyncNeeded() can still tell that the sync was asked for by hand.
