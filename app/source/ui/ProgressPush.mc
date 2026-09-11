@@ -50,11 +50,11 @@ const PROGRESS_ITEM = :sendProgress;
 //! The second thing in the way is silence. makeWebRequest() does not promise a
 //! callback: a request that goes out into a connection which then dies is never
 //! answered and never refused, and this class had no place at which it could
-//! notice. Every attempt therefore carries its own watchdog timer, and the run
-//! as a whole carries a deadline — the difference between "it did not work" and
-//! a screen that waits forever. Both timers are armed and stopped independently
-//! and stopped again when the run ends, so a late tick can never fire into a
-//! run that is over.
+//! notice. Every attempt therefore carries its own watchdog, and the run as a
+//! whole carries a deadline — the difference between "it did not work" and a
+//! screen that waits forever. The watchdog and the pauses before each attempt
+//! take turns on one Timer, which is stopped again when the run ends, so a late
+//! tick can never fire into a run that is over.
 class ProgressPush {
 
     //! How long the radio is given to return once the player lets go of it.
@@ -76,12 +76,14 @@ class ProgressPush {
     private const READ_RESULT_MS = 2500;
 
     private var _client as ProxyClient;
-    //! The retry timer, and the attempt watchdog beside it: an attempt is
-    //! being waited on at the same time as nothing else, but the two are armed
-    //! and stopped independently and sharing one would have each cancel the
-    //! other.
+    //! The one timer this class runs: the settling pause, the retry pause and
+    //! the attempt watchdog, in turn. They never overlap. A second Timer for
+    //! the watchdog is what took the app down on the fēnix: started from
+    //! inside the retry timer's own callback, with the player's position
+    //! ticker running beside it, it was one active timer more than the device
+    //! allows (default 3). That error is fatal — no try/catch catches it — so
+    //! the only defence is never to hold more than one.
     private var _timer as Timer.Timer;
-    private var _watchdog as Timer.Timer;
     private var _attempts as Number;
     //! Whether a request is out and still owed an answer. What makes a reply
     //! that arrives after its watchdog gave up harmless.
@@ -117,7 +119,6 @@ class ProgressPush {
     function initialize() {
         _client = new ProxyClient();
         _timer = new Timer.Timer();
-        _watchdog = new Timer.Timer();
         _attempts = 0;
         _awaiting = false;
         _lastCode = 0;
@@ -198,7 +199,7 @@ class ProgressPush {
         Media.stopPlayback();
         _attempts = 0;
         showLoading();
-        _timer.start(method(:onAttempt), SETTLE_MS, false);
+        arm(method(:onAttempt), SETTLE_MS);
     }
 
     function onAttempt() as Void {
@@ -224,7 +225,7 @@ class ProgressPush {
         }
         _requestMs = System.getTimer();
         _awaiting = true;
-        _watchdog.start(method(:onAttemptTimeout), ATTEMPT_TIMEOUT_MS, false);
+        arm(method(:onAttemptTimeout), ATTEMPT_TIMEOUT_MS);
         _client.pushProgress(entries, method(:onPushed));
     }
 
@@ -255,7 +256,7 @@ class ProgressPush {
             return;
         }
         _awaiting = false;
-        _watchdog.stop();
+        _timer.stop();
         _lastCode = code;
         Log.response("Push: progress", code);
         Log.debugCode("Push: answer after ms", System.getTimer() - _requestMs);
@@ -312,7 +313,15 @@ class ProgressPush {
             return;
         }
         Log.info("Push: trying again");
-        _timer.start(method(:onAttempt), RETRY_MS, false);
+        arm(method(:onAttempt), RETRY_MS);
+    }
+
+    //! Every start of the timer goes through here. Stopping first makes a
+    //! restart replace whatever was pending instead of adding a second active
+    //! timer — also when it is called from inside the timer's own callback.
+    private function arm(callback as Method() as Void, ms as Number) as Void {
+        _timer.stop();
+        _timer.start(callback, ms, false);
     }
 
     //! What to put on screen once the attempts are spent.
@@ -380,7 +389,6 @@ class ProgressPush {
         _stoppedPlayback = false;
         _loading = null;
         _timer.stop();
-        _watchdog.stop();
         resume();
     }
 
