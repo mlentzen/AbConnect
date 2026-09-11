@@ -212,9 +212,11 @@ Everything else is global and comes from the environment:
 | `LOG_LEVEL` | — | |
 
 The start aborts with a clear message if the users file is missing or invalid —
-no silent operation with defaults. `GET /health` additionally checks, per user,
-whether ABS is reachable and the key is accepted; this way a misconfiguration
-surfaces in the quadlet healthcheck, not only on a watch's first sync.
+no silent operation with defaults. The proxy faces the internet, so the public
+`GET /health` is liveness only (`{"status": "ok"}`, no user data, no outbound
+calls) and serves the quadlet healthcheck. `GET /v1/status` needs a token and
+checks, for that user only, whether ABS is reachable and the key is accepted;
+this way a misconfiguration surfaces without waiting for a watch's first sync.
 
 Example quadlet (`~/.config/containers/systemd/abconnect-proxy.container`):
 
@@ -345,7 +347,8 @@ deploy/                      quadlet unit, example secrets, setup docs
 | `GET /v1/books/{id}/cover.jpg?w=&exp=&sig=` | downscaled cover, pre-signed URL (see Auth) |
 | `POST /v1/books/{id}/release` | watch reports: book no longer needed → cache may evict |
 | `POST /v1/progress` | batch upload, conversion to book time, forwarding to ABS |
-| `GET /health` | configuration + ABS reachability |
+| `GET /v1/status` | the caller's ABS reachability, playlist found, ffmpeg |
+| `GET /health` | public liveness only: `{"status": "ok"}` |
 
 ### Auth between watch and proxy
 

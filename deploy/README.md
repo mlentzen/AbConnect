@@ -27,7 +27,7 @@ abs_api_key = "<API key of anna's ABS account>"
   all users — `openssl rand -hex 24` does the job. It is entered into that
   user's watch app settings later.
 * The name (`manuel`, `anna`) names the user's cache directory and shows up in
-  `/health` and the log: letters, digits, `_` and `-`.
+  the log: letters, digits, `_` and `-`.
 
 Store the file as a Podman secret and delete the plain copy:
 
@@ -125,19 +125,26 @@ Two things that may stand out:
 ## 4. Check
 
 ```sh
-curl -s localhost:18543/health | python3 -m json.tool
+curl -s localhost:18543/health
+TOKEN=<one user's token from users.toml>
+curl -s -H "Authorization: Bearer $TOKEN" localhost:18543/v1/status | python3 -m json.tool
 ```
 
 The service listens on 8080 inside the container, but is published as
 `127.0.0.1:18543` — 8080 is already taken on this machine. The healthcheck
 inside the container still checks 8080; only the host side changes.
 
-`/health` reports one entry per user under `users`. `audiobookshelf: "ok"`
-means: that user's address is correct and their API key is accepted.
-`playlist_found: true` means their playlist was found under its name — if it
-says `false`, the proxy mirrors nothing for them but also deletes nothing. If
-any user's Audiobookshelf fails, `/health` answers 503. Anything else is a
-misconfiguration that surfaces here instead of only on a watch's first sync.
+The proxy faces the internet, so `/health` is public but only answers
+`{"status": "ok"}` while the process runs — it names no user and checks
+nothing else. The container healthcheck uses it.
+
+`/v1/status` needs a token and reports on that token's user only.
+`audiobookshelf: "ok"` means: their address is correct and their API key is
+accepted. `playlist_found: true` means their playlist was found under its
+name — if it says `false`, the proxy mirrors nothing for them but also deletes
+nothing. If their Audiobookshelf or ffmpeg fails, `/v1/status` answers 503.
+Anything else is a misconfiguration that surfaces here instead of only on a
+watch's first sync.
 
 ## The playlist
 
@@ -146,7 +153,7 @@ a playlist named `Garmin` (or whatever `playlist` says for them) and add books
 to it. The proxy prepares new entries on its own and releases removed ones
 again; the watch mirrors that on the next sync.
 
-If there is no playlist of that name, `/health` reports it as
+If there is no playlist of that name, `/v1/status` reports it as
 `playlist_found: false` for that user and `/v1/playlist` answers with 409. The
 watch then deletes nothing — a typo in the name does not wipe it.
 
@@ -185,6 +192,7 @@ Users, their Audiobookshelf instances, keys and tokens live in the users file
 | `TRANSCODE_TARGET` | — | `mp3` | container for re-encoded segments; `m4a` keeps the original container |
 | `TRANSCODE_BITRATE_KBPS` | — | 64 | bitrate of a re-encoded segment |
 | `LOG_LEVEL` | — | INFO | |
+| `FORWARDED_ALLOW_IPS` | — | `127.0.0.1` | peers whose `X-Forwarded-For` uvicorn trusts; see *Behind the reverse proxy* |
 
 `auto` probes every source file after download and resamples anything that
 is not AAC-LC or MP3 at 44100/48000 Hz. Audiobooks at 22050 Hz download
@@ -202,6 +210,21 @@ re-cuts the copy of whoever's token is sent):
 
 Then reset the watch before syncing — the sync compares segments by index alone
 and would otherwise keep the copies it already has.
+
+## Behind the reverse proxy
+
+Five wrong tokens within a minute lock the sending address out for 60 s. That
+address must be the caller's, not the reverse proxy's — otherwise one stranger
+guessing locks out every watch. uvicorn takes it from `X-Forwarded-For`, but
+only when the connection comes from an address in `FORWARDED_ALLOW_IPS`.
+
+Check it once after a deploy: send a wrong token through the public URL, then
+look for `presented a missing or invalid token` in
+`journalctl --user -u abconnect-proxy`. It must show your own address. If
+every caller shows up as `127.0.0.1`, the reverse proxy does not send
+`X-Forwarded-For`; if they all share another fixed address, add that one to
+`FORWARDED_ALLOW_IPS` in the quadlet. Never set it to `*`: uvicorn then
+believes whatever a client writes into the header itself.
 
 ## Rotating a token without locking out the watch
 

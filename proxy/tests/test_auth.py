@@ -94,3 +94,19 @@ class TestFailureTracker:
         tracker.record_failure("1.1.1.1", now=1000)
         tracker.record_failure("1.1.1.1", now=1000)
         assert tracker.locked("1.1.1.1", now=1061) == 0
+
+    def test_forgets_clients_with_nothing_recent_against_them(self):
+        tracker = FailureTracker(threshold=2, lockout_seconds=60, max_clients=10)
+        for n in range(10):
+            tracker.record_failure(f"10.0.0.{n}", now=1000)
+        tracker.record_failure("10.0.0.1", now=1000)  # locked until 1060
+        tracker.record_failure("9.9.9.9", now=1100)
+        assert tracker.tracked() == 1
+
+    def test_pruning_keeps_a_live_lock(self):
+        tracker = FailureTracker(threshold=2, lockout_seconds=60, max_clients=10)
+        for n in range(10):
+            tracker.record_failure(f"10.0.0.{n}", now=1000)
+        tracker.record_failure("10.0.0.1", now=1000)
+        tracker.record_failure("9.9.9.9", now=1010)
+        assert tracker.locked("10.0.0.1", now=1010) == pytest.approx(50)

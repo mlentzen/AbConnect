@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 
 from . import auth, media, progress
 from .abs_client import AbsAuthError, AbsClient, AbsError
-from .cache import UnsafeBookId, remove_legacy_books
+from .cache import SAFE_ID, UnsafeBookId, remove_legacy_books
 from .config import Config
 from .preparer import Status
 from .users import UserRuntime, build_runtimes
@@ -33,10 +33,12 @@ COVER_WIDTH = 300
 # The watch aborts large JSON responses; a sync playlist with more than a
 # hundred books would not fit on it anyway.
 MAX_PLAYLIST_BOOKS = 100
+# A full progress batch of 200 entries is about 20 KB.
+MAX_BODY_BYTES = 64 * 1024
 
 
 class ProgressEntry(BaseModel):
-    book_id: str
+    book_id: str = Field(pattern=SAFE_ID.pattern)
     segment: int = Field(ge=0)
     offset: float = Field(ge=0)
     ts: float = Field(ge=0)
@@ -76,9 +78,55 @@ def create_app(config: Config, *, abs_clients: dict[str, AbsClient] | None = Non
                 if name not in injected:
                     await user.abs.aclose()
 
-    app = FastAPI(title="abconnect-proxy", version="0.1.0", lifespan=lifespan)
+    # The proxy faces the internet: no generated docs that map out the API.
+    app = FastAPI(
+        title="abconnect-proxy",
+        version="0.1.0",
+        lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
+    app.add_middleware(BodyLimit)
     _register(app)
     return app
+
+
+class BodyLimit:
+    """Refuses oversized request bodies before anything buffers them.
+
+    FastAPI parses a body before it resolves `current_user`, so without this a
+    caller without a token could make the proxy read any amount of data.
+    """
+
+    def __init__(self, app, max_bytes: int = MAX_BODY_BYTES) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        declared = dict(scope["headers"]).get(b"content-length", b"")
+        if declared.isdigit() and int(declared) > self.max_bytes:
+            response = JSONResponse({"detail": "Request body too large"}, status_code=413)
+            await response(scope, receive, send)
+            return
+
+        # A chunked body declares no length; count it as it arrives.
+        received = 0
+
+        async def limited_receive():
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.max_bytes:
+                    raise HTTPException(413, "Request body too large")
+            return message
+
+        await self.app(scope, limited_receive, send)
 
 
 async def _sweep_forever(app: FastAPI) -> None:
@@ -137,6 +185,7 @@ async def _user_health(user: UserRuntime) -> dict:
         "audiobookshelf": "ok",
         "playlist": user.config.playlist,
         "books_cached": len(user.cache.books()),
+        "cache_bytes": user.cache.total_bytes(),
     }
     try:
         await user.abs.ping()
@@ -153,28 +202,30 @@ def _register(app: FastAPI) -> None:
     # --- Operations --------------------------------------------------------
 
     @app.get("/health")
-    async def health(request: Request):
-        """Checks configuration *and* every user's ABS — otherwise a
+    async def health():
+        """Liveness only: the process answers.
+
+        Public, so it says nothing else and calls nothing — the details are
+        behind a token at /v1/status.
+        """
+        return {"status": "ok"}
+
+    @app.get("/v1/status")
+    async def user_status(user: UserRuntime = Depends(current_user)):
+        """Checks the caller's ABS, playlist and ffmpeg — otherwise a
         misconfiguration would only surface on a watch's first sync.
 
-        Unauthenticated, so it names users but not their server addresses.
+        Reports the caller's own state only; no other user shows up here.
         """
-        config: Config = request.app.state.config
-        users: dict[str, UserRuntime] = request.app.state.users
-        entries = await asyncio.gather(*(_user_health(user) for user in users.values()))
-        report = {
-            "cache_bytes": request.app.state.budget.total_bytes(),
-            "cache_max_bytes": config.cache_max_bytes,
-            "ffmpeg": True,
-            "users": dict(zip(users, entries)),
-        }
+        report = await _user_health(user)
+        report["ffmpeg"] = True
         try:
             media.ensure_available()
         except media.MediaError as error:
             report["ffmpeg"] = False
             report["ffmpeg_error"] = str(error)
 
-        healthy = report["ffmpeg"] and all(e["audiobookshelf"] == "ok" for e in entries)
+        healthy = report["ffmpeg"] and report["audiobookshelf"] == "ok"
         return JSONResponse(report, status_code=200 if healthy else 503)
 
     # --- Library ----------------------------------------------------------

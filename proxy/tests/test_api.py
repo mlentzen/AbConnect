@@ -179,35 +179,79 @@ class TestAuth:
 
     def test_health_needs_no_token(self, config):
         with build_client(config) as client:
-            assert client.get("/health").status_code in (200, 503)
+            response = client.get("/health")
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok"}
+
+
+class TestPublicSurface:
+    """What a stranger on the internet can reach without a token."""
+
+    @pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
+    def test_api_docs_are_not_served(self, config, path):
+        with build_client(config) as client:
+            assert client.get(path).status_code == 404
+
+    def test_an_oversized_body_is_refused_before_auth(self, config):
+        with build_client(config) as client:
+            response = client.post(
+                "/v1/progress", content=b"x" * (70 * 1024), headers={"content-type": "application/json"}
+            )
+        assert response.status_code == 413
+
+    def test_an_oversized_chunked_body_is_refused(self, config):
+        def chunks():
+            for _ in range(70):
+                yield b"x" * 1024
+
+        with build_client(config) as client:
+            response = client.post("/v1/progress", content=chunks(), headers=HEAD)
+        assert response.status_code == 413
 
 
 class TestHealth:
-    def test_one_broken_server_makes_the_proxy_unhealthy(self, config):
+    """/health only says the process answers; the details need a token."""
+
+    def test_health_stays_bare_when_a_server_is_broken(self, config):
         def broken(request):
             return httpx.Response(500, json={})
 
         with build_client(config, broken) as client:
             response = client.get("/health")
-        assert response.status_code == 503
-        users = response.json()["users"]
-        assert users["alice"]["audiobookshelf"] != "ok"
-        assert users["bob"]["audiobookshelf"] == "ok"
-
-    def test_healthy_when_everything_answers(self, config):
-        with build_client(config) as client:
-            response = client.get("/health")
         assert response.status_code == 200
-        assert {name: u["audiobookshelf"] for name, u in response.json()["users"].items()} == {
-            "alice": "ok",
-            "bob": "ok",
-        }
+        assert response.json() == {"status": "ok"}
 
-    def test_does_not_expose_server_addresses(self, config):
+    def test_health_names_no_user_playlist_or_server(self, config):
         with build_client(config) as client:
             body = client.get("/health").text
-        assert "abs.alice.example" not in body
-        assert "abs.bob.example" not in body
+        for detail in ("alice", "bob", "Garmin", "abs.alice.example", "abs.bob.example"):
+            assert detail not in body
+
+    def test_status_needs_a_token(self, config):
+        with build_client(config) as client:
+            assert client.get("/v1/status").status_code == 401
+
+    def test_status_reports_only_the_callers_own_state(self, config):
+        with build_client(config) as client:
+            response = client.get("/v1/status", headers=HEAD)
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["audiobookshelf"] == "ok"
+        assert payload["playlist"] == "Garmin"
+        assert "users" not in payload
+        assert "bob" not in response.text.lower()
+
+    def test_a_broken_server_fails_only_its_owners_status(self, config):
+        def broken(request):
+            return httpx.Response(500, json={})
+
+        with build_client(config, broken) as client:
+            alice = client.get("/v1/status", headers=HEAD)
+            bob = client.get("/v1/status", headers=BOB_HEAD)
+        assert alice.status_code == 503
+        assert alice.json()["audiobookshelf"] != "ok"
+        assert bob.status_code == 200
+        assert bob.json()["audiobookshelf"] == "ok"
 
 
 class TestListing:
@@ -376,6 +420,15 @@ class TestProgress:
 
         assert payload["books"][0]["resume"] == {"segment": 1, "offset": 600.0}
 
+    def test_an_unsafe_book_id_is_rejected_not_crashed(self, config):
+        with build_client(config) as client:
+            response = client.post(
+                "/v1/progress",
+                headers=HEAD,
+                json={"entries": [{"book_id": "../x", "segment": 0, "offset": 0, "ts": 1}]},
+            )
+        assert response.status_code == 422
+
     def test_an_unknown_book_is_reported_not_crashed(self, config):
         with build_client(config) as client:
             payload = client.post(
@@ -443,13 +496,14 @@ class TestPlaylist:
         with build_client(config) as client:
             assert client.get("/v1/playlist").status_code == 401
 
-    def test_health_reports_whether_the_playlist_was_found(self, config):
+    def test_status_reports_whether_the_playlist_was_found(self, config):
         with build_client(config) as client:
             client.get("/v1/playlist", headers=HEAD)
-            report = client.get("/health").json()
-        assert report["users"]["alice"]["playlist"] == "Garmin"
-        assert report["users"]["alice"]["playlist_found"] is True
-        assert report["users"]["bob"]["playlist"] == "Bob"
+            alice = client.get("/v1/status", headers=HEAD).json()
+            bob = client.get("/v1/status", headers=BOB_HEAD).json()
+        assert alice["playlist"] == "Garmin"
+        assert alice["playlist_found"] is True
+        assert bob["playlist"] == "Bob"
 
 
 class TestIsolation:

@@ -91,8 +91,23 @@ class FailureTracker:
 
     threshold: int = 5
     lockout_seconds: float = 60.0
+    # From this many remembered addresses on, the ones with nothing recent
+    # against them are forgotten: guesses from many addresses must not grow
+    # memory without bound.
+    max_clients: int = 1024
     _failures: dict[str, list[float]] = field(default_factory=lambda: defaultdict(list))
     _locked_until: dict[str, float] = field(default_factory=dict)
+
+    def tracked(self) -> int:
+        """Number of addresses currently remembered."""
+        return len(self._failures.keys() | self._locked_until.keys())
+
+    def _prune(self, now: float) -> None:
+        self._failures = defaultdict(
+            list,
+            {c: times for c, times in self._failures.items() if times and now - times[-1] < self.lockout_seconds},
+        )
+        self._locked_until = {c: until for c, until in self._locked_until.items() if until > now}
 
     def locked(self, client: str, now: float | None = None) -> float:
         """Remaining lockout time in seconds, 0 when open."""
@@ -102,6 +117,8 @@ class FailureTracker:
 
     def record_failure(self, client: str, now: float | None = None) -> None:
         now = time.time() if now is None else now
+        if self.tracked() >= self.max_clients:
+            self._prune(now)
         recent = [t for t in self._failures[client] if now - t < self.lockout_seconds]
         recent.append(now)
         self._failures[client] = recent

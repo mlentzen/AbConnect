@@ -32,7 +32,16 @@ def main() -> int:
     config.cache_dir.mkdir(parents=True, exist_ok=True)
     config.work_dir.mkdir(parents=True, exist_ok=True)
 
-    uvicorn.run(create_app(config), host="0.0.0.0", port=8080, log_level=config.log_level.lower())
+    # Behind the reverse proxy, uvicorn takes the client address from
+    # X-Forwarded-For only when the peer is listed in FORWARDED_ALLOW_IPS
+    # (default 127.0.0.1). The failed-auth lockout keys on that address.
+    uvicorn.run(
+        create_app(config),
+        host="0.0.0.0",
+        port=8080,
+        log_level=config.log_level.lower(),
+        server_header=False,
+    )
     return 0
 
 
