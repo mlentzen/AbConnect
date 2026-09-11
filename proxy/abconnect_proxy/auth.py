@@ -1,7 +1,8 @@
 """Access control for the watch -> proxy path.
 
-The token is a shared secret, not an identity: it keeps strangers away from the
-/v1 surface and keeps the ABS API key server-side. Nothing more is intended.
+A token identifies one user of the proxy: it keeps strangers away from the /v1
+surface, keeps every ABS API key server-side and decides whose Audiobookshelf,
+cache and playlist a request sees. Nothing more is intended.
 """
 
 from __future__ import annotations
@@ -11,19 +12,30 @@ import hashlib
 import hmac
 import time
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
+from .config import UserConfig
 
-def verify_token(presented: str, tokens: tuple[str, ...]) -> bool:
-    """Constant-time comparison against every valid token.
 
-    No short-circuit: all tokens are always checked so the runtime does not
-    reveal which of the candidates matched.
+def _same(a: str, b: str) -> bool:
+    # Bytes, not str: compare_digest raises on non-ASCII text, and a header or
+    # query string can carry anything.
+    return hmac.compare_digest(a.encode(), b.encode())
+
+
+def match_user(presented: str, users: Iterable[UserConfig]) -> UserConfig | None:
+    """Constant-time comparison against every token of every user.
+
+    No short-circuit: all tokens are always checked so the runtime reveals
+    neither which token matched nor whose it was.
     """
-    hit = False
-    for token in tokens:
-        hit |= hmac.compare_digest(presented, token)
-    return hit
+    match = None
+    for user in users:
+        for token in user.tokens:
+            if _same(presented, token):
+                match = user
+    return match
 
 
 def token_from_header(header: str | None) -> str | None:
@@ -47,14 +59,27 @@ def sign_cover(book_id: str, expires_at: int, key: str) -> str:
     return base64.urlsafe_b64encode(mac.digest()).decode().rstrip("=")
 
 
-def verify_cover(book_id: str, expires_at: int, signature: str, keys: tuple[str, ...], now: float | None = None) -> bool:
+def cover_user(
+    book_id: str,
+    expires_at: int,
+    signature: str,
+    users: Iterable[UserConfig],
+    now: float | None = None,
+) -> UserConfig | None:
+    """The user whose key signed this cover URL, or None.
+
+    Tokens are unique per user, so the matching key names the owner — the URL
+    itself carries no user name.
+    """
     now = time.time() if now is None else now
     if expires_at < now:
-        return False
-    valid = False
-    for key in keys:
-        valid |= hmac.compare_digest(signature, sign_cover(book_id, expires_at, key))
-    return valid
+        return None
+    match = None
+    for user in users:
+        for key in user.tokens:
+            if _same(signature, sign_cover(book_id, expires_at, key)):
+                match = user
+    return match
 
 
 # --- Backoff -----------------------------------------------------------------

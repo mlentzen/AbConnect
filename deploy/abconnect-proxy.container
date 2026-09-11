@@ -1,8 +1,9 @@
 # Podman quadlet: goes into ~/.config/containers/systemd/ — easiest via
 # deploy/install.sh.
 #
-# The image contains neither a server address nor a key — both come from here.
-# If a required variable is missing, the container does not start.
+# The image contains neither a server address nor a key — users, their ABS
+# instances and keys come from the abconnect-users secret (see deploy/README.md).
+# If it is missing or invalid, the container does not start.
 
 [Unit]
 Description=AbConnect proxy (Audiobookshelf -> Garmin)
@@ -20,9 +21,7 @@ After=abconnect-proxy-build.service
 Image=abconnect-proxy.build
 ContainerName=abconnect-proxy
 
-Environment=ABS_URL=https://ab.ml-bn.de
-Secret=abs-api-key,type=env,target=ABS_API_KEY
-Secret=abconnect-token,type=env,target=ABCONNECT_TOKEN
+Secret=abconnect-users,type=mount,target=/run/secrets/users.toml,uid=10001,mode=0400
 
 # Disk space is available: a generous budget so released books stay around and
 # re-selecting one does not require a second download.

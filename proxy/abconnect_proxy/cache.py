@@ -6,6 +6,9 @@ so re-selecting it does not require a second download and segmentation.
 
 The state lives in the filesystem, not in the process: a book with a valid
 manifest is immediately `ready` again after a restart.
+
+Every user has a cache of their own below `users/<name>/`; only the budget
+spans all of them.
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ MANIFEST = "manifest.json"
 STATE = "state.json"
 SEGMENTS = "seg"
 COVER = "cover.jpg"
+USERS_DIR = "users"
 
 
 class UnsafeBookId(ValueError):
@@ -154,30 +158,74 @@ class Cache:
                 evicted.append(book_id)
         return evicted
 
-    def enforce_budget(self, max_bytes: int) -> list[str]:
-        """Emergency brake: evicts released books, least recently used first."""
+    def eviction_candidates(self) -> list[tuple[float, str]]:
+        """Unpinned books with their last access — what the budget may evict."""
+        candidates = []
+        for book_id in self.books():
+            state = self._state(book_id)
+            if not state.get("pinned"):
+                candidates.append((state.get("last_access") or 0.0, book_id))
+        return candidates
+
+
+@dataclass
+class Budget:
+    """One disk budget across every user's cache.
+
+    CACHE_MAX_BYTES describes the disk, not a person: a book prepared for one
+    user can push out another user's released books, least recently used first.
+    Pinned books — on someone's watch right now — are never touched.
+    """
+
+    max_bytes: int
+    caches: dict[str, Cache]
+
+    def total_bytes(self) -> int:
+        return sum(cache.total_bytes() for cache in self.caches.values())
+
+    def has_room_for(self, needed_bytes: int) -> bool:
+        return self.total_bytes() + needed_bytes <= self.max_bytes
+
+    def enforce(self) -> list[tuple[str, str]]:
+        """Emergency brake. Returns (user, book_id) of everything evicted."""
         total = self.total_bytes()
-        if total <= max_bytes:
+        if total <= self.max_bytes:
             return []
 
-        candidates = [
-            (self._state(b).get("last_access") or 0.0, b)
-            for b in self.books()
-            if not self._state(b).get("pinned")
-        ]
-        candidates.sort()
+        candidates = sorted(
+            (access, owner, book_id)
+            for owner, cache in self.caches.items()
+            for access, book_id in cache.eviction_candidates()
+        )
 
         evicted = []
-        for _, book_id in candidates:
-            if total <= max_bytes:
+        for _, owner, book_id in candidates:
+            if total <= self.max_bytes:
                 break
-            total -= self.book_bytes(book_id)
-            self.discard(book_id)
-            evicted.append(book_id)
-            log.info("Cache over budget: %s evicted", book_id)
-        if total > max_bytes:
+            cache = self.caches[owner]
+            total -= cache.book_bytes(book_id)
+            cache.discard(book_id)
+            evicted.append((owner, book_id))
+            log.info("Cache over budget: %s of %s evicted", book_id, owner)
+        if total > self.max_bytes:
             log.warning("Cache still over budget — all remaining books are pinned")
         return evicted
 
-    def has_room_for(self, needed_bytes: int, max_bytes: int) -> bool:
-        return self.total_bytes() + needed_bytes <= max_bytes
+
+def remove_legacy_books(root: Path) -> list[str]:
+    """Deletes book directories of the single-user layout, directly below root.
+
+    They belong to nobody now: every user has a directory of their own below
+    `users/`. The books re-prepare on the next sync, into the same segments.
+    """
+    if not root.exists():
+        return []
+    removed = []
+    for directory in sorted(root.iterdir()):
+        if directory.name == USERS_DIR or not directory.is_dir():
+            continue
+        if (directory / MANIFEST).exists() or (directory / STATE).exists():
+            shutil.rmtree(directory, ignore_errors=True)
+            removed.append(directory.name)
+            log.info("Removed %s: left over from the single-user cache layout", directory.name)
+    return removed

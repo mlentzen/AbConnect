@@ -42,7 +42,7 @@ systemctl --user enable --now abconnect-proxy-rebuild.path
 # The container does not start without secrets — better to say so here than to
 # make someone dig it out of a journal entry.
 missing=()
-for secret in abs-api-key abconnect-token; do
+for secret in abconnect-users; do
     podman secret exists "$secret" || missing+=("$secret")
 done
 

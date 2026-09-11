@@ -2,6 +2,9 @@
 
 Responses stay deliberately small: Connect IQ aborts large JSON responses with
 -402 or -403, long before a full ABS response would fit through.
+
+The bearer token decides who is asking. Every /v1 call runs against that
+user's own Audiobookshelf, cache and playlist.
 """
 
 from __future__ import annotations
@@ -18,10 +21,10 @@ from pydantic import BaseModel, Field
 
 from . import auth, media, progress
 from .abs_client import AbsAuthError, AbsClient, AbsError
-from .cache import Cache, UnsafeBookId
+from .cache import UnsafeBookId, remove_legacy_books
 from .config import Config
-from .preparer import Preparer, Status
-from .reconciler import PlaylistReconciler
+from .preparer import Status
+from .users import UserRuntime, build_runtimes
 
 log = logging.getLogger(__name__)
 
@@ -43,37 +46,35 @@ class ProgressBatch(BaseModel):
     entries: list[ProgressEntry] = Field(default_factory=list, max_length=200)
 
 
-def create_app(config: Config, *, abs_client: AbsClient | None = None) -> FastAPI:
+def create_app(config: Config, *, abs_clients: dict[str, AbsClient] | None = None) -> FastAPI:
+    """`abs_clients` injects ABS clients by user name (tests); those are not closed here."""
+    injected = abs_clients or {}
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.config = config
-        app.state.cache = Cache(root=config.cache_dir)
-        app.state.abs = abs_client or AbsClient(
-            config.abs_url, config.abs_api_key, timeout=config.http_timeout_seconds
-        )
-        app.state.preparer = Preparer(
-            abs_client=app.state.abs, cache=app.state.cache, config=config
-        )
+        remove_legacy_books(config.cache_dir)
+        # One semaphore for every user: a single prepare job at a time.
+        app.state.users, app.state.budget = build_runtimes(config, asyncio.Semaphore(1), injected)
         app.state.failures = auth.FailureTracker()
-        app.state.reconciler = PlaylistReconciler(
-            abs_client=app.state.abs,
-            cache=app.state.cache,
-            preparer=app.state.preparer,
-            config=config,
-        )
         sweeper = asyncio.create_task(_sweep_forever(app), name="cache-sweeper")
-        # Runs in the background so a book newly added to the playlist is already
-        # segmented and ready before the watch syncs the next time.
-        watcher = asyncio.create_task(app.state.reconciler.run_forever(), name="playlist-watcher")
+        # Run in the background so a book newly added to a playlist is already
+        # segmented and ready before that user's watch syncs the next time.
+        watchers = [
+            asyncio.create_task(user.reconciler.run_forever(), name=f"playlist-watcher:{name}")
+            for name, user in app.state.users.items()
+        ]
         try:
             yield
         finally:
-            sweeper.cancel()
-            watcher.cancel()
-            await asyncio.gather(sweeper, watcher, return_exceptions=True)
-            await app.state.preparer.shutdown()
-            if abs_client is None:
-                await app.state.abs.aclose()
+            tasks = [sweeper, *watchers]
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            for name, user in app.state.users.items():
+                await user.preparer.shutdown()
+                if name not in injected:
+                    await user.abs.aclose()
 
     app = FastAPI(title="abconnect-proxy", version="0.1.0", lifespan=lifespan)
     _register(app)
@@ -84,12 +85,13 @@ async def _sweep_forever(app: FastAPI) -> None:
     while True:
         try:
             await asyncio.sleep(SWEEP_INTERVAL_SECONDS)
-            cache: Cache = app.state.cache
             config: Config = app.state.config
-            for book_id in cache.sweep(config.release_ttl_days):
-                app.state.preparer.forget(book_id)
-            for book_id in cache.enforce_budget(config.cache_max_bytes):
-                app.state.preparer.forget(book_id)
+            users: dict[str, UserRuntime] = app.state.users
+            for user in users.values():
+                for book_id in user.cache.sweep(config.release_ttl_days):
+                    user.preparer.forget(book_id)
+            for owner, book_id in app.state.budget.enforce():
+                users[owner].preparer.forget(book_id)
         except asyncio.CancelledError:
             raise
         except Exception:  # pragma: no cover - the sweeper must never take down the process
@@ -99,7 +101,8 @@ async def _sweep_forever(app: FastAPI) -> None:
 # --- Access control --------------------------------------------------------
 
 
-async def require_token(request: Request) -> None:
+async def current_user(request: Request) -> UserRuntime:
+    """Resolves the bearer token to its user — the only identity the watch has."""
     config: Config = request.app.state.config
     failures: auth.FailureTracker = request.app.state.failures
     client = request.client.host if request.client else "unknown"
@@ -110,11 +113,13 @@ async def require_token(request: Request) -> None:
         raise HTTPException(429, f"Too many failed attempts, locked for {int(remaining)} s")
 
     presented = auth.token_from_header(request.headers.get("authorization"))
-    if not presented or not auth.verify_token(presented, config.tokens):
+    user = auth.match_user(presented, config.users) if presented else None
+    if user is None:
         failures.record_failure(client)
         log.warning("%s presented a missing or invalid token", client)
         raise HTTPException(401, "Token missing or invalid")
     failures.record_success(client)
+    return request.app.state.users[user.name]
 
 
 def _book_id(book_id: str) -> str:
@@ -127,55 +132,62 @@ def _book_id(book_id: str) -> str:
         raise HTTPException(400, str(error)) from None
 
 
-def _register(app: FastAPI) -> None:
-    guarded = [Depends(require_token)]
+async def _user_health(user: UserRuntime) -> dict:
+    entry = {
+        "audiobookshelf": "ok",
+        "playlist": user.config.playlist,
+        "books_cached": len(user.cache.books()),
+    }
+    try:
+        await user.abs.ping()
+    except AbsError as error:
+        entry["audiobookshelf"] = str(error)
+    last = user.reconciler.last
+    entry["playlist_found"] = last.found
+    if last.error:
+        entry["playlist_error"] = last.error
+    return entry
 
+
+def _register(app: FastAPI) -> None:
     # --- Operations --------------------------------------------------------
 
     @app.get("/health")
     async def health(request: Request):
-        """Checks configuration *and* ABS reachability — otherwise a
-        misconfiguration would only surface on the watch's first sync."""
-        cache: Cache = request.app.state.cache
+        """Checks configuration *and* every user's ABS — otherwise a
+        misconfiguration would only surface on a watch's first sync.
+
+        Unauthenticated, so it names users but not their server addresses.
+        """
         config: Config = request.app.state.config
+        users: dict[str, UserRuntime] = request.app.state.users
+        entries = await asyncio.gather(*(_user_health(user) for user in users.values()))
         report = {
-            "abs_url": config.abs_url,
-            "cache_bytes": cache.total_bytes(),
+            "cache_bytes": request.app.state.budget.total_bytes(),
             "cache_max_bytes": config.cache_max_bytes,
-            "books_cached": len(cache.books()),
-            "playlist": config.abs_playlist,
             "ffmpeg": True,
-            "audiobookshelf": "ok",
+            "users": dict(zip(users, entries)),
         }
         try:
             media.ensure_available()
         except media.MediaError as error:
             report["ffmpeg"] = False
             report["ffmpeg_error"] = str(error)
-        try:
-            await request.app.state.abs.ping()
-        except AbsError as error:
-            report["audiobookshelf"] = str(error)
 
-        last = request.app.state.reconciler.last
-        report["playlist_found"] = last.found
-        if last.error:
-            report["playlist_error"] = last.error
-
-        healthy = report["ffmpeg"] and report["audiobookshelf"] == "ok"
+        healthy = report["ffmpeg"] and all(e["audiobookshelf"] == "ok" for e in entries)
         return JSONResponse(report, status_code=200 if healthy else 503)
 
     # --- Library ----------------------------------------------------------
 
-    @app.get("/v1/books", dependencies=guarded)
+    @app.get("/v1/books")
     async def list_books(
-        request: Request,
+        user: UserRuntime = Depends(current_user),
         page: int = Query(1, ge=1),
         per_page: int = Query(20, ge=1, le=100),
         q: str = Query("", max_length=100),
     ):
         try:
-            books = await request.app.state.abs.all_books()
+            books = await user.abs.all_books()
         except AbsAuthError as error:
             raise HTTPException(502, str(error)) from None
         except AbsError as error:
@@ -187,11 +199,10 @@ def _register(app: FastAPI) -> None:
 
         total = len(books)
         start = (page - 1) * per_page
-        preparer: Preparer = request.app.state.preparer
 
         page_items = []
         for book in books[start : start + per_page]:
-            state = preparer.status(book["id"])
+            state = user.preparer.status(book["id"])
             entry = {
                 "id": book["id"],
                 "title": book["title"],
@@ -214,19 +225,18 @@ def _register(app: FastAPI) -> None:
             "total": total,
         }
 
-    @app.get("/v1/playlist", dependencies=guarded)
-    async def playlist(request: Request):
+    @app.get("/v1/playlist")
+    async def playlist(user: UserRuntime = Depends(current_user)):
         """The target playlist for the watch.
 
         Reconciliation runs on every call so a just-added book is prepared
         immediately instead of only on the next background pass.
         """
-        result = await request.app.state.reconciler.reconcile()
-        preparer: Preparer = request.app.state.preparer
+        result = await user.reconciler.reconcile()
 
         books = []
         for book in result.books[:MAX_PLAYLIST_BOOKS]:
-            state = preparer.status(book["id"])
+            state = user.preparer.status(book["id"])
             entry = {
                 "id": book["id"],
                 "title": book["title"],
@@ -243,7 +253,7 @@ def _register(app: FastAPI) -> None:
             books.append(entry)
 
         payload = {
-            "playlist": request.app.state.config.abs_playlist,
+            "playlist": user.config.playlist,
             "found": result.found,
             "books": books,
             "total": len(result.books),
@@ -254,19 +264,19 @@ def _register(app: FastAPI) -> None:
         # the watch must not delete anything as a result.
         return JSONResponse(payload, status_code=200 if result.found else 409)
 
-    @app.post("/v1/books/{book_id}/prepare", dependencies=guarded)
-    async def prepare(request: Request, book_id: str, force: bool = Query(False)):
+    @app.post("/v1/books/{book_id}/prepare")
+    async def prepare(book_id: str, force: bool = Query(False), user: UserRuntime = Depends(current_user)):
         # force=true re-cuts a book that is already ready. Needed whenever the
         # encoder settings change: the segment cache survives a restart, so
         # without it the old files stay in place indefinitely.
         book_id = _book_id(book_id)
-        log.info("Prepare requested for %s%s", book_id, " (forced)" if force else "")
-        state = request.app.state.preparer.request(book_id, force=force)
+        log.info("%s: prepare requested for %s%s", user.config.name, book_id, " (forced)" if force else "")
+        state = user.preparer.request(book_id, force=force)
         return {"status": state.status.value, "percent": state.percent}
 
-    @app.get("/v1/books/{book_id}/status", dependencies=guarded)
-    async def book_status(request: Request, book_id: str):
-        state = request.app.state.preparer.status(_book_id(book_id))
+    @app.get("/v1/books/{book_id}/status")
+    async def book_status(book_id: str, user: UserRuntime = Depends(current_user)):
+        state = user.preparer.status(_book_id(book_id))
         payload = {"status": state.status.value, "percent": state.percent}
         if state.error:
             payload["error"] = state.error
@@ -274,15 +284,14 @@ def _register(app: FastAPI) -> None:
             payload["segments"] = state.segment_count
         return payload
 
-    @app.get("/v1/books/{book_id}/segments", dependencies=guarded)
-    async def segments(request: Request, book_id: str):
+    @app.get("/v1/books/{book_id}/segments")
+    async def segments(request: Request, book_id: str, user: UserRuntime = Depends(current_user)):
         book_id = _book_id(book_id)
-        cache: Cache = request.app.state.cache
-        manifest = cache.load_manifest(book_id)
+        manifest = user.cache.load_manifest(book_id)
         if manifest is None:
-            state = request.app.state.preparer.status(book_id)
+            state = user.preparer.status(book_id)
             raise HTTPException(409, f"Book is not ready (status: {state.status.value})")
-        cache.touch(book_id)
+        user.cache.touch(book_id)
 
         config: Config = request.app.state.config
         listing = [
@@ -307,7 +316,7 @@ def _register(app: FastAPI) -> None:
         }
         if manifest.get("cover"):
             expires = int(time.time()) + config.cover_url_ttl_seconds
-            signature = auth.sign_cover(book_id, expires, config.signing_key)
+            signature = auth.sign_cover(book_id, expires, user.config.signing_key)
             payload["cover_url"] = (
                 f"/v1/books/{book_id}/cover.jpg?w={COVER_WIDTH}&exp={expires}&sig={signature}"
             )
@@ -315,7 +324,7 @@ def _register(app: FastAPI) -> None:
         # Where the server would resume — the watch decides during sync whether
         # its own position is more recent.
         try:
-            stored = await request.app.state.abs.get_progress(book_id)
+            stored = await user.abs.get_progress(book_id)
         except AbsError:
             stored = None
         if stored and stored.get("currentTime"):
@@ -327,17 +336,16 @@ def _register(app: FastAPI) -> None:
             }
         return payload
 
-    @app.get("/v1/books/{book_id}/seg/{filename}", dependencies=guarded)
-    async def segment_file(request: Request, book_id: str, filename: str):
+    @app.get("/v1/books/{book_id}/seg/{filename}")
+    async def segment_file(book_id: str, filename: str, user: UserRuntime = Depends(current_user)):
         book_id = _book_id(book_id)
-        cache: Cache = request.app.state.cache
         try:
-            path = cache.segment_path(book_id, filename)
+            path = user.cache.segment_path(book_id, filename)
         except UnsafeBookId as error:
             raise HTTPException(400, str(error)) from None
         if not path.exists():
             raise HTTPException(404, "Segment not found")
-        cache.touch(book_id)
+        user.cache.touch(book_id)
         media_type = "audio/mp4" if path.suffix == ".m4a" else "audio/mpeg"
         return FileResponse(path, media_type=media_type)
 
@@ -351,30 +359,28 @@ def _register(app: FastAPI) -> None:
     ):
         # Without a bearer: makeImageRequest cannot set headers. Instead of the
         # long-lived token in the query string, the URL carries a short-lived
-        # signature that does no harm in any log.
+        # signature that does no harm in any log — and whose key names the user.
         book_id = _book_id(book_id)
         config: Config = request.app.state.config
-        if not auth.verify_cover(book_id, exp, sig, config.tokens):
+        owner = auth.cover_user(book_id, exp, sig, config.users)
+        if owner is None:
             raise HTTPException(403, "Cover signature invalid or expired")
-        path = request.app.state.cache.cover_path(book_id)
+        path = request.app.state.users[owner.name].cache.cover_path(book_id)
         if not path.exists():
             raise HTTPException(404, "No cover available")
         return FileResponse(path, media_type="image/jpeg")
 
-    @app.post("/v1/books/{book_id}/release", dependencies=guarded)
-    async def release(request: Request, book_id: str):
+    @app.post("/v1/books/{book_id}/release")
+    async def release(book_id: str, user: UserRuntime = Depends(current_user)):
         book_id = _book_id(book_id)
-        log.info("Releasing %s", book_id)
-        request.app.state.cache.release(book_id)
+        log.info("%s: releasing %s", user.config.name, book_id)
+        user.cache.release(book_id)
         return {"released": book_id}
 
     # --- Progress ---------------------------------------------------------
 
-    @app.post("/v1/progress", dependencies=guarded)
-    async def push_progress(request: Request, batch: ProgressBatch):
-        cache: Cache = request.app.state.cache
-        abs_client = request.app.state.abs
-
+    @app.post("/v1/progress")
+    async def push_progress(batch: ProgressBatch, user: UserRuntime = Depends(current_user)):
         newest: dict[str, ProgressEntry] = {}
         for entry in batch.entries:
             known = newest.get(entry.book_id)
@@ -383,14 +389,14 @@ def _register(app: FastAPI) -> None:
 
         results = []
         for book_id, entry in newest.items():
-            manifest = cache.load_manifest(book_id)
+            manifest = user.cache.load_manifest(book_id)
             if manifest is None:
                 results.append({"id": book_id, "accepted": False, "reason": "not prepared"})
                 continue
 
             watch_time = progress.book_time(manifest["segments"], entry.segment, entry.offset)
             try:
-                stored = await abs_client.get_progress(book_id)
+                stored = await user.abs.get_progress(book_id)
             except AbsError:
                 stored = None
 
@@ -403,8 +409,8 @@ def _register(app: FastAPI) -> None:
                 server_ts=server_ts,
             )
             log.info(
-                "%s: watch %.1fs@%.0f vs server %.1fs@%.0f -> %s wins (%.1fs)",
-                book_id, watch_time, entry.ts, server_time, server_ts, winner, winning_time,
+                "%s/%s: watch %.1fs@%.0f vs server %.1fs@%.0f -> %s wins (%.1fs)",
+                user.config.name, book_id, watch_time, entry.ts, server_time, server_ts, winner, winning_time,
             )
 
             result = {"id": book_id, "accepted": True, "source": winner}
@@ -414,11 +420,11 @@ def _register(app: FastAPI) -> None:
                 # never started anywhere would land in ABS at 0 s, "in progress".
                 if entry.ts > 0:
                     try:
-                        await abs_client.set_progress(
+                        await user.abs.set_progress(
                             book_id, current_time=winning_time, duration=float(manifest["duration"])
                         )
                     except AbsError as error:
-                        log.warning("Progress push for %s failed: %s", book_id, error)
+                        log.warning("%s: progress push for %s failed: %s", user.config.name, book_id, error)
                         result.update(accepted=False, reason=str(error))
             else:
                 # The server is ahead — the watch should jump there.

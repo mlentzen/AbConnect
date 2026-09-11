@@ -7,12 +7,12 @@ import pytest
 
 from abconnect_proxy import config as config_module
 from abconnect_proxy import media
-from abconnect_proxy.cache import Cache
+from abconnect_proxy.cache import Budget, Cache
 from abconnect_proxy.models import Chapter, SourceFile
 from abconnect_proxy.parsing import ItemUnusable, ParsedItem
 from abconnect_proxy.preparer import Preparer, Status
 
-from .conftest import needs_ffmpeg
+from .conftest import needs_ffmpeg, write_users
 
 pytestmark = [needs_ffmpeg, pytest.mark.anyio]
 
@@ -56,11 +56,13 @@ def make_config(tmp_path, **overrides) -> config_module.Config:
     fixtures are one minute long. So load regularly first, keeping the
     validation under test, and then switch to test sizes.
     """
+    users = write_users(
+        tmp_path / "users.toml",
+        {"alice": {"tokens": ["t" * 20], "abs_url": "https://abs.example", "abs_api_key": "k" * 20}},
+    )
     base = config_module.load(
         {
-            "ABS_URL": "https://abs.example",
-            "ABS_API_KEY": "k" * 20,
-            "ABCONNECT_TOKEN": "t" * 20,
+            "USERS_FILE": str(users),
             "CACHE_DIR": str(tmp_path / "cache"),
             "WORK_DIR": str(tmp_path / "work"),
         }
@@ -72,6 +74,11 @@ def make_config(tmp_path, **overrides) -> config_module.Config:
         segment_max_seconds=60,
         **overrides,
     )
+
+
+def preparer_for(abs_client, cache, cfg) -> Preparer:
+    budget = Budget(max_bytes=cfg.cache_max_bytes, caches={"alice": cache})
+    return Preparer(abs_client=abs_client, cache=cache, config=cfg, budget=budget, work_dir=cfg.work_dir)
 
 
 def parsed(files, chapters, **kwargs) -> ParsedItem:
@@ -115,7 +122,7 @@ async def build(tmp_path, item, source, **config_overrides):
     cfg = make_config(tmp_path, **config_overrides)
     cache = Cache(root=cfg.cache_dir)
     abs_client = FakeAbs(item, source)
-    return Preparer(abs_client=abs_client, cache=cache, config=cfg), cache, abs_client, cfg
+    return preparer_for(abs_client, cache, cfg), cache, abs_client, cfg
 
 
 async def run(preparer, book_id="li_1"):
@@ -266,11 +273,22 @@ class TestLifecycle:
         preparer, cache, _, cfg = await build(tmp_path, item, source)
         await run(preparer)
 
-        fresh = Preparer(abs_client=FakeAbs(item, source), cache=Cache(root=cfg.cache_dir), config=cfg)
+        fresh = preparer_for(FakeAbs(item, source), Cache(root=cfg.cache_dir), cfg)
 
         state = fresh.status("li_1")
         assert state.status is Status.READY
         assert state.segment_count == 2
+
+    async def test_a_book_evicted_behind_its_back_is_pending_again(self, tmp_path, single_book):
+        """The shared budget may evict a book on behalf of another user's job,
+        and nobody tells this preparer — the missing manifest has to be enough."""
+        item, source = single_book
+        preparer, cache, _, _ = await build(tmp_path, item, source)
+        await run(preparer)
+
+        cache.discard("li_1")
+
+        assert preparer.status("li_1").status is Status.PENDING
 
     async def test_requesting_pins_the_book(self, tmp_path, single_book):
         item, source = single_book
@@ -375,7 +393,7 @@ class TestForcedRePrepare:
 
         # Same cache, a preparer configured for the fallback container.
         cfg = make_config(tmp_path, transcode_target="mp3")
-        again = Preparer(abs_client=abs_client, cache=cache, config=cfg)
+        again = preparer_for(abs_client, cache, cfg)
         again.request("li_1", force=True)
         for _ in range(400):
             await asyncio.sleep(0.02)
@@ -395,7 +413,7 @@ class TestForcedRePrepare:
         await run(preparer)
 
         cfg = make_config(tmp_path, transcode_target="mp3")
-        again = Preparer(abs_client=abs_client, cache=cache, config=cfg)
+        again = preparer_for(abs_client, cache, cfg)
         again.request("li_1", force=True)
         for _ in range(400):
             await asyncio.sleep(0.02)

@@ -2,20 +2,27 @@ import time
 
 import pytest
 
-from abconnect_proxy.auth import FailureTracker, sign_cover, token_from_header, verify_cover, verify_token
+from abconnect_proxy.auth import FailureTracker, cover_user, match_user, sign_cover, token_from_header
+from abconnect_proxy.config import UserConfig
 
-TOKENS = ("erster-token-1234", "zweiter-token-123")
+ALICE = UserConfig("alice", ("erster-token-1234", "zweiter-token-123"), "https://a.example", "k" * 20, "Garmin")
+BOB = UserConfig("bob", ("bobs-token-123456",), "https://b.example", "b" * 20, "Garmin")
+USERS = (ALICE, BOB)
 
 
 class TestBearer:
-    def test_accepts_any_configured_token(self):
-        assert verify_token(TOKENS[0], TOKENS)
-        assert verify_token(TOKENS[1], TOKENS)
+    def test_maps_every_token_to_its_user(self):
+        assert match_user(ALICE.tokens[0], USERS) is ALICE
+        assert match_user(ALICE.tokens[1], USERS) is ALICE  # rotation
+        assert match_user(BOB.tokens[0], USERS) is BOB
 
     def test_rejects_anything_else(self):
-        assert not verify_token("erster-token-1233", TOKENS)
-        assert not verify_token("", TOKENS)
-        assert not verify_token(TOKENS[0], ())
+        assert match_user("erster-token-1233", USERS) is None
+        assert match_user("", USERS) is None
+        assert match_user(ALICE.tokens[0], ()) is None
+
+    def test_non_ascii_input_is_rejected_not_crashed(self):
+        assert match_user("tökén-mit-umlaut-1", USERS) is None
 
     @pytest.mark.parametrize(
         "header, expected",
@@ -33,27 +40,31 @@ class TestBearer:
 
 
 class TestCoverSignature:
-    def test_round_trip(self):
+    def test_round_trip_names_the_owner(self):
         expires = int(time.time()) + 600
-        assert verify_cover("li_a", expires, sign_cover("li_a", expires, TOKENS[0]), TOKENS)
+        assert cover_user("li_a", expires, sign_cover("li_a", expires, ALICE.signing_key), USERS) is ALICE
+        assert cover_user("li_a", expires, sign_cover("li_a", expires, BOB.signing_key), USERS) is BOB
 
     def test_is_bound_to_the_book(self):
         expires = int(time.time()) + 600
-        assert not verify_cover("li_b", expires, sign_cover("li_a", expires, TOKENS[0]), TOKENS)
+        assert cover_user("li_b", expires, sign_cover("li_a", expires, ALICE.signing_key), USERS) is None
 
     def test_expires(self):
         past = int(time.time()) - 1
-        assert not verify_cover("li_a", past, sign_cover("li_a", past, TOKENS[0]), TOKENS)
+        assert cover_user("li_a", past, sign_cover("li_a", past, ALICE.signing_key), USERS) is None
 
     def test_an_old_key_still_validates_during_rotation(self):
         expires = int(time.time()) + 600
-        signature = sign_cover("li_a", expires, TOKENS[1])
-        assert verify_cover("li_a", expires, signature, TOKENS)
+        signature = sign_cover("li_a", expires, ALICE.tokens[1])
+        assert cover_user("li_a", expires, signature, USERS) is ALICE
+
+    def test_a_garbled_signature_is_rejected_not_crashed(self):
+        assert cover_user("li_a", int(time.time()) + 600, "sïgnatur", USERS) is None
 
     def test_signature_carries_no_token_material(self):
         expires = int(time.time()) + 600
-        signature = sign_cover("li_a", expires, TOKENS[0])
-        assert TOKENS[0] not in signature
+        signature = sign_cover("li_a", expires, ALICE.signing_key)
+        assert ALICE.signing_key not in signature
 
 
 class TestFailureTracker:

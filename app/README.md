@@ -31,7 +31,7 @@ in the middle of a chapter.
 
 ```sh
 PROXY_URL=https://abconnect.example \
-PROXY_TOKEN=$ABCONNECT_TOKEN \
+PROXY_TOKEN=<this watch's token from users.toml> \
 CIQ_HOME=/path/to/sdk ./build.sh
 ```
 
@@ -61,7 +61,7 @@ token.
 | Variable | Required | Default | Meaning |
 |---|---|---|---|
 | `PROXY_URL` | effectively yes | empty | base URL of the proxy |
-| `PROXY_TOKEN` | effectively yes | empty | the proxy's `ABCONNECT_TOKEN` |
+| `PROXY_TOKEN` | effectively yes | empty | this watch's token from the proxy's `users.toml` |
 | `LOG_LEVEL` | — | `0` | 0 errors, 1 warnings, 2 course of events, 3 everything |
 | `DELETE_FINISHED` | — | `false` | remove finished books from the watch |
 

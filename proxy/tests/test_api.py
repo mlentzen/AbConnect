@@ -1,4 +1,4 @@
-import dataclasses
+import json
 import time
 
 import httpx
@@ -9,10 +9,15 @@ from abconnect_proxy import auth
 from abconnect_proxy import config as config_module
 from abconnect_proxy.abs_client import AbsClient
 from abconnect_proxy.api import create_app
-from abconnect_proxy.cache import Cache
+from abconnect_proxy.cache import USERS_DIR, Cache
+
+from .conftest import write_users
 
 TOKEN = "watch-token-abcdef"
 HEAD = {"Authorization": f"Bearer {TOKEN}"}
+# A second person on the same proxy, with their own server and playlist.
+BOB_TOKEN = "bobs-watch-token-12"
+BOB_HEAD = {"Authorization": f"Bearer {BOB_TOKEN}"}
 
 LIBRARIES = {"libraries": [{"id": "lib1", "mediaType": "book"}]}
 PLAYLISTS = {
@@ -37,9 +42,29 @@ LISTING = {
         {"id": "li_b", "media": {"duration": 7200, "metadata": {"title": "The Castle", "authorName": "Kafka"}}},
     ],
 }
+BOB_PLAYLISTS = {
+    "playlists": [
+        {
+            "id": "pl9",
+            "name": "Bob",
+            "items": [
+                {
+                    "libraryItemId": "li_x",
+                    "libraryItem": {"media": {"duration": 5400, "metadata": {"title": "The Trial", "authorName": "Kafka"}}},
+                }
+            ],
+        }
+    ]
+}
+BOB_LISTING = {
+    "total": 1,
+    "results": [
+        {"id": "li_x", "media": {"duration": 5400, "metadata": {"title": "The Trial", "authorName": "Kafka"}}},
+    ],
+}
 
 
-def abs_handler(progress_payload=None, on_patch=None, playlists=None):
+def abs_handler(progress_payload=None, on_patch=None, playlists=None, listing=None):
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
         if path == "/api/playlists":
@@ -47,12 +72,10 @@ def abs_handler(progress_payload=None, on_patch=None, playlists=None):
         if path == "/api/libraries":
             return httpx.Response(200, json=LIBRARIES)
         if path.endswith("/items"):
-            return httpx.Response(200, json=LISTING)
+            return httpx.Response(200, json=LISTING if listing is None else listing)
         if path.startswith("/api/me/progress/"):
             if request.method == "PATCH":
                 if on_patch is not None:
-                    import json
-
                     on_patch(json.loads(request.content))
                 return httpx.Response(200, json={})
             if progress_payload is None:
@@ -63,26 +86,49 @@ def abs_handler(progress_payload=None, on_patch=None, playlists=None):
     return handler
 
 
-@pytest.fixture
-def config(tmp_path):
+def bob_handler(**kwargs):
+    return abs_handler(playlists=BOB_PLAYLISTS, listing=BOB_LISTING, **kwargs)
+
+
+def load_config(tmp_path, alice_tokens=(TOKEN,)):
+    users = write_users(
+        tmp_path / "users.toml",
+        {
+            "alice": {"tokens": list(alice_tokens), "abs_url": "https://abs.alice.example", "abs_api_key": "k" * 20},
+            "bob": {"tokens": [BOB_TOKEN], "abs_url": "https://abs.bob.example", "abs_api_key": "b" * 20, "playlist": "Bob"},
+        },
+    )
     return config_module.load(
         {
-            "ABS_URL": "https://abs.example",
-            "ABS_API_KEY": "k" * 20,
-            "ABCONNECT_TOKEN": TOKEN,
+            "USERS_FILE": str(users),
             "CACHE_DIR": str(tmp_path / "cache"),
             "WORK_DIR": str(tmp_path / "work"),
         }
     )
 
 
-def build_client(config, handler=None):
-    abs_client = AbsClient(config.abs_url, config.abs_api_key, transport=httpx.MockTransport(handler or abs_handler()))
-    return TestClient(create_app(config, abs_client=abs_client))
+@pytest.fixture
+def config(tmp_path):
+    return load_config(tmp_path)
 
 
-def prepared_book(config, book_id="li_a", cover=True):
-    cache = Cache(root=config.cache_dir)
+def build_client(config, handler=None, bob=None):
+    """Alice (TOKEN) and Bob (BOB_TOKEN) each talk to a mocked ABS of their own."""
+    users = {user.name: user for user in config.users}
+    handlers = {"alice": handler or abs_handler(), "bob": bob or bob_handler()}
+    clients = {
+        name: AbsClient(users[name].abs_url, users[name].abs_api_key, transport=httpx.MockTransport(h))
+        for name, h in handlers.items()
+    }
+    return TestClient(create_app(config, abs_clients=clients))
+
+
+def user_cache(config, user="alice"):
+    return Cache(root=config.cache_dir / USERS_DIR / user)
+
+
+def prepared_book(config, book_id="li_a", cover=True, user="alice"):
+    cache = user_cache(config, user)
     cache.store_manifest(
         book_id,
         {
@@ -121,17 +167,7 @@ class TestAuth:
             assert client.get("/v1/books", headers={"Authorization": "Bearer nope"}).status_code == 401
 
     def test_a_rotated_token_still_works(self, tmp_path):
-        rotated = dataclasses.replace(
-            config_module.load(
-                {
-                    "ABS_URL": "https://abs.example",
-                    "ABS_API_KEY": "k" * 20,
-                    "ABCONNECT_TOKEN": f"neu-token-1234567,{TOKEN}",
-                    "CACHE_DIR": str(tmp_path / "c"),
-                    "WORK_DIR": str(tmp_path / "w"),
-                }
-            )
-        )
+        rotated = load_config(tmp_path, alice_tokens=("neu-token-1234567", TOKEN))
         with build_client(rotated) as client:
             assert client.get("/v1/books", headers=HEAD).status_code == 200
             assert client.get("/v1/books", headers={"Authorization": "Bearer neu-token-1234567"}).status_code == 200
@@ -147,20 +183,31 @@ class TestAuth:
 
 
 class TestHealth:
-    def test_reports_abs_trouble_as_unhealthy(self, config):
+    def test_one_broken_server_makes_the_proxy_unhealthy(self, config):
         def broken(request):
             return httpx.Response(500, json={})
 
         with build_client(config, broken) as client:
             response = client.get("/health")
         assert response.status_code == 503
-        assert response.json()["audiobookshelf"] != "ok"
+        users = response.json()["users"]
+        assert users["alice"]["audiobookshelf"] != "ok"
+        assert users["bob"]["audiobookshelf"] == "ok"
 
     def test_healthy_when_everything_answers(self, config):
         with build_client(config) as client:
             response = client.get("/health")
         assert response.status_code == 200
-        assert response.json()["audiobookshelf"] == "ok"
+        assert {name: u["audiobookshelf"] for name, u in response.json()["users"].items()} == {
+            "alice": "ok",
+            "bob": "ok",
+        }
+
+    def test_does_not_expose_server_addresses(self, config):
+        with build_client(config) as client:
+            body = client.get("/health").text
+        assert "abs.alice.example" not in body
+        assert "abs.bob.example" not in body
 
 
 class TestListing:
@@ -245,7 +292,7 @@ class TestCover:
     def test_an_expired_signature_is_refused(self, config):
         prepared_book(config)
         expired = int(time.time()) - 10
-        signature = auth.sign_cover("li_a", expired, config.signing_key)
+        signature = auth.sign_cover("li_a", expired, TOKEN)
         with build_client(config) as client:
             response = client.get(f"/v1/books/li_a/cover.jpg?exp={expired}&sig={signature}")
         assert response.status_code == 403
@@ -254,7 +301,7 @@ class TestCover:
         prepared_book(config)
         prepared_book(config, book_id="li_b")
         expires = int(time.time()) + 600
-        signature = auth.sign_cover("li_a", expires, config.signing_key)
+        signature = auth.sign_cover("li_a", expires, TOKEN)
         with build_client(config) as client:
             response = client.get(f"/v1/books/li_b/cover.jpg?exp={expires}&sig={signature}")
         assert response.status_code == 403
@@ -400,5 +447,77 @@ class TestPlaylist:
         with build_client(config) as client:
             client.get("/v1/playlist", headers=HEAD)
             report = client.get("/health").json()
-        assert report["playlist"] == "Garmin"
-        assert report["playlist_found"] is True
+        assert report["users"]["alice"]["playlist"] == "Garmin"
+        assert report["users"]["alice"]["playlist_found"] is True
+        assert report["users"]["bob"]["playlist"] == "Bob"
+
+
+class TestIsolation:
+    """Several people on one proxy: the token decides whose world a request sees."""
+
+    def test_each_token_gets_its_own_playlist(self, config):
+        with build_client(config) as client:
+            alice = client.get("/v1/playlist", headers=HEAD).json()
+            bob = client.get("/v1/playlist", headers=BOB_HEAD).json()
+        assert (alice["playlist"], [b["id"] for b in alice["books"]]) == ("Garmin", ["li_a"])
+        assert (bob["playlist"], [b["id"] for b in bob["books"]]) == ("Bob", ["li_x"])
+
+    def test_each_token_gets_its_own_library(self, config):
+        with build_client(config) as client:
+            payload = client.get("/v1/books", headers=BOB_HEAD).json()
+        assert [b["id"] for b in payload["books"]] == ["li_x"]
+
+    def test_another_users_book_stays_out_of_reach(self, config):
+        prepared_book(config)  # alice's
+        with build_client(config) as client:
+            assert client.get("/v1/books/li_a/segments", headers=BOB_HEAD).status_code == 409
+            assert client.get("/v1/books/li_a/seg/0000.m4a", headers=BOB_HEAD).status_code == 404
+
+    def test_a_cover_signed_by_another_user_does_not_open_this_ones(self, config):
+        prepared_book(config)  # alice's, with a cover
+        expires = int(time.time()) + 600
+        signature = auth.sign_cover("li_a", expires, BOB_TOKEN)
+        with build_client(config) as client:
+            response = client.get(f"/v1/books/li_a/cover.jpg?exp={expires}&sig={signature}")
+        assert response.status_code == 404  # bob's own cache has no such cover
+
+    def test_the_cover_url_serves_the_owners_cover(self, config):
+        prepared_book(config)
+        prepared_book(config, user="bob")
+        user_cache(config, "bob").cover_path("li_a").write_bytes(b"BOBCOVER")
+        with build_client(config) as client:
+            alice_url = client.get("/v1/books/li_a/segments", headers=HEAD).json()["cover_url"]
+            bob_url = client.get("/v1/books/li_a/segments", headers=BOB_HEAD).json()["cover_url"]
+            assert client.get(alice_url).content == b"JPEGDATA"
+            assert client.get(bob_url).content == b"BOBCOVER"
+
+    def test_progress_reaches_only_the_pushing_users_server(self, config):
+        prepared_book(config)
+        prepared_book(config, user="bob")
+        alice_sent, bob_sent = {}, {}
+        with build_client(config, abs_handler(on_patch=alice_sent.update), bob_handler(on_patch=bob_sent.update)) as client:
+            client.post(
+                "/v1/progress",
+                headers=BOB_HEAD,
+                json={"entries": [{"book_id": "li_a", "segment": 1, "offset": 300, "ts": 1_700_000_000}]},
+            )
+        assert bob_sent["currentTime"] == 1200.0
+        assert alice_sent == {}
+
+    def test_releasing_a_book_leaves_other_users_alone(self, config):
+        alice = prepared_book(config)
+        bob = prepared_book(config, user="bob")
+        with build_client(config) as client:
+            client.post("/v1/books/li_a/prepare", headers=HEAD)
+            client.post("/v1/books/li_a/prepare", headers=BOB_HEAD)
+            client.post("/v1/books/li_a/release", headers=BOB_HEAD)
+        assert alice.pinned("li_a")
+        assert not bob.pinned("li_a")
+
+    def test_startup_drops_books_of_the_single_user_layout(self, config):
+        Cache(root=config.cache_dir).store_manifest("li_old", {"segments": []})
+        prepared_book(config)
+        with build_client(config):
+            pass
+        assert not (config.cache_dir / "li_old").exists()
+        assert user_cache(config).is_ready("li_a")

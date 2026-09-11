@@ -1,3 +1,4 @@
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -6,6 +7,19 @@ import pytest
 
 FFMPEG = shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
 needs_ffmpeg = pytest.mark.skipif(not FFMPEG, reason="ffmpeg/ffprobe not available")
+
+
+def write_users(path: Path, users: dict[str, dict]) -> Path:
+    """Writes a users file: {name: {key: value}} -> [users."name"] tables.
+
+    json.dumps produces valid TOML for the strings and string lists used here.
+    """
+    lines = []
+    for name, entry in users.items():
+        lines.append(f"[users.{json.dumps(name)}]")
+        lines += [f"{key} = {json.dumps(value)}" for key, value in entry.items()]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
 
 
 def _metadata(chapters: list[tuple[float, float, str]]) -> str:

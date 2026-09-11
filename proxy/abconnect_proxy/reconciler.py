@@ -1,8 +1,9 @@
-"""Reconciliation of the ABS playlist with the cache.
+"""Reconciliation of an ABS playlist with the cache.
 
 The playlist is the target: whatever is in it gets prepared; whatever
 disappears gets released. Reconciliation runs in the background so a newly
 added book is already segmented and ready before the watch syncs the next time.
+Every user has a reconciler of their own, for their own playlist and cache.
 
 Most important rule: a playlist that is not found is no reason to empty the
 cache. A typo in the name or a briefly unreachable ABS would otherwise wipe
@@ -40,6 +41,8 @@ class PlaylistReconciler:
     cache: Cache
     preparer: Preparer
     config: Config
+    # The name of the user's playlist in their own Audiobookshelf.
+    playlist: str
 
     _last: ReconcileResult = field(default_factory=ReconcileResult)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -52,18 +55,18 @@ class PlaylistReconciler:
         async with self._lock:
             result = ReconcileResult(checked_at=time.time())
             try:
-                playlist = await self.abs_client.playlist(self.config.abs_playlist)
+                playlist = await self.abs_client.playlist(self.playlist)
             except AbsError as error:
                 # No access means "unknown", not "empty".
                 result.error = str(error)
                 result.found = self._last.found
                 result.books = self._last.books
-                log.warning("Playlist not retrievable: %s", error)
+                log.warning("Playlist '%s' not retrievable: %s", self.playlist, error)
                 self._last = result
                 return result
 
             if playlist is None:
-                result.error = f"Playlist '{self.config.abs_playlist}' does not exist in Audiobookshelf"
+                result.error = f"Playlist '{self.playlist}' does not exist in Audiobookshelf"
                 log.warning("%s — cache stays untouched", result.error)
                 self._last = result
                 return result
@@ -89,7 +92,8 @@ class PlaylistReconciler:
 
             if result.prepared or result.released:
                 log.info(
-                    "Playlist reconciled: %d newly prepared, %d released",
+                    "Playlist '%s' reconciled: %d newly prepared, %d released",
+                    self.playlist,
                     len(result.prepared),
                     len(result.released),
                 )

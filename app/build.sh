@@ -7,7 +7,7 @@
 #
 # Taken from .env (optional, all of them baked into the build):
 #   PROXY_URL    base URL of abconnect-proxy
-#   PROXY_TOKEN  the matching ABCONNECT_TOKEN
+#   PROXY_TOKEN  this watch's token from the proxy's users.toml
 #   LOG_LEVEL    0 errors (default), 1 warnings, 2 course of events, 3 everything
 #
 # Create a key if there is none yet:

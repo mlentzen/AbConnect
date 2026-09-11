@@ -19,7 +19,7 @@ from enum import Enum
 from pathlib import Path
 
 from .abs_client import AbsClient, AbsError
-from .cache import Cache
+from .cache import Budget, Cache
 from .config import Config
 from .media import EncodeSpec, MediaError, conforms, cut, probe
 from .models import Encoding, Segment
@@ -54,11 +54,17 @@ class Preparer:
     abs_client: AbsClient
     cache: Cache
     config: Config
+    # Shared by every user: CACHE_MAX_BYTES describes the disk, not a person.
+    budget: Budget
+    # The user's own subdirectory, so two users preparing the same book ID
+    # never share a source file.
+    work_dir: Path
+    # One job at a time: keeps disk usage predictable and ABS calm. Every
+    # user's preparer gets the same semaphore, so this holds across users.
+    slot: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(1))
 
     _states: dict[str, BookState] = field(default_factory=dict)
     _tasks: dict[str, asyncio.Task] = field(default_factory=dict)
-    # One job at a time: keeps disk usage predictable and ABS calm.
-    _slot: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(1))
 
     # --- State -------------------------------------------------------------
 
@@ -70,7 +76,13 @@ class Preparer:
                 percent=100,
                 segment_count=len(manifest.get("segments") or []),
             )
-        return self._states.get(book_id, BookState())
+        state = self._states.get(book_id, BookState())
+        if state.status is Status.READY:
+            # The manifest is gone, so the book was evicted — possibly by the
+            # budget on behalf of another user's job, which never tells this
+            # preparer. READY would promise segments that no longer exist.
+            return BookState()
+        return state
 
     def _set(self, book_id: str, **changes) -> None:
         state = self._states.setdefault(book_id, BookState())
@@ -125,7 +137,7 @@ class Preparer:
 
     async def _guarded(self, book_id: str) -> None:
         try:
-            async with self._slot:
+            async with self.slot:
                 await self._prepare(book_id)
         except asyncio.CancelledError:
             self._set(book_id, status=Status.PENDING, percent=0)
@@ -175,12 +187,13 @@ class Preparer:
             log.info("%s: 15-minute grid instead of chapters (%s)", item.title, plan.reason)
 
         largest = max(f.size for f in item.files) if item.files else 0
-        if not self.cache.has_room_for(item.total_bytes + largest, self.config.cache_max_bytes):
-            self.cache.enforce_budget(self.config.cache_max_bytes)
-        if not self.cache.has_room_for(item.total_bytes + largest, self.config.cache_max_bytes):
+        needed = item.total_bytes + largest
+        if not self.budget.has_room_for(needed):
+            self.budget.enforce()
+        if not self.budget.has_room_for(needed):
             raise MediaError(
                 f"Not enough space in the cache for '{item.title}' "
-                f"({(item.total_bytes + largest) / 1024**2:.0f} MB needed)"
+                f"({needed / 1024**2:.0f} MB needed)"
             )
 
         by_file: dict[str, list[Segment]] = {}
@@ -195,7 +208,7 @@ class Preparer:
             segments = by_file.get(source.ino, [])
             if not segments:
                 continue
-            work_file = self.config.work_dir / book_id / source.filename
+            work_file = self.work_dir / book_id / source.filename
             try:
                 def report(written: int, _total: int, base: int = done_bytes) -> None:
                     share = (base + written) / max(1, item.total_bytes)

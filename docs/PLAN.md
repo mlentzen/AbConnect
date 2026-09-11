@@ -185,27 +185,36 @@ no longer calls them — they are tools for `curl` and debugging.
 
 ### E3 — Configuration exclusively at runtime
 
-The image contains **no** ABS address and no key. Everything comes from the
-environment, secrets via Podman secrets:
+The image contains **no** ABS address and no key. One proxy serves several
+users; each one is an entry in a users file, mounted as a Podman secret, with
+their own ABS, API key, playlist and watch token(s):
+
+```toml
+[users.manuel]
+tokens = ["<token for the watch>"]   # list, for rotation; unique across users
+abs_url = "https://audiobookshelf.internal"
+abs_api_key = "<ABS API key>"
+playlist = "Garmin"                  # optional, default ABS_PLAYLIST
+```
+
+Everything else is global and comes from the environment:
 
 | Variable | Required | Meaning |
 |---|---|---|
-| `ABS_URL` | yes | base URL of the ABS instance (reachable within the stack) |
-| `ABS_API_KEY` | yes | ABS API key, mounted as a Podman secret |
-| `ABS_PLAYLIST` | — | name of the authoritative playlist, default `Garmin` |
+| `USERS_FILE` | — | the users file, default `/run/secrets/users.toml` |
+| `ABS_PLAYLIST` | — | name of the authoritative playlist for users without their own, default `Garmin` |
 | `PLAYLIST_POLL_SECONDS` | — | interval of the background reconciliation, default 600 |
-| `ABCONNECT_TOKEN` | yes | token for watch → proxy, independent of the ABS key; comma list for rotation |
-| `CACHE_DIR` | — | segment cache, default `/var/cache/abconnect` |
+| `CACHE_DIR` | — | segment cache, one directory per user, default `/var/cache/abconnect` |
 | `WORK_DIR` | — | transient space for the `.m4b` during the job |
-| `CACHE_MAX_BYTES` | — | upper limit, above which LRU eviction kicks in; set generously |
+| `CACHE_MAX_BYTES` | — | upper limit across all users, above which LRU eviction kicks in; set generously |
 | `RELEASE_TTL_DAYS` | — | how long released books stay in the cache, default 30 |
 | `SEGMENT_TARGET_SECONDS` / `_MIN_` / `_MAX_` | — | segment normalization, default 900 / 180 / 1500 |
 | `LOG_LEVEL` | — | |
 
-The start aborts with a clear message if a required variable is missing — no
-silent operation with defaults. `GET /health` additionally checks whether ABS
-is reachable and the key is accepted; this way a misconfiguration surfaces in
-the quadlet healthcheck, not only on the watch's first sync.
+The start aborts with a clear message if the users file is missing or invalid —
+no silent operation with defaults. `GET /health` additionally checks, per user,
+whether ABS is reachable and the key is accepted; this way a misconfiguration
+surfaces in the quadlet healthcheck, not only on a watch's first sync.
 
 Example quadlet (`~/.config/containers/systemd/abconnect-proxy.container`):
 
@@ -216,9 +225,7 @@ After=audiobookshelf.service
 
 [Container]
 Image=ghcr.io/mlentzen/abconnect-proxy:latest
-Environment=ABS_URL=https://audiobookshelf.internal
-Secret=abs-api-key,type=env,target=ABS_API_KEY
-Secret=abconnect-token,type=env,target=ABCONNECT_TOKEN
+Secret=abconnect-users,type=mount,target=/run/secrets/users.toml,uid=10001,mode=0400
 Volume=abconnect-cache:/var/cache/abconnect
 Volume=abconnect-work:/var/tmp/abconnect
 PublishPort=127.0.0.1:18543:8080   # 8080 is taken on the host
@@ -342,28 +349,31 @@ deploy/                      quadlet unit, example secrets, setup docs
 
 ### Auth between watch and proxy
 
-All `/v1` endpoints require `Authorization: Bearer <ABCONNECT_TOKEN>`. That is
-the only protection of this path — TLS provides confidentiality, the token
-provides access control.
+All `/v1` endpoints require `Authorization: Bearer <token>`. The token names
+one user of the proxy — every user has their own ABS, API key, cache and
+playlist, and the token decides which of them a request sees. That is the only
+protection of this path — TLS provides confidentiality, the token provides
+access control.
 
-**What it does:** It prevents an arbitrary caller from reading the library,
+**What it does:** It prevents an arbitrary caller from reading a library,
 triggering prepare jobs (CPU and disk load) or writing someone else's listening
 progress to ABS via `/v1/progress`. Above all it separates the trust levels:
-the ABS API key stays in the proxy, the watch never knows it. A compromised
-token can be rotated without touching ABS, and its damage ends at the `/v1`
-surface.
+the ABS API keys stay in the proxy, a watch never knows one. A compromised
+token can be rotated or removed without touching ABS or any other user, and its
+damage ends at that user's `/v1` surface.
 
-**What it does not do:** It is a shared secret, not an identity. There is no
-distinction between individual devices and no session. On the watch it lives as
-plain text in the Connect IQ app settings and runs through Garmin Connect —
-usable as an access barrier for a private stack, no substitute for an auth
-system with users.
+**What it does not do:** It is a secret per user, not a device identity. Two
+watches of one user share that user's tokens unless each gets an entry of its
+own, and there is no session. On the watch it lives as plain text in the
+Connect IQ app settings and runs through Garmin Connect — usable as an access
+barrier for a private stack, no substitute for a full auth system.
 
 Implementation:
 
-* Comparison with `hmac.compare_digest`, not with `==`.
-* `ABCONNECT_TOKEN` accepts a comma list so a new token can be set before the
-  old one disappears from the watch settings.
+* Comparison with `hmac.compare_digest` over every token of every user, without
+  short-circuit, not with `==`.
+* `tokens` is a list per user so a new token can be set before the old one
+  disappears from the watch settings. A token may belong to one user only.
 * Backoff after repeatedly failed auth so the endpoint does not become a
   guessing oracle.
 * No token in URLs (see below) — reverse-proxy logs record query strings.
@@ -439,7 +449,7 @@ Playback:      Store -> ContentIterator -> ActiveContent(ref, meta, startPos)
 | R8 | ABS API changes (2.26 auth rework) | proxy breaks | version check at start, `/health`, smoke test in the repo |
 | R9a | playlist unfindable or ABS briefly gone | watch could be wiped | a failure never means "empty": 409 instead of an empty list, no releasing during reconciliation, watch only deletes with a fresh target; `/health` reports `playlist_found` |
 | R9 | fēnix 7 Pro **without a Wi-Fi** variant | sync over BLE impractically slow | only support Wi-Fi variants, mention it in the description |
-| R10 | `ABCONNECT_TOKEN` is a shared secret in plain text on the watch | no per-device revocation, token in Garmin Connect | deliberately accepted for a private stack; rotation via comma list, pre-signed cover URLs instead of a token in the query string |
+| R10 | the watch token is a secret in plain text on the watch | no per-device revocation, token in Garmin Connect | deliberately accepted for a private stack; one token set per user in the users file (revocable per user), rotation via the token list, pre-signed cover URLs instead of a token in the query string |
 | R11 | store approval for audio provider apps | release delayed | check review requirements early, document the sideload path |
 
 ---
