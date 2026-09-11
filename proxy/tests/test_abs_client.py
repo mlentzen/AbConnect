@@ -36,48 +36,6 @@ async def test_ping_reports_an_unreachable_server():
         await client_for(handler).ping()
 
 
-async def test_all_books_skips_podcast_libraries_and_sorts_by_title():
-    calls = []
-
-    def handler(request):
-        if request.url.path == "/api/libraries":
-            return httpx.Response(200, json=LIBRARIES)
-        calls.append(request.url.path)
-        return httpx.Response(
-            200,
-            json={
-                "total": 2,
-                "results": [
-                    {"id": "b", "media": {"metadata": {"title": "Second"}}},
-                    {"id": "a", "media": {"metadata": {"title": "First"}}},
-                ],
-            },
-        )
-
-    books = await client_for(handler).all_books()
-
-    assert calls == ["/api/libraries/lib1/items"]
-    assert [b["title"] for b in books] == ["First", "Second"]
-
-
-async def test_all_books_is_cached_between_calls():
-    hits = []
-
-    def handler(request):
-        hits.append(request.url.path)
-        if request.url.path == "/api/libraries":
-            return httpx.Response(200, json=LIBRARIES)
-        return httpx.Response(200, json={"results": []})
-
-    abs_client = client_for(handler)
-    await abs_client.all_books()
-    await abs_client.all_books()
-    assert hits.count("/api/libraries") == 1
-
-    await abs_client.all_books(force=True)
-    assert hits.count("/api/libraries") == 2
-
-
 class TestDownload:
     async def test_writes_the_file_and_reports_progress(self, tmp_path):
         payload = b"0123456789" * 20_000

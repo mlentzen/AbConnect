@@ -1,6 +1,6 @@
 import pytest
 
-from abconnect_proxy.cache import USERS_DIR, Budget, Cache, UnsafeBookId, remove_legacy_books
+from abconnect_proxy.cache import USERS_DIR, Budget, Cache, UnsafeBookId
 
 
 @pytest.fixture
@@ -116,18 +116,6 @@ class TestBudget:
 
         assert budget.has_room_for(3000)
         assert not budget.has_room_for(5000)
-
-
-def test_drops_book_dirs_of_the_single_user_layout(tmp_path):
-    root = tmp_path / "cache"
-    fill(Cache(root=root), "li_old")
-    current = Cache(root=root / USERS_DIR / "alice")
-    fill(current, "li_new")
-    (root / "lost+found").mkdir()  # not a book: stays
-
-    assert remove_legacy_books(root) == ["li_old"]
-    assert current.is_ready("li_new")
-    assert (root / "lost+found").exists()
 
 
 def test_survives_a_restart(tmp_path):

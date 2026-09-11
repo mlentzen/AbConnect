@@ -5,7 +5,6 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from abconnect_proxy import auth
 from abconnect_proxy import config as config_module
 from abconnect_proxy.abs_client import AbsClient
 from abconnect_proxy.api import create_app
@@ -35,13 +34,6 @@ PLAYLISTS = {
         {"id": "pl2", "name": "Other", "items": []},
     ]
 }
-LISTING = {
-    "total": 2,
-    "results": [
-        {"id": "li_a", "media": {"duration": 3600, "metadata": {"title": "Amerika", "authorName": "Kafka"}}},
-        {"id": "li_b", "media": {"duration": 7200, "metadata": {"title": "The Castle", "authorName": "Kafka"}}},
-    ],
-}
 BOB_PLAYLISTS = {
     "playlists": [
         {
@@ -56,23 +48,13 @@ BOB_PLAYLISTS = {
         }
     ]
 }
-BOB_LISTING = {
-    "total": 1,
-    "results": [
-        {"id": "li_x", "media": {"duration": 5400, "metadata": {"title": "The Trial", "authorName": "Kafka"}}},
-    ],
-}
-
-
-def abs_handler(progress_payload=None, on_patch=None, playlists=None, listing=None):
+def abs_handler(progress_payload=None, on_patch=None, playlists=None):
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
         if path == "/api/playlists":
             return httpx.Response(200, json=PLAYLISTS if playlists is None else playlists)
         if path == "/api/libraries":
             return httpx.Response(200, json=LIBRARIES)
-        if path.endswith("/items"):
-            return httpx.Response(200, json=LISTING if listing is None else listing)
         if path.startswith("/api/me/progress/"):
             if request.method == "PATCH":
                 if on_patch is not None:
@@ -87,7 +69,7 @@ def abs_handler(progress_payload=None, on_patch=None, playlists=None, listing=No
 
 
 def bob_handler(**kwargs):
-    return abs_handler(playlists=BOB_PLAYLISTS, listing=BOB_LISTING, **kwargs)
+    return abs_handler(playlists=BOB_PLAYLISTS, **kwargs)
 
 
 def load_config(tmp_path, alice_tokens=(TOKEN,)):
@@ -127,7 +109,7 @@ def user_cache(config, user="alice"):
     return Cache(root=config.cache_dir / USERS_DIR / user)
 
 
-def prepared_book(config, book_id="li_a", cover=True, user="alice"):
+def prepared_book(config, book_id="li_a", user="alice"):
     cache = user_cache(config, user)
     cache.store_manifest(
         book_id,
@@ -138,7 +120,6 @@ def prepared_book(config, book_id="li_a", cover=True, user="alice"):
             "duration": 1800.0,
             "chapter_source": "chapters",
             "reason": "",
-            "cover": cover,
             "prepared_at": time.time(),
             "segments": [
                 {"index": 0, "title": "The Stoker", "duration": 900.0, "book_start": 0.0,
@@ -152,29 +133,27 @@ def prepared_book(config, book_id="li_a", cover=True, user="alice"):
         path = cache.segment_path(book_id, name)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"audio!!")
-    if cover:
-        cache.cover_path(book_id).write_bytes(b"JPEGDATA")
     return cache
 
 
 class TestAuth:
     def test_v1_needs_a_token(self, config):
         with build_client(config) as client:
-            assert client.get("/v1/books").status_code == 401
+            assert client.get("/v1/playlist").status_code == 401
 
     def test_a_wrong_token_is_rejected(self, config):
         with build_client(config) as client:
-            assert client.get("/v1/books", headers={"Authorization": "Bearer nope"}).status_code == 401
+            assert client.get("/v1/playlist", headers={"Authorization": "Bearer nope"}).status_code == 401
 
     def test_a_rotated_token_still_works(self, tmp_path):
         rotated = load_config(tmp_path, alice_tokens=("neu-token-1234567", TOKEN))
         with build_client(rotated) as client:
-            assert client.get("/v1/books", headers=HEAD).status_code == 200
-            assert client.get("/v1/books", headers={"Authorization": "Bearer neu-token-1234567"}).status_code == 200
+            assert client.get("/v1/playlist", headers=HEAD).status_code == 200
+            assert client.get("/v1/playlist", headers={"Authorization": "Bearer neu-token-1234567"}).status_code == 200
 
     def test_repeated_failures_are_throttled(self, config):
         with build_client(config) as client:
-            codes = [client.get("/v1/books", headers={"Authorization": "Bearer x"}).status_code for _ in range(7)]
+            codes = [client.get("/v1/playlist", headers={"Authorization": "Bearer x"}).status_code for _ in range(7)]
         assert 429 in codes
 
     def test_health_needs_no_token(self, config):
@@ -254,30 +233,6 @@ class TestHealth:
         assert bob.json()["audiobookshelf"] == "ok"
 
 
-class TestListing:
-    def test_lists_books_with_their_local_status(self, config):
-        prepared_book(config)
-        with build_client(config) as client:
-            payload = client.get("/v1/books", headers=HEAD).json()
-
-        assert payload["total"] == 2
-        by_id = {b["id"]: b for b in payload["books"]}
-        assert by_id["li_a"]["status"] == "ready"
-        assert by_id["li_a"]["segments"] == 2
-        assert by_id["li_b"]["status"] == "pending"
-
-    def test_pages(self, config):
-        with build_client(config) as client:
-            payload = client.get("/v1/books?page=2&per_page=1", headers=HEAD).json()
-        assert payload["pages"] == 2
-        assert [b["title"] for b in payload["books"]] == ["The Castle"]
-
-    def test_filters_by_query(self, config):
-        with build_client(config) as client:
-            payload = client.get("/v1/books?q=castle", headers=HEAD).json()
-        assert [b["id"] for b in payload["books"]] == ["li_b"]
-
-
 class TestSegments:
     def test_unprepared_book_answers_with_conflict_not_a_crash(self, config):
         with build_client(config) as client:
@@ -317,38 +272,6 @@ class TestSegments:
         with build_client(config) as client:
             response = client.get("/v1/books/li_a/seg/..%2F..%2Fetc%2Fpasswd", headers=HEAD)
         assert response.status_code in (400, 404)
-
-
-class TestCover:
-    def test_signed_url_from_segments_works_without_a_bearer(self, config):
-        prepared_book(config)
-        with build_client(config) as client:
-            url = client.get("/v1/books/li_a/segments", headers=HEAD).json()["cover_url"]
-            response = client.get(url)  # deliberately without a header - makeImageRequest cannot set any
-        assert response.status_code == 200
-        assert response.content == b"JPEGDATA"
-
-    def test_an_unsigned_request_is_refused(self, config):
-        prepared_book(config)
-        with build_client(config) as client:
-            assert client.get("/v1/books/li_a/cover.jpg?exp=99999999999&sig=egal").status_code == 403
-
-    def test_an_expired_signature_is_refused(self, config):
-        prepared_book(config)
-        expired = int(time.time()) - 10
-        signature = auth.sign_cover("li_a", expired, TOKEN)
-        with build_client(config) as client:
-            response = client.get(f"/v1/books/li_a/cover.jpg?exp={expired}&sig={signature}")
-        assert response.status_code == 403
-
-    def test_a_signature_for_another_book_does_not_transfer(self, config):
-        prepared_book(config)
-        prepared_book(config, book_id="li_b")
-        expires = int(time.time()) + 600
-        signature = auth.sign_cover("li_a", expires, TOKEN)
-        with build_client(config) as client:
-            response = client.get(f"/v1/books/li_b/cover.jpg?exp={expires}&sig={signature}")
-        assert response.status_code == 403
 
 
 class TestProgress:
@@ -439,16 +362,6 @@ class TestProgress:
         assert payload["books"][0]["accepted"] is False
 
 
-class TestRelease:
-    def test_release_marks_the_book_for_eviction(self, config):
-        cache = prepared_book(config)
-        with build_client(config) as client:
-            client.post("/v1/books/li_a/prepare", headers=HEAD)
-            assert cache.pinned("li_a")
-            assert client.post("/v1/books/li_a/release", headers=HEAD).status_code == 200
-        assert not cache.pinned("li_a")
-
-
 class TestPlaylist:
     def test_reports_the_playlist_contents_with_status(self, config):
         prepared_book(config)
@@ -516,34 +429,11 @@ class TestIsolation:
         assert (alice["playlist"], [b["id"] for b in alice["books"]]) == ("Garmin", ["li_a"])
         assert (bob["playlist"], [b["id"] for b in bob["books"]]) == ("Bob", ["li_x"])
 
-    def test_each_token_gets_its_own_library(self, config):
-        with build_client(config) as client:
-            payload = client.get("/v1/books", headers=BOB_HEAD).json()
-        assert [b["id"] for b in payload["books"]] == ["li_x"]
-
     def test_another_users_book_stays_out_of_reach(self, config):
         prepared_book(config)  # alice's
         with build_client(config) as client:
             assert client.get("/v1/books/li_a/segments", headers=BOB_HEAD).status_code == 409
             assert client.get("/v1/books/li_a/seg/0000.m4a", headers=BOB_HEAD).status_code == 404
-
-    def test_a_cover_signed_by_another_user_does_not_open_this_ones(self, config):
-        prepared_book(config)  # alice's, with a cover
-        expires = int(time.time()) + 600
-        signature = auth.sign_cover("li_a", expires, BOB_TOKEN)
-        with build_client(config) as client:
-            response = client.get(f"/v1/books/li_a/cover.jpg?exp={expires}&sig={signature}")
-        assert response.status_code == 404  # bob's own cache has no such cover
-
-    def test_the_cover_url_serves_the_owners_cover(self, config):
-        prepared_book(config)
-        prepared_book(config, user="bob")
-        user_cache(config, "bob").cover_path("li_a").write_bytes(b"BOBCOVER")
-        with build_client(config) as client:
-            alice_url = client.get("/v1/books/li_a/segments", headers=HEAD).json()["cover_url"]
-            bob_url = client.get("/v1/books/li_a/segments", headers=BOB_HEAD).json()["cover_url"]
-            assert client.get(alice_url).content == b"JPEGDATA"
-            assert client.get(bob_url).content == b"BOBCOVER"
 
     def test_progress_reaches_only_the_pushing_users_server(self, config):
         prepared_book(config)
@@ -558,20 +448,12 @@ class TestIsolation:
         assert bob_sent["currentTime"] == 1200.0
         assert alice_sent == {}
 
-    def test_releasing_a_book_leaves_other_users_alone(self, config):
+    def test_a_playlist_releases_only_its_owners_books(self, config):
         alice = prepared_book(config)
         bob = prepared_book(config, user="bob")
+        alice.pin("li_a")
+        bob.pin("li_a")
         with build_client(config) as client:
-            client.post("/v1/books/li_a/prepare", headers=HEAD)
-            client.post("/v1/books/li_a/prepare", headers=BOB_HEAD)
-            client.post("/v1/books/li_a/release", headers=BOB_HEAD)
+            client.get("/v1/playlist", headers=BOB_HEAD)  # li_a is not in Bob's playlist
         assert alice.pinned("li_a")
         assert not bob.pinned("li_a")
-
-    def test_startup_drops_books_of_the_single_user_layout(self, config):
-        Cache(root=config.cache_dir).store_manifest("li_old", {"segments": []})
-        prepared_book(config)
-        with build_client(config):
-            pass
-        assert not (config.cache_dir / "li_old").exists()
-        assert user_cache(config).is_ready("li_a")

@@ -1,5 +1,5 @@
 from abconnect_proxy.models import Chapter, Encoding, SourceFile
-from abconnect_proxy.segmenter import locate, plan_segments, validate_chapters
+from abconnect_proxy.segmenter import plan_segments, validate_chapters
 
 PARAMS = {"target_seconds": 900, "min_seconds": 180, "max_seconds": 1500}
 
@@ -104,17 +104,3 @@ class TestPlanning:
         plan = plan_segments([m4b(120)], [], **PARAMS)
         assert len(plan.segments) == 1
         assert plan.segments[0].duration == 120
-
-
-class TestLocate:
-    def test_maps_book_time_to_segment_and_offset(self):
-        plan = plan_segments([m4b(3600)], [], **PARAMS)
-        assert locate(plan.segments, 0) == (0, 0.0)
-        assert locate(plan.segments, 950) == (1, 50.0)
-        assert locate(plan.segments, 3599) == (3, 899.0)
-
-    def test_clamps_beyond_the_end(self):
-        plan = plan_segments([m4b(3600)], [], **PARAMS)
-        index, offset = locate(plan.segments, 99999)
-        assert index == 3
-        assert offset == 900.0

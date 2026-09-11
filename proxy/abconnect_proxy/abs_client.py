@@ -6,27 +6,16 @@ what api.py shapes out of it.
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import time
 from collections.abc import Callable
 from pathlib import Path
 
 import httpx
 
-from .parsing import (
-    ParsedItem,
-    Playlist,
-    find_playlist,
-    parse_book_libraries,
-    parse_item,
-    parse_listing,
-    parse_playlists,
-)
+from .parsing import ParsedItem, Playlist, find_playlist, parse_item, parse_playlists
 
 log = logging.getLogger(__name__)
 
-LISTING_TTL_SECONDS = 300
 CHUNK = 1 << 16
 
 
@@ -55,8 +44,6 @@ class AbsClient:
             transport=transport,
             follow_redirects=True,
         )
-        self._listing: tuple[float, list[dict]] | None = None
-        self._listing_lock = asyncio.Lock()
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -82,39 +69,10 @@ class AbsClient:
             raise AbsError(f"GET {path} returned no JSON") from error
 
     async def ping(self) -> None:
-        """For /health: checks reachability *and* the key in one go."""
+        """For /v1/status: checks reachability *and* the key in one go."""
         await self._json("/api/libraries")
 
     # --- Library ----------------------------------------------------------
-
-    async def library_ids(self) -> list[str]:
-        return parse_book_libraries(await self._json("/api/libraries"))
-
-    async def all_books(self, *, force: bool = False) -> list[dict]:
-        """Complete book list, briefly cached.
-
-        Fetching everything at once and paging through it in memory is much
-        simpler than mapping a watch page number onto ABS offsets across
-        multiple libraries. For a few thousand books this is a few hundred
-        kilobytes.
-        """
-        async with self._listing_lock:
-            now = time.monotonic()
-            if not force and self._listing and now - self._listing[0] < LISTING_TTL_SECONDS:
-                return self._listing[1]
-
-            books: list[dict] = []
-            for library_id in await self.library_ids():
-                payload = await self._json(
-                    f"/api/libraries/{library_id}/items",
-                    params={"limit": 0, "sort": "media.metadata.title", "minified": 1},
-                )
-                page, _ = parse_listing(payload)
-                books.extend(page)
-
-            books.sort(key=lambda b: b["title"].casefold())
-            self._listing = (now, books)
-            return books
 
     async def playlist(self, name: str) -> Playlist | None:
         """Fetch a playlist by its name.
@@ -168,16 +126,6 @@ class AbsClient:
             raise AbsError(f"Download of {ino} returned no data")
         partial.replace(destination)
         return written
-
-    async def get_cover(self, item_id: str, width: int = 300) -> bytes | None:
-        try:
-            response = await self._get(
-                f"/api/items/{item_id}/cover", params={"width": width, "format": "jpeg"}
-            )
-        except AbsError as error:
-            log.info("No cover for %s: %s", item_id, error)
-            return None
-        return response.content or None
 
     # --- Progress ---------------------------------------------------------
 

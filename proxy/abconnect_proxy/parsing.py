@@ -24,7 +24,6 @@ class ParsedItem:
     duration: float
     files: list[SourceFile] = field(default_factory=list)
     chapters: list[Chapter] = field(default_factory=list)
-    has_cover: bool = False
 
     @property
     def total_bytes(self) -> int:
@@ -110,41 +109,7 @@ def parse_item(payload: dict) -> ParsedItem:
         duration=duration,
         files=files,
         chapters=chapters,
-        has_cover=bool(media.get("coverPath") or payload.get("coverPath")),
     )
-
-
-def parse_listing(payload: dict) -> tuple[list[dict], int]:
-    """GET /api/libraries/{id}/items -> slim entries plus total count."""
-    results = payload.get("results") if isinstance(payload, dict) else None
-    if results is None:
-        results = payload if isinstance(payload, list) else []
-
-    books = []
-    for entry in results:
-        if not isinstance(entry, dict) or not entry.get("id"):
-            continue
-        media = entry.get("media") or {}
-        metadata = _metadata(media)
-        books.append(
-            {
-                "id": str(entry["id"]),
-                "title": str(metadata.get("title") or entry.get("relPath") or entry["id"]),
-                "author": _author(metadata),
-                "duration": round(_number(media.get("duration")), 1),
-            }
-        )
-    total = int(_number(payload.get("total"), len(books))) if isinstance(payload, dict) else len(books)
-    return books, total
-
-
-def parse_book_libraries(payload: dict) -> list[str]:
-    libraries = payload.get("libraries") if isinstance(payload, dict) else payload
-    return [
-        str(library["id"])
-        for library in (libraries or [])
-        if isinstance(library, dict) and library.get("id") and library.get("mediaType", "book") == "book"
-    ]
 
 
 @dataclass

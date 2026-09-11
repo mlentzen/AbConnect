@@ -71,22 +71,7 @@ class ProxyClient {
     //! never comes, nothing at all. The token is never included: the log file
     //! sits in the open on the watch and travels on while debugging.
     private static function trace(verb as String, path as String) as Void {
-        // Guarded rather than left to Log: withoutQuery() searches and cuts the
-        // string, and that would happen on every request in a build that prints
-        // nothing.
-        if (Log.LEVEL >= Log.INFO) {
-            Log.info("Net: " + verb + " " + withoutQuery(path));
-        }
-    }
-
-    //! The query string stays out: the cover URL carries a signature.
-    private static function withoutQuery(path as String) as String {
-        var cut = path.find("?");
-        if (cut == null) {
-            return path;
-        }
-        var head = path.substring(0, cut);
-        return (head == null) ? path : head;
+        Log.info("Net: " + verb + " " + path);
     }
 
     private function jsonOptions() as Dictionary {
@@ -105,47 +90,9 @@ class ProxyClient {
         Communications.makeWebRequest(url("/v1/playlist"), null, jsonOptions(), callback);
     }
 
-    function books(page as Number, perPage as Number, callback as Method) as Void {
-        trace("GET", "/v1/books?page=" + page.toString());
-        Communications.makeWebRequest(
-            url("/v1/books"),
-            { "page" => page, "per_page" => perPage },
-            jsonOptions(),
-            callback
-        );
-    }
-
-    function prepare(bookId as String, callback as Method) as Void {
-        trace("POST", "/v1/books/" + bookId + "/prepare");
-        Communications.makeWebRequest(
-            url("/v1/books/" + bookId + "/prepare"),
-            null,
-            {
-                :method => Communications.HTTP_REQUEST_METHOD_POST,
-                :headers => authHeaders(),
-                :responseType => Communications.HTTP_RESPONSE_CONTENT_TYPE_JSON
-            },
-            callback
-        );
-    }
-
     function segments(bookId as String, callback as Method) as Void {
         trace("GET", "/v1/books/" + bookId + "/segments");
         Communications.makeWebRequest(url("/v1/books/" + bookId + "/segments"), null, jsonOptions(), callback);
-    }
-
-    function release(bookId as String, callback as Method) as Void {
-        trace("POST", "/v1/books/" + bookId + "/release");
-        Communications.makeWebRequest(
-            url("/v1/books/" + bookId + "/release"),
-            null,
-            {
-                :method => Communications.HTTP_REQUEST_METHOD_POST,
-                :headers => authHeaders(),
-                :responseType => Communications.HTTP_RESPONSE_CONTENT_TYPE_JSON
-            },
-            callback
-        );
     }
 
     // --- Media --------------------------------------------------------------
@@ -170,22 +117,6 @@ class ProxyClient {
                 :responseType => Communications.HTTP_RESPONSE_CONTENT_TYPE_AUDIO,
                 :mediaEncoding => mediaEncoding(encoding),
                 :fileDownloadProgressCallback => onBytes
-            },
-            callback
-        );
-    }
-
-    //! The cover goes through a pre-signed URL: makeImageRequest cannot set
-    //! headers, and the token has no business being in a query string.
-    function downloadCover(signedPath as String, callback as Method) as Void {
-        trace("GET", signedPath);
-        Communications.makeImageRequest(
-            url(signedPath),
-            null,
-            {
-                :maxWidth => 200,
-                :maxHeight => 200,
-                :dithering => Communications.IMAGE_DITHERING_NONE
             },
             callback
         );

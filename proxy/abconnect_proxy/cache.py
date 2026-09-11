@@ -27,7 +27,6 @@ SAFE_ID = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 MANIFEST = "manifest.json"
 STATE = "state.json"
 SEGMENTS = "seg"
-COVER = "cover.jpg"
 USERS_DIR = "users"
 
 
@@ -60,9 +59,6 @@ class Cache:
         if "/" in filename or ".." in filename:
             raise UnsafeBookId(f"Invalid segment name: {filename!r}")
         return self.book_dir(book_id) / SEGMENTS / filename
-
-    def cover_path(self, book_id: str) -> Path:
-        return self.book_dir(book_id) / COVER
 
     # --- Manifest ------------------------------------------------------------
 
@@ -210,22 +206,3 @@ class Budget:
         if total > self.max_bytes:
             log.warning("Cache still over budget — all remaining books are pinned")
         return evicted
-
-
-def remove_legacy_books(root: Path) -> list[str]:
-    """Deletes book directories of the single-user layout, directly below root.
-
-    They belong to nobody now: every user has a directory of their own below
-    `users/`. The books re-prepare on the next sync, into the same segments.
-    """
-    if not root.exists():
-        return []
-    removed = []
-    for directory in sorted(root.iterdir()):
-        if directory.name == USERS_DIR or not directory.is_dir():
-            continue
-        if (directory / MANIFEST).exists() or (directory / STATE).exists():
-            shutil.rmtree(directory, ignore_errors=True)
-            removed.append(directory.name)
-            log.info("Removed %s: left over from the single-user cache layout", directory.name)
-    return removed

@@ -50,7 +50,6 @@ class TestUsers:
     def test_reads_a_token_list_for_rotation(self, env):
         config = load(env({"alice": {**ALICE, "tokens": ["a" * 20, "b" * 20]}}))
         assert config.users[0].tokens == ("a" * 20, "b" * 20)
-        assert config.users[0].signing_key == "a" * 20  # the first one is the current one
 
     def test_the_playlist_defaults_to_abs_playlist_and_can_be_overridden(self, env):
         bob = {**ALICE, "tokens": ["b" * 20], "playlist": "Bob"}

@@ -229,17 +229,3 @@ def plan_segments(
         reason=reason,
         total_duration=total_duration,
     )
-
-
-def locate(segments: list[Segment], book_time: float) -> tuple[int, float]:
-    """Absolute book time -> (segment index, offset). For the way back from ABS."""
-    if not segments:
-        return 0, 0.0
-    chosen = segments[0]
-    for segment in segments:
-        if segment.book_start <= book_time + TOLERANCE:
-            chosen = segment
-        else:
-            break
-    offset = max(0.0, min(book_time - chosen.book_start, chosen.duration))
-    return chosen.index, round(offset, 3)

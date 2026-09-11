@@ -7,8 +7,6 @@ cache and playlist a request sees. Nothing more is intended.
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import hmac
 import time
 from collections import defaultdict
@@ -45,41 +43,6 @@ def token_from_header(header: str | None) -> str | None:
     if scheme.lower() != "bearer" or not value.strip():
         return None
     return value.strip()
-
-
-# --- Pre-signed cover URLs -------------------------------------------------
-#
-# Communications.makeImageRequest has no :headers, so the cover cannot send the
-# bearer header. The token as a query parameter would end up in every
-# reverse-proxy log, hence a short-lived signature.
-
-
-def sign_cover(book_id: str, expires_at: int, key: str) -> str:
-    mac = hmac.new(key.encode(), f"{book_id}|{expires_at}".encode(), hashlib.sha256)
-    return base64.urlsafe_b64encode(mac.digest()).decode().rstrip("=")
-
-
-def cover_user(
-    book_id: str,
-    expires_at: int,
-    signature: str,
-    users: Iterable[UserConfig],
-    now: float | None = None,
-) -> UserConfig | None:
-    """The user whose key signed this cover URL, or None.
-
-    Tokens are unique per user, so the matching key names the owner — the URL
-    itself carries no user name.
-    """
-    now = time.time() if now is None else now
-    if expires_at < now:
-        return None
-    match = None
-    for user in users:
-        for key in user.tokens:
-            if _same(signature, sign_cover(book_id, expires_at, key)):
-                match = user
-    return match
 
 
 # --- Backoff -----------------------------------------------------------------

@@ -20,10 +20,9 @@ pytestmark = [needs_ffmpeg, pytest.mark.anyio]
 class FakeAbs:
     """Provides a real m4b so ffmpeg actually has something to cut."""
 
-    def __init__(self, item: ParsedItem, source: Path, cover: bytes | None = b"JPEG"):
+    def __init__(self, item: ParsedItem, source: Path):
         self.item = item
         self.source = source
-        self.cover = cover
         self.downloads: list[str] = []
         self.fail_download = False
 
@@ -44,9 +43,6 @@ class FakeAbs:
         if on_progress:
             on_progress(size, size)
         return size
-
-    async def get_cover(self, book_id, width=300):
-        return self.cover
 
 
 def make_config(tmp_path, **overrides) -> config_module.Config:
@@ -89,7 +85,6 @@ def parsed(files, chapters, **kwargs) -> ParsedItem:
         duration=sum(f.duration for f in files),
         files=files,
         chapters=chapters,
-        has_cover=kwargs.get("has_cover", True),
     )
 
 
@@ -161,15 +156,6 @@ class TestHappyPath:
 
         leftovers = [p for p in cfg.work_dir.rglob("*") if p.is_file()] if cfg.work_dir.exists() else []
         assert leftovers == []
-
-    async def test_stores_the_cover(self, tmp_path, single_book):
-        item, source = single_book
-        preparer, cache, _, _ = await build(tmp_path, item, source)
-
-        await run(preparer)
-
-        assert cache.cover_path("li_1").read_bytes() == b"JPEG"
-        assert cache.load_manifest("li_1")["cover"] is True
 
     async def test_records_the_grid_fallback_in_the_manifest(self, tmp_path, make_m4b):
         source = make_m4b("prep-nochapters", 60, [(0, 60, "Alles")])
@@ -368,11 +354,11 @@ class TestTranscoding:
         assert probed.sample_rate == 22050
 
 
-class TestForcedRePrepare:
-    """Changed encoder settings must be able to reach a book that is already ready.
+class TestRecut:
+    """Changed encoder settings reach a ready book only once its segments are gone.
 
-    The segment cache outlives the container, so without this a book stays on
-    the files it was first cut with no matter what the settings say.
+    The segment cache outlives the container. Deleting a book's directory is
+    how an operator makes the next reconciliation cut it again.
     """
 
     async def test_a_plain_request_does_not_recut_a_ready_book(self, tmp_path, single_book):
@@ -383,42 +369,20 @@ class TestForcedRePrepare:
         preparer.request("li_1")
         assert len(abs_client.downloads) == 1
 
-    async def test_force_recuts_and_picks_up_the_new_target(self, tmp_path, low_rate_source):
+    async def test_a_deleted_book_is_cut_again_with_the_new_target(self, tmp_path, low_rate_source):
         item, source = low_rate_source
-        # Cut first with the container the fallback below must move away from,
+        # Cut first with the container the new settings must move away from,
         # independent of whatever the global default currently is.
         preparer, cache, abs_client, _ = await build(tmp_path, item, source, transcode_target="m4a")
         assert (await run(preparer)).status is Status.READY
         assert cache.load_manifest("li_1")["segments"][0]["file"].endswith(".m4a")
 
-        # Same cache, a preparer configured for the fallback container.
-        cfg = make_config(tmp_path, transcode_target="mp3")
-        again = preparer_for(abs_client, cache, cfg)
-        again.request("li_1", force=True)
-        for _ in range(400):
-            await asyncio.sleep(0.02)
-            if again.status("li_1").status in (Status.READY, Status.ERROR):
-                break
+        cache.discard("li_1")
+        again = preparer_for(abs_client, cache, make_config(tmp_path, transcode_target="mp3"))
+        assert (await run(again)).status is Status.READY
 
-        assert again.status("li_1").status is Status.READY
         assert len(abs_client.downloads) == 2
         for entry in cache.load_manifest("li_1")["segments"]:
             assert entry["file"].endswith(".mp3")
             assert cache.segment_path("li_1", entry["file"]).exists()
-
-    async def test_force_leaves_stale_segment_files_behind_nowhere(self, tmp_path, low_rate_source):
-        """A re-cut into a different container must not leave the old files."""
-        item, source = low_rate_source
-        preparer, cache, abs_client, _ = await build(tmp_path, item, source, transcode_target="m4a")
-        await run(preparer)
-
-        cfg = make_config(tmp_path, transcode_target="mp3")
-        again = preparer_for(abs_client, cache, cfg)
-        again.request("li_1", force=True)
-        for _ in range(400):
-            await asyncio.sleep(0.02)
-            if again.status("li_1").status in (Status.READY, Status.ERROR):
-                break
-
-        leftover = list(cache.book_dir("li_1").glob("*.m4a"))
-        assert leftover == []
+        assert list(cache.book_dir("li_1").rglob("*.m4a")) == []

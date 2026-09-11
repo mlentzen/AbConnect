@@ -28,10 +28,9 @@ from .segmenter import plan_segments
 
 log = logging.getLogger(__name__)
 
-# The download dominates the runtime; stream copy and cover barely matter.
+# The download dominates the runtime; stream copy barely matters.
 WEIGHT_DOWNLOAD = 0.65
-WEIGHT_CUT = 0.30
-WEIGHT_COVER = 0.05
+WEIGHT_CUT = 0.35
 
 
 class Status(str, Enum):
@@ -91,20 +90,10 @@ class Preparer:
 
     # --- Control -----------------------------------------------------------
 
-    def request(self, book_id: str, force: bool = False) -> BookState:
-        """Idempotent: a running or finished job is not restarted.
-
-        `force` throws the prepared segments away first, so the job really runs
-        again. That is the only way to pick up changed encoder settings: the
-        cache outlives the container, and a book that is READY would otherwise
-        keep the segments it was cut with forever. A job already in flight is
-        left alone — nothing is discarded out from under it.
-        """
+    def request(self, book_id: str) -> BookState:
+        """Idempotent: a running or finished job is not restarted."""
         self.cache.pin(book_id)
         running = book_id in self._tasks and not self._tasks[book_id].done()
-        if force and not running:
-            self.cache.discard(book_id)
-            self._states.pop(book_id, None)
         state = self.status(book_id)
         if state.status is Status.READY:
             return state
@@ -263,12 +252,6 @@ class Preparer:
                 if parent.exists() and not any(parent.iterdir()):
                     parent.rmdir()
 
-        if item.has_cover:
-            cover = await self.abs_client.get_cover(book_id, width=300)
-            if cover:
-                self.cache.cover_path(book_id).write_bytes(cover)
-        self._set(book_id, percent=int((WEIGHT_DOWNLOAD + WEIGHT_CUT + WEIGHT_COVER) * 100))
-
         manifest_segments.sort(key=lambda s: s["index"])
         self.cache.store_manifest(
             book_id,
@@ -279,7 +262,6 @@ class Preparer:
                 "duration": round(plan.total_duration, 3),
                 "chapter_source": plan.chapter_source,
                 "reason": plan.reason,
-                "cover": self.cache.cover_path(book_id).exists(),
                 "prepared_at": time.time(),
                 "segments": manifest_segments,
             },

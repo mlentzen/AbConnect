@@ -53,24 +53,6 @@ systemctl --user restart abconnect-proxy
 A broken file keeps the container from starting; the journal lists every
 problem at once: `journalctl --user -u abconnect-proxy -n 30`.
 
-### Coming from the single-user setup
-
-`ABS_URL` and the secrets `abs-api-key` and `abconnect-token` are gone. Read
-the old values, put them into a users file — keeping the old token means the
-watch needs no new settings — create `abconnect-users`, rerun
-`./deploy/install.sh`, then drop the old secrets:
-
-```sh
-podman secret inspect --showsecret --format '{{.SecretData}}' abconnect-token
-podman secret inspect --showsecret --format '{{.SecretData}}' abs-api-key
-# ... users.toml, podman secret create, ./deploy/install.sh ...
-podman secret rm abs-api-key abconnect-token
-```
-
-The cache now keeps one directory per user. Books from the old layout are
-deleted on the first start and prepared again for their user; the segments come
-out identical, so the watch keeps the copies it already has.
-
 ## 2. Install the units
 
 ```sh
@@ -157,16 +139,12 @@ If there is no playlist of that name, `/v1/status` reports it as
 `playlist_found: false` for that user and `/v1/playlist` answers with 409. The
 watch then deletes nothing — a typo in the name does not wipe it.
 
-Check by hand or trigger a single book — the watch no longer calls the
-endpoints below `/v1/playlist`, but they are there for debugging. Every call
-acts as the user whose token it carries:
+Check by hand what the watch sees — every call acts as the user whose token it
+carries:
 
 ```sh
 TOKEN=<one user's token from users.toml>
 curl -s -H "Authorization: Bearer $TOKEN" localhost:18543/v1/playlist | python3 -m json.tool
-curl -s -H "Authorization: Bearer $TOKEN" localhost:18543/v1/books | python3 -m json.tool
-curl -s -X POST -H "Authorization: Bearer $TOKEN" localhost:18543/v1/books/<ID>/prepare
-curl -s -H "Authorization: Bearer $TOKEN" localhost:18543/v1/books/<ID>/status
 curl -s -H "Authorization: Bearer $TOKEN" localhost:18543/v1/books/<ID>/segments | python3 -m json.tool
 ```
 
@@ -180,14 +158,13 @@ Users, their Audiobookshelf instances, keys and tokens live in the users file
 | `USERS_FILE` | — | `/run/secrets/users.toml` | the users file; the quadlet mounts the `abconnect-users` secret there |
 | `ABS_PLAYLIST` | — | `Garmin` | playlist for every user without a `playlist` of their own |
 | `PLAYLIST_POLL_SECONDS` | — | 600 | interval of the background reconciliation |
-| `CACHE_DIR` | — | `/var/cache/abconnect` | segments and covers, one directory per user below `users/` |
+| `CACHE_DIR` | — | `/var/cache/abconnect` | segments, one directory per user below `users/` |
 | `WORK_DIR` | — | `/var/tmp/abconnect` | source file during the prepare job |
 | `CACHE_MAX_BYTES` | — | 200 GiB | emergency brake for eviction, across all users |
 | `RELEASE_TTL_DAYS` | — | 30 | how long released books stay around |
 | `SEGMENT_TARGET_SECONDS` | — | 900 | target size of a segment |
 | `SEGMENT_MIN_SECONDS` | — | 180 | below this, segments are merged |
 | `SEGMENT_MAX_SECONDS` | — | 1500 | above this, segments are split |
-| `COVER_URL_TTL_SECONDS` | — | 21600 | validity of the signed cover URLs |
 | `TRANSCODE_MODE` | — | `auto` | `auto` re-encodes only what the watch will not play, `always` everything, `never` nothing |
 | `TRANSCODE_TARGET` | — | `mp3` | container for re-encoded segments; `m4a` keeps the original container |
 | `TRANSCODE_BITRATE_KBPS` | — | 64 | bitrate of a re-encoded segment |
@@ -202,11 +179,11 @@ the price; `TRANSCODE_BITRATE_KBPS=48` buys some of it back.
 
 Changing either setting only affects books prepared afterwards, and a book that
 is already `ready` keeps the segments it was first cut with — the cache outlives
-the container, and `release` only unpins it. Force the re-cut (per user: it
-re-cuts the copy of whoever's token is sent):
+the container, and leaving the playlist only unpins a book. To re-cut one,
+delete its directory for that user; the next reconciliation (or that user's next
+sync) prepares it again with the current settings:
 
-    curl -X POST -H "Authorization: Bearer $TOKEN" \
-         "$PROXY_URL/v1/books/<book-id>/prepare?force=true"
+    podman exec abconnect-proxy rm -rf /var/cache/abconnect/users/<name>/<book-id>
 
 Then reset the watch before syncing — the sync compares segments by index alone
 and would otherwise keep the copies it already has.

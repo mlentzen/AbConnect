@@ -25,7 +25,6 @@ DEFAULTS = {
     "SEGMENT_TARGET_SECONDS": "900",
     "SEGMENT_MIN_SECONDS": "180",
     "SEGMENT_MAX_SECONDS": "1500",
-    "COVER_URL_TTL_SECONDS": "21600",
     "TRANSCODE_MODE": "auto",
     "TRANSCODE_TARGET": "mp3",
     "TRANSCODE_BITRATE_KBPS": "64",
@@ -56,11 +55,6 @@ class UserConfig:
     abs_api_key: str = field(repr=False)
     playlist: str
 
-    @property
-    def signing_key(self) -> str:
-        """Key for pre-signed cover URLs: the first (current) token."""
-        return self.tokens[0]
-
 
 @dataclass(frozen=True)
 class Config:
@@ -73,7 +67,6 @@ class Config:
     segment_target_seconds: int
     segment_min_seconds: int
     segment_max_seconds: int
-    cover_url_ttl_seconds: int
     transcode_mode: str
     transcode_target: str
     transcode_bitrate_kbps: int
@@ -188,7 +181,6 @@ def load(env: dict[str, str] | None = None) -> Config:
     target = _int(env, "SEGMENT_TARGET_SECONDS", problems, minimum=60)
     seg_min = _int(env, "SEGMENT_MIN_SECONDS", problems, minimum=1)
     seg_max = _int(env, "SEGMENT_MAX_SECONDS", problems, minimum=60)
-    cover_ttl = _int(env, "COVER_URL_TTL_SECONDS", problems, minimum=60)
     poll = _int(env, "PLAYLIST_POLL_SECONDS", problems, minimum=60)
     timeout = _int(env, "HTTP_TIMEOUT_SECONDS", problems, minimum=5)
     bitrate = _int(env, "TRANSCODE_BITRATE_KBPS", problems, minimum=32)
@@ -226,7 +218,6 @@ def load(env: dict[str, str] | None = None) -> Config:
         segment_target_seconds=target,
         segment_min_seconds=seg_min,
         segment_max_seconds=seg_max,
-        cover_url_ttl_seconds=cover_ttl,
         transcode_mode=transcode_mode,
         transcode_target=transcode_target,
         transcode_bitrate_kbps=bitrate,

@@ -93,11 +93,9 @@ Endpoints used (by the proxy, not the watch):
 | Purpose | Endpoint |
 |---|---|
 | Libraries | `GET /api/libraries` |
-| Book list | `GET /api/libraries/{id}/items?limit&page&sort&minified=1` |
 | Book details incl. `media.audioFiles[]`, `media.chapters[]` | `GET /api/items/{id}?expanded=1&include=progress` |
 | Books in progress | `GET /api/me/items-in-progress` |
 | **File download** | `GET /api/items/{id}/file/{ino}/download` |
-| Cover | `GET /api/items/{id}/cover?width=...&format=jpeg` |
 | Write / read progress | `PATCH` or `GET /api/me/progress/{libraryItemId}` |
 
 > Exact paths and field names are to be verified against the target instance —
@@ -143,17 +141,16 @@ prepare(bookId):
   3. ffprobe: verify chapters (fallback: 15-minute grid)
   4. normalize segment table
   5. cut all segments via -c copy -> CACHE_DIR/<bookId>/
-  6. fetch and downscale cover
-  7. delete .m4b            <- immediately, not at job end
-  8. status = ready
+  6. delete .m4b            <- immediately, not at job end
+  7. status = ready
 ```
 
-The job is triggered **when checking a book in the sync configuration**, not on
-sync. By the time the watch syncs on the charger, the book is finished as a
-rule. The sync only queries the status and downloads what is `ready`; anything
-else it reports as "still being prepared" instead of blocking.
+The job is triggered **when a book appears in the user's playlist** (see E2a),
+not on sync. By the time the watch syncs on the charger, the book is finished
+as a rule. The sync downloads what is `ready`; anything else it reports as
+"still being prepared" instead of blocking.
 
-Step 7 is deliberately early: after the cut, the proxy only holds the segments,
+Step 6 is deliberately early: after the cut, the proxy only holds the segments,
 whose total size thanks to stream copy roughly matches the source file. The
 peak usage of ~2× book size exists only during the job.
 
@@ -179,9 +176,6 @@ The watch remembers the last known state and when it fetched it. Without this
 timestamp a newly added book would go unnoticed: everything is fine locally,
 there would be no reason to sync. That is why a target is considered stale
 after `PLAYLIST_MAX_AGE_SECONDS` (6 h) and triggers a sync.
-
-The endpoints `/v1/books`, `/prepare` and `/release` still exist, but the watch
-no longer calls them — they are tools for `curl` and debugging.
 
 ### E3 — Configuration exclusively at runtime
 
@@ -300,7 +294,7 @@ proxy/                       abconnect-proxy (Python/FastAPI + ffmpeg, Podman)
   segmenter.py               chapters -> normalized segment table, 15-min fallback
   preparer.py                job: download -> ffprobe -> cut -> delete m4b -> ready
   cache.py                   CACHE_DIR management, pinning, release TTL, LRU as emergency brake
-  auth.py                    bearer check (constant-time), signed cover URLs
+  auth.py                    bearer check (constant-time), failed-auth backoff
   api.py                     /v1/* contract to the watch, /health
   progress.py                segment offset <-> absolute book time, push to ABS
 
@@ -339,13 +333,8 @@ deploy/                      quadlet unit, example secrets, setup docs
 | Endpoint | Purpose |
 |---|---|
 | `GET /v1/playlist` | **the target**: books of the playlist with state; 409 if the playlist is missing |
-| `GET /v1/books?page=&q=` | browse the library (tool, not used by the watch) |
-| `POST /v1/books/{id}/prepare` | trigger the job (idempotent), response immediately |
-| `GET /v1/books/{id}/status` | `pending` \| `preparing` (+ percent) \| `ready` \| `error` (+ reason) |
 | `GET /v1/books/{id}/segments` | segment list: index, title, duration, bytes — only when `ready` |
 | `GET /v1/books/{id}/seg/{n}.m4a` | finished segment from the cache |
-| `GET /v1/books/{id}/cover.jpg?w=&exp=&sig=` | downscaled cover, pre-signed URL (see Auth) |
-| `POST /v1/books/{id}/release` | watch reports: book no longer needed → cache may evict |
 | `POST /v1/progress` | batch upload, conversion to book time, forwarding to ABS |
 | `GET /v1/status` | the caller's ABS reachability, playlist found, ffmpeg |
 | `GET /health` | public liveness only: `{"status": "ok"}` |
@@ -379,17 +368,9 @@ Implementation:
   disappears from the watch settings. A token may belong to one user only.
 * Backoff after repeatedly failed auth so the endpoint does not become a
   guessing oracle.
-* No token in URLs (see below) — reverse-proxy logs record query strings.
-
-**Exception: cover.** `Communications.makeImageRequest` does **not** support
-`:headers` (unlike `makeWebRequest`, which allows `:headers` even together with
-`:responseType => HTTP_RESPONSE_CONTENT_TYPE_AUDIO`). So the cover cannot send
-the bearer header. Instead of appending the token as a query parameter,
-`/v1/books/{id}/segments` delivers a **pre-signed cover URL**:
-`?exp=<unix-ts>&sig=<HMAC(token, bookId|exp)>`, valid for a few hours. The
-watch uses the URL unchanged; the long-lived token never ends up in a log
-file. All other downloads go through `makeWebRequest` and thus through the
-header.
+* No token in URLs — reverse-proxy logs record query strings. Every download
+  goes through `makeWebRequest`, which allows `:headers` even together with
+  `:responseType => HTTP_RESPONSE_CONTENT_TYPE_AUDIO`.
 
 ### Data flow
 
@@ -397,25 +378,21 @@ header.
 ABS  <--API key, HTTPS--  abconnect-proxy  <--token, HTTPS--  fenix 7X Pro
         (download of the m4b)                (segments)
 
-Sync config:   GET  /v1/books                  -> CheckboxMenu -> Store: SEL
-               POST /v1/books/{id}/prepare     -> job runs in the background
-Sync:          GET  /v1/books/{id}/status      -> only ready is downloaded
+Sync:          POST /v1/progress               <- Store: PRG  -> ABS /api/me/progress
+               GET  /v1/playlist               -> target; the proxy prepares new books
                GET  /v1/books/{id}/segments    -> delta against local inventory
                GET  /v1/books/{id}/seg/{n}.m4a -> media cache (ENCODING_M4A)
-               GET  /v1/books/{id}/cover.jpg   -> makeImageRequest
-               POST /v1/progress               <- Store: PRG  -> ABS /api/me/progress
-               POST /v1/books/{id}/release     -> for deselected books
 Playback:      Store -> ContentIterator -> ActiveContent(ref, meta, startPos)
                onSong(pos) -> Store: PRG
 ```
 
 ### Cache housekeeping in the proxy
 
-* `CACHE_DIR/<bookId>/` holds segments + cover, size ≈ source file.
+* `CACHE_DIR/users/<name>/<bookId>/` holds the segments, size ≈ source file.
 * `WORK_DIR` holds the `.m4b` only during the job; deletion right after the cut,
   even on error (`try/finally`).
-* Books in the watch's current selection are **pinned** and are not evicted;
-  `release` lifts the pin.
+* Books in a user's playlist are **pinned** and are not evicted; leaving the
+  playlist lifts the pin.
 * Disk space is plentiful in this environment, `CACHE_MAX_BYTES` is set
   accordingly high. Released books therefore stay around for
   `RELEASE_TTL_DAYS` — a re-checked book is then immediately `ready`, without a
@@ -432,7 +409,7 @@ Playback:      Store -> ContentIterator -> ActiveContent(ref, meta, startPos)
 |---|---|
 | `SEL` | array of selected book IDs |
 | `LOC_<bookId>` | flat map `refId -> "segIdx\|duration"` — **one key per book** |
-| `BOOK_<bookId>` | title, author, segment count, cover status (short strings) |
+| `BOOK_<bookId>` | title, author, segment count (short strings) |
 | `PRG` | flat map `bookId -> "segIdx\|sec\|ts"`, only for locally present books |
 | `VER` | schema version → on mismatch `clearProperties()` + `resetContentCache()` |
 
@@ -444,15 +421,15 @@ Playback:      Store -> ContentIterator -> ActiveContent(ref, meta, startPos)
 |---|---|---|---|
 | R1 | ffmpeg stream copy produces a file the watch rejects | approach collapses entirely | **Spike in M0** before anything else: cut a segment by hand and play it on the fēnix |
 | R2 | prepare job takes longer than the patience during sync | book missing at sync | triggered already on check (E2); sync shows status instead of blocking |
-| R3 | volume fills up despite plenty of space (misconfiguration, WORK_DIR leftovers) | job fails | pre-check; delete `.m4b` in `finally`; LRU as a safety net; `/health` reports cache fill level |
+| R3 | volume fills up despite plenty of space (misconfiguration, WORK_DIR leftovers) | job fails | pre-check; delete `.m4b` in `finally`; LRU as a safety net; `/v1/status` reports each user's cache usage |
 | R4 | network load ABS → proxy on every prepare | slow for large books | once per book instead of per segment; backlog: `ffmpeg` via HTTP range directly against the ABS URL, if range is reliably supported |
 | R5 | chapter markers unusable after all (not monotonic, outside the duration) | wrong segment boundaries | validation in `segmenter.py`, automatic 15-min fallback, report in M1 |
 | R6 | unknown `makeWebRequest` file limit | sync aborts on hardware, not in the simulator | 5–10 MB segments stay well below it; determine the limit in the M0 spike |
 | R7 | 8 KB property limit with a large library | data loss/crash | key-per-book layout; serialization test with 500 books |
-| R8 | ABS API changes (2.26 auth rework) | proxy breaks | version check at start, `/health`, smoke test in the repo |
-| R9a | playlist unfindable or ABS briefly gone | watch could be wiped | a failure never means "empty": 409 instead of an empty list, no releasing during reconciliation, watch only deletes with a fresh target; `/health` reports `playlist_found` |
+| R8 | ABS API changes (2.26 auth rework) | proxy breaks | version check at start, `/v1/status`, smoke test in the repo |
+| R9a | playlist unfindable or ABS briefly gone | watch could be wiped | a failure never means "empty": 409 instead of an empty list, no releasing during reconciliation, watch only deletes with a fresh target; `/v1/status` reports `playlist_found` |
 | R9 | fēnix 7 Pro **without a Wi-Fi** variant | sync over BLE impractically slow | only support Wi-Fi variants, mention it in the description |
-| R10 | the watch token is a secret in plain text on the watch | no per-device revocation, token in Garmin Connect | deliberately accepted for a private stack; one token set per user in the users file (revocable per user), rotation via the token list, pre-signed cover URLs instead of a token in the query string |
+| R10 | the watch token is a secret in plain text on the watch | no per-device revocation, token in Garmin Connect | deliberately accepted for a private stack; one token set per user in the users file (revocable per user), rotation via the token list, never a token in a query string |
 | R11 | store approval for audio provider apps | release delayed | check review requirements early, document the sideload path |
 
 ---

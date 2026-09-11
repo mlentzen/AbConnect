@@ -1,6 +1,6 @@
 import pytest
 
-from abconnect_proxy.parsing import ItemUnusable, parse_book_libraries, parse_item, parse_listing
+from abconnect_proxy.parsing import ItemUnusable, parse_item
 
 
 def item(**overrides):
@@ -37,7 +37,6 @@ class TestParseItem:
         assert parsed.duration == 3600.0
         assert [f.ino for f in parsed.files] == ["9001"]
         assert [c.title for c in parsed.chapters] == ["Verhaftung", "Erste Untersuchung"]
-        assert parsed.has_cover
 
     def test_falls_back_to_the_authors_list(self):
         parsed = parse_item(item(media={"metadata": {"title": "X", "authors": [{"name": "A"}, {"name": "B"}]}}))
@@ -80,30 +79,3 @@ class TestParseItem:
     def test_rejects_a_response_without_an_item(self):
         with pytest.raises(ItemUnusable):
             parse_item({})
-
-
-class TestParseListing:
-    def test_reads_results_and_total(self):
-        books, total = parse_listing(
-            {
-                "total": 42,
-                "results": [
-                    {"id": "a", "media": {"duration": 100, "metadata": {"title": "T", "authorName": "A"}}},
-                    {"id": "b", "media": {"metadata": {}}},
-                ],
-            }
-        )
-        assert total == 42
-        assert books[0] == {"id": "a", "title": "T", "author": "A", "duration": 100.0}
-        assert books[1]["title"] == "b"  # without a title the ID remains as a fallback
-
-    def test_tolerates_a_bare_list(self):
-        books, total = parse_listing([{"id": "a", "media": {"metadata": {"title": "T"}}}])
-        assert total == 1 and books[0]["id"] == "a"
-
-
-def test_parse_book_libraries_filters_podcasts():
-    ids = parse_book_libraries(
-        {"libraries": [{"id": "1", "mediaType": "book"}, {"id": "2", "mediaType": "podcast"}, {"id": "3"}]}
-    )
-    assert ids == ["1", "3"]
