@@ -10,6 +10,7 @@ user's own Audiobookshelf, cache and playlist.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from contextlib import asynccontextmanager
 
@@ -32,6 +33,12 @@ SWEEP_INTERVAL_SECONDS = 3600
 MAX_PLAYLIST_BOOKS = 100
 # A full progress batch of 200 entries is about 20 KB.
 MAX_BODY_BYTES = 64 * 1024
+# Segments are cut at chapter boundaries, so a chapter-heavy book can carry
+# far more of them than SEGMENT_TARGET_SECONDS would suggest — a book with
+# ~100 chapters was seen sending -402 (response too large) to the watch, even
+# though the request to this proxy itself succeeded. Paginated below the
+# tightest reported sync-request budget (a few KB) rather than sized for it.
+MAX_SEGMENTS_PAGE_BYTES = 4096
 
 
 class ProgressEntry(BaseModel):
@@ -266,7 +273,7 @@ def _register(app: FastAPI) -> None:
         return JSONResponse(payload, status_code=200 if result.found else 409)
 
     @app.get("/v1/books/{book_id}/segments")
-    async def segments(book_id: str, user: UserRuntime = Depends(current_user)):
+    async def segments(book_id: str, after: int | None = None, user: UserRuntime = Depends(current_user)):
         book_id = _book_id(book_id)
         manifest = user.cache.load_manifest(book_id)
         if manifest is None:
@@ -284,7 +291,25 @@ def _register(app: FastAPI) -> None:
                 "url": f"/v1/books/{book_id}/seg/{entry['file']}",
             }
             for entry in manifest["segments"]
+            if after is None or entry["index"] > after
         ]
+
+        # A chapter-heavy book easily outgrows what the watch's sync request
+        # can hold, so only as much fits as stays under budget — one entry at
+        # least, so a single oversized title can't stall pagination forever.
+        # +2 for the array's own brackets, +2 per separating ", " — matching
+        # what json.dumps(page) actually produces, not just the entries summed.
+        page: list[dict] = []
+        page_bytes = 2
+        for entry in listing:
+            entry_bytes = len(json.dumps(entry)) + (2 if page else 0)
+            if page and page_bytes + entry_bytes > MAX_SEGMENTS_PAGE_BYTES:
+                break
+            page.append(entry)
+            page_bytes += entry_bytes
+        # `next` is the cursor the watch echoes back as `after` — the index of
+        # the last segment it now has, not the one it still needs.
+        next_index = page[-1]["index"] if len(page) < len(listing) else None
 
         payload = {
             "id": book_id,
@@ -292,22 +317,25 @@ def _register(app: FastAPI) -> None:
             "author": manifest["author"],
             "duration": manifest["duration"],
             "chapter_source": manifest["chapter_source"],
-            "segments": listing,
+            "segments": page,
+            "next": next_index,
         }
 
         # Where the server would resume — the watch decides during sync whether
-        # its own position is more recent.
-        try:
-            stored = await user.abs.get_progress(book_id)
-        except AbsError:
-            stored = None
-        if stored and stored.get("currentTime"):
-            spot = progress.position(manifest["segments"], float(stored["currentTime"]))
-            payload["resume"] = {
-                "segment": spot.segment,
-                "offset": spot.offset,
-                "ts": progress.server_timestamp(stored),
-            }
+        # its own position is more recent. Only worth the extra ABS call once,
+        # on the first page; later pages have nothing new to say about it.
+        if after is None:
+            try:
+                stored = await user.abs.get_progress(book_id)
+            except AbsError:
+                stored = None
+            if stored and stored.get("currentTime"):
+                spot = progress.position(manifest["segments"], float(stored["currentTime"]))
+                payload["resume"] = {
+                    "segment": spot.segment,
+                    "offset": spot.offset,
+                    "ts": progress.server_timestamp(stored),
+                }
         return payload
 
     @app.get("/v1/books/{book_id}/seg/{filename}")

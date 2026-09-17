@@ -42,6 +42,11 @@ class AbSyncDelegate extends Communications.SyncDelegate {
     private var _sentEntries as Array;
     private var _pending as Dictionary?;
     private var _currentBook as String?;
+    //! Segments collected so far for the current book, across however many
+    //! pages the server split its listing into.
+    private var _segmentsAccum as Array<Dictionary>;
+    //! The cursor for the next segments page, -1 for the first one.
+    private var _segmentsAfter as Number;
     private var _booksTotal as Number;
     private var _booksDone as Number;
     private var _downloadsTotal as Number;
@@ -65,6 +70,8 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         _sentEntries = [] as Array;
         _pending = null;
         _currentBook = null;
+        _segmentsAccum = [] as Array<Dictionary>;
+        _segmentsAfter = -1;
         _booksTotal = 0;
         _booksDone = 0;
         _downloadsTotal = 0;
@@ -346,8 +353,21 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         var bookId = _bookQueue[0];
         _bookQueue.remove(bookId);
         _currentBook = bookId;
+        _segmentsAccum = [] as Array<Dictionary>;
+        _segmentsAfter = -1;
         Log.info("Sync: segments for " + bookId);
-        _client.segments(bookId, method(:onSegments));
+        fetchSegmentsPage();
+    }
+
+    //! One page of the current book's segment listing. A chapter-heavy book
+    //! does not fit in a single response — see ProxyClient.segments — so this
+    //! keeps asking, cursor in hand, until the server says there is no more.
+    private function fetchSegmentsPage() as Void {
+        var bookId = _currentBook;
+        if (bookId == null) {
+            return;
+        }
+        _client.segments(bookId, _segmentsAfter, method(:onSegments));
     }
 
     function onSegments(code as Number, data as Dictionary or String or Null) as Void {
@@ -369,12 +389,26 @@ class AbSyncDelegate extends Communications.SyncDelegate {
             return;
         }
 
-        var segments = data["segments"];
-        if (!(segments instanceof Array)) {
+        var page = data["segments"];
+        if (!(page instanceof Array)) {
             bookDone();
             return;
         }
+        for (var i = 0; i < page.size(); ++i) {
+            var entry = page[i];
+            if (entry instanceof Dictionary) {
+                _segmentsAccum.add(entry);
+            }
+        }
 
+        var next = data["next"];
+        if (next instanceof Number) {
+            _segmentsAfter = next;
+            fetchSegmentsPage();
+            return;
+        }
+
+        var segments = _segmentsAccum;
         Store.setBookInfo(
             bookId,
             SyncConfigView.stringOr(data["title"], bookId),

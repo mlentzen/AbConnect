@@ -90,9 +90,17 @@ class ProxyClient {
         Communications.makeWebRequest(url("/v1/playlist"), null, jsonOptions(), callback);
     }
 
-    function segments(bookId as String, callback as Method) as Void {
-        trace("GET", "/v1/books/" + bookId + "/segments");
-        Communications.makeWebRequest(url("/v1/books/" + bookId + "/segments"), null, jsonOptions(), callback);
+    //! `after` is the index of the last segment already received, -1 for the
+    //! first page. A chapter-heavy book does not fit in one response — see
+    //! the module comment — so the server paginates and this passes the
+    //! cursor it hands back straight through.
+    function segments(bookId as String, after as Number, callback as Method) as Void {
+        var path = "/v1/books/" + bookId + "/segments";
+        if (after >= 0) {
+            path += "?after=" + after.toString();
+        }
+        trace("GET", path);
+        Communications.makeWebRequest(url(path), null, jsonOptions(), callback);
     }
 
     // --- Media --------------------------------------------------------------

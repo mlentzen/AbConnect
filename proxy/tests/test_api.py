@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from abconnect_proxy import config as config_module
 from abconnect_proxy.abs_client import AbsClient
-from abconnect_proxy.api import create_app
+from abconnect_proxy.api import MAX_SEGMENTS_PAGE_BYTES, create_app
 from abconnect_proxy.cache import USERS_DIR, Cache
 
 from .conftest import write_users
@@ -133,6 +133,39 @@ def prepared_book(config, book_id="li_a", user="alice"):
         path = cache.segment_path(book_id, name)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"audio!!")
+    return cache
+
+
+def prepared_book_with_many_segments(config, count, book_id="li_big", user="alice"):
+    """A chapter-heavy book — enough segments to force more than one page."""
+    cache = user_cache(config, user)
+    segments = [
+        {
+            "index": i,
+            # Long enough that even a generous page budget spans several
+            # pages once multiplied by `count`.
+            "title": f"Chapter {i}: a rather wordy chapter title for good measure",
+            "duration": 300.0,
+            "book_start": i * 300.0,
+            "bytes": 12345,
+            "encoding": "m4a",
+            "file": f"{i:04d}.m4a",
+        }
+        for i in range(count)
+    ]
+    cache.store_manifest(
+        book_id,
+        {
+            "book_id": book_id,
+            "title": "The Talisman",
+            "author": "King & Straub",
+            "duration": count * 300.0,
+            "chapter_source": "chapters",
+            "reason": "",
+            "prepared_at": time.time(),
+            "segments": segments,
+        },
+    )
     return cache
 
 
@@ -272,6 +305,49 @@ class TestSegments:
         with build_client(config) as client:
             response = client.get("/v1/books/li_a/seg/..%2F..%2Fetc%2Fpasswd", headers=HEAD)
         assert response.status_code in (400, 404)
+
+    def test_a_short_list_fits_on_one_page(self, config):
+        prepared_book(config)
+        with build_client(config) as client:
+            payload = client.get("/v1/books/li_a/segments", headers=HEAD).json()
+        assert payload["next"] is None
+        assert len(payload["segments"]) == 2
+
+    def test_a_long_list_is_split_across_pages_within_the_byte_budget(self, config):
+        prepared_book_with_many_segments(config, 200)
+        with build_client(config) as client:
+            pages = []
+            after = None
+            for _ in range(1000):  # a hard stop, not the expected page count
+                path = "/v1/books/li_big/segments"
+                if after is not None:
+                    path += f"?after={after}"
+                page = client.get(path, headers=HEAD).json()
+                pages.append(page)
+                after = page["next"]
+                if after is None:
+                    break
+            else:
+                pytest.fail("pagination never terminated")
+
+        assert len(pages) > 1, "200 wordy chapters should not fit on one page"
+        for page in pages:
+            assert len(json.dumps(page["segments"])) <= MAX_SEGMENTS_PAGE_BYTES
+            assert len(page["segments"]) >= 1  # forward progress every page
+
+        indexes = [s["index"] for page in pages for s in page["segments"]]
+        assert indexes == list(range(200))
+
+    def test_only_the_first_page_carries_the_resume_point(self, config):
+        prepared_book_with_many_segments(config, 200)
+        handler = abs_handler(progress_payload={"currentTime": 1000.0, "lastUpdate": 1_700_000_000_000})
+        with build_client(config, handler) as client:
+            first = client.get("/v1/books/li_big/segments", headers=HEAD).json()
+            assert first["next"] is not None
+            second = client.get(f"/v1/books/li_big/segments?after={first['next']}", headers=HEAD).json()
+
+        assert "resume" in first
+        assert "resume" not in second
 
 
 class TestProgress:
