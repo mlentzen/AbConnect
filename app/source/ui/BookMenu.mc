@@ -27,6 +27,7 @@ class BookMenuDelegate extends WatchUi.Menu2InputDelegate {
     }
 
     function onSelect(item as WatchUi.MenuItem) as Void {
+        Idle.poke();
         var id = item.getId();
         if (!(id instanceof String)) {
             return;
@@ -46,6 +47,7 @@ class BookMenuDelegate extends WatchUi.Menu2InputDelegate {
     }
 
     function onBack() as Void {
+        Idle.poke();
         WatchUi.popView(WatchUi.SLIDE_IMMEDIATE);
     }
 }

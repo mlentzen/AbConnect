@@ -21,6 +21,7 @@ class AbConnectApp extends Application.AudioContentProviderApp {
     //! Mode 1: the user selects what should go onto the watch.
     function getSyncConfigurationView() as [WatchUi.Views] or [WatchUi.Views, WatchUi.InputDelegates] {
         Log.info("Mode: sync configuration");
+        Idle.start();
         return [new SyncConfigView()];
     }
 
@@ -33,6 +34,7 @@ class AbConnectApp extends Application.AudioContentProviderApp {
     //! Mode 3: the user selects what is played.
     function getPlaybackConfigurationView() as [WatchUi.Views] or [WatchUi.Views, WatchUi.InputDelegates] {
         Log.info("Mode: playback configuration");
+        Idle.start();
         logStore();
         var view = new PlaybackConfigView();
         Log.debug("Config: view built");

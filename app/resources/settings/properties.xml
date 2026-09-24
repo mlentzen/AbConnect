@@ -1,7 +1,9 @@
-<!-- Template. build.sh generates properties.xml from it and fills in the
-     placeholders from the environment; the generated file is deliberately not
-     in git because it contains the proxy token. -->
+<!-- Phone settings, only shown in Garmin Connect for apps installed from the
+     Connect IQ store. Side-loaded builds use the settings menu on the watch or
+     the defaults build.sh writes into source/BuildDefaults.mc instead; what is
+     entered on the watch wins over both. -->
 <properties>
     <property id="proxyUrl" type="string"></property>
     <property id="proxyToken" type="string"></property>
+    <property id="autoSync" type="boolean">true</property>
 </properties>

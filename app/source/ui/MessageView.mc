@@ -37,6 +37,7 @@ class MessageView extends WatchUi.View {
 
     function onShow() as Void {
         _shown = true;
+        Idle.poke();
         if (_closeAfterMs > 0 && _timer == null) {
             var timer = new Timer.Timer();
             timer.start(method(:onClose), _closeAfterMs, false);
@@ -83,6 +84,7 @@ class BackDelegate extends WatchUi.BehaviorDelegate {
     }
 
     function onBack() as Boolean {
+        Idle.poke();
         WatchUi.popView(WatchUi.SLIDE_IMMEDIATE);
         return true;
     }

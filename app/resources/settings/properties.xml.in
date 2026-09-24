@@ -1,8 +1,0 @@
-<!-- Template. build.sh generates properties.xml from it and fills in the
-     placeholders from the environment; the generated file is deliberately not
-     in git because it contains the proxy token. -->
-<properties>
-    <property id="proxyUrl" type="string">@PROXY_URL@</property>
-    <property id="proxyToken" type="string">@PROXY_TOKEN@</property>
-    <property id="deleteFinished" type="boolean">@DELETE_FINISHED@</property>
-</properties>

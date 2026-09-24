@@ -41,4 +41,23 @@
     <string id="infoAgo">ago</string>
     <string id="progressNotSent">Progress not synced</string>
     <string id="tries">tries</string>
+    <string id="menuSettings">Settings</string>
+    <string id="settingUrl">Proxy URL</string>
+    <string id="settingPair">Pair with phone</string>
+    <string id="settingToken">Token (manual)</string>
+    <string id="settingTest">Test connection</string>
+    <string id="settingAutoSync">Sync on charger</string>
+    <string id="settingAutoSyncTitle">Sync on charger</string>
+    <string id="settingAutoSyncPrompt">Download books automatically while the watch charges</string>
+    <string id="notSet">not set</string>
+    <string id="isSet">set</string>
+    <string id="noTextInput">No text input on this watch</string>
+    <string id="pairNeedsUrl">Set the proxy URL first</string>
+    <string id="pairOpen">On your phone, open</string>
+    <string id="pairWaiting">Waiting for phone…</string>
+    <string id="pairExpired">Code expired</string>
+    <string id="pairDone">Paired</string>
+    <string id="connectionOk">Connection OK</string>
+    <string id="tokenInvalid">Token not accepted</string>
+    <string id="serverUnhealthy">Proxy reachable, server not ready</string>
 </strings>

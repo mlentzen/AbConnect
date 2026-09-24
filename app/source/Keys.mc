@@ -40,6 +40,14 @@ module Keys {
     //! deselected book would no longer be findable and its segments would stay
     //! in the media cache forever.
     const KNOWN = "KNW";
+    //! Proxy URL and token entered on the watch (settings menu or pairing).
+    //! They win over the phone settings and the build defaults, and survive a
+    //! reset and a schema change: losing them would lock the user out.
+    const CFG_URL = "CFU";
+    const CFG_TOKEN = "CFT";
+    //! Boolean, whether the watch may sync by itself while charging. Absent
+    //! means: whatever the phone setting (or its default) says.
+    const CFG_AUTO_SYNC = "CFA";
 
     //! Prefix: map refId -> "segIdx|duration" for a book.
     const LOCAL_PREFIX = "L_";
@@ -63,4 +71,5 @@ module Keys {
 module Settings {
     const PROXY_URL = "proxyUrl";
     const PROXY_TOKEN = "proxyToken";
+    const AUTO_SYNC = "autoSync";
 }

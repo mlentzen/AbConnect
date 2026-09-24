@@ -2,6 +2,7 @@ import Toybox.Communications;
 import Toybox.Lang;
 import Toybox.Media;
 import Toybox.System;
+import Toybox.Time;
 import Toybox.Timer;
 import Toybox.WatchUi;
 
@@ -33,6 +34,10 @@ class AbSyncDelegate extends Communications.SyncDelegate {
     //! shows a message instead of sitting in the sync screen forever.
     const WATCHDOG_TICK_MS = 30000;
     const WATCHDOG_MAX_IDLE_TICKS = 20;
+
+    //! How old the last playlist read must be before the charger alone is
+    //! reason enough for a sync.
+    const AUTO_SYNC_MIN_AGE_SECONDS = 6 * 3600;
 
     private var _client as ProxyClient;
     private var _bookQueue as Array<String>;
@@ -88,26 +93,35 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         _idleTicks = 0;
     }
 
-    //! Only when someone asked for it — the Download books row stamps a ticket in the
-    //! store, and a fresh ticket is the whole of the answer.
+    //! A manual request, or — opt-out — the watch sitting on its charger.
     //!
     //! The system asks this on every trigger, its own schedule included, and
     //! the SDK is unambiguous about a false: "onStartSync will not be called
-    //! if a sync is triggered for this application." The trigger makes no
-    //! distinction between the system's own idea and the Download books row, and
-    //! startSync() overrules nothing despite the name — a plain false
-    //! therefore does not skip the sync, it freezes the sync screen at 0 %
-    //! with this app never hearing about it. (Seen on the fēnix: the screen
-    //! sits there, the log says nothing, and no amount of waiting helps.)
+    //! if a sync is triggered for this application." For a sync started by
+    //! hand (the Download books row, the sync configuration) a false does not
+    //! skip anything, it freezes the sync screen at 0 % with this app never
+    //! hearing about it. (Seen on the fēnix: the screen sits there, the log
+    //! says nothing, and no amount of waiting helps.) So a fresh manual ticket
+    //! is always a yes.
     //!
-    //! So the answer is true exactly while a manual request is fresh, and no
-    //! otherwise — above all not for the playlist simply being old. A sync
-    //! brings up Wi-Fi and holds the watch for as long as the downloads take,
-    //! and that is not something to start on a schedule.
+    //! Without a ticket the question comes from the system's own schedule, and
+    //! there a no just means "not now". The answer is yes only in the one
+    //! situation where a long Wi-Fi sync costs nothing — on the charger, the
+    //! way Spotify and co. do it — and only when the playlist was last read a
+    //! while ago, so a watch left on the charger overnight syncs once rather
+    //! than on every poll. Switched off in the settings, only the ticket
+    //! counts, as before.
     function isSyncNeeded() as Boolean {
-        var requested = Store.syncRequested();
-        Log.debug("Sync: needed " + requested.toString());
-        return requested;
+        if (Store.syncRequested()) {
+            Log.debug("Sync: needed, asked for by hand");
+            return true;
+        }
+        var auto = Store.autoSync()
+            && System.getSystemStats().charging
+            && _client.isConfigured()
+            && Time.now().value() - Store.lastCheck() >= AUTO_SYNC_MIN_AGE_SECONDS;
+        Log.debug("Sync: needed on the charger " + auto.toString());
+        return auto;
     }
 
     function onStartSync() as Void {

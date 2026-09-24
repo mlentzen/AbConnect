@@ -14,8 +14,8 @@ class ProxyClient {
     private var _token as String;
 
     function initialize() {
-        _base = readSetting(Settings.PROXY_URL, BuildDefaults.PROXY_URL);
-        _token = readSetting(Settings.PROXY_TOKEN, BuildDefaults.PROXY_TOKEN);
+        _base = readSetting(Keys.CFG_URL, Settings.PROXY_URL, BuildDefaults.PROXY_URL);
+        _token = readSetting(Keys.CFG_TOKEN, Settings.PROXY_TOKEN, BuildDefaults.PROXY_TOKEN);
         _base = withoutTrailingSlash(_base);
         if (_base.length() == 0 || _token.length() == 0) {
             // Nothing this client is asked to do can work. Said once, at the
@@ -50,6 +50,25 @@ class ProxyClient {
     //! Without a URL and token, no call has any chance of success.
     function isConfigured() as Boolean {
         return _base.length() > 0 && _token.length() > 0;
+    }
+
+    //! Pairing needs the address, not the token.
+    function hasUrl() as Boolean {
+        return _base.length() > 0;
+    }
+
+    function hasToken() as Boolean {
+        return _token.length() > 0;
+    }
+
+    //! The address without its scheme, short enough for a watch face.
+    function host() as String {
+        var index = _base.find("://");
+        if (index == null) {
+            return _base;
+        }
+        var rest = _base.substring(index + 3, _base.length());
+        return (rest == null) ? _base : rest;
     }
 
     function url(path as String) as String {
@@ -150,6 +169,43 @@ class ProxyClient {
         );
     }
 
+    // --- Setup --------------------------------------------------------------
+
+    //! Whether URL and token work: 200 is healthy, 503 reachable but unhappy
+    //! (ABS or ffmpeg), 401 a wrong token.
+    function status(callback as Method) as Void {
+        trace("GET", "/v1/status");
+        Communications.makeWebRequest(url("/v1/status"), null, jsonOptions(), callback);
+    }
+
+    //! Asks for a pairing code. No token: this is how the watch gets one.
+    function pairStart(callback as Method) as Void {
+        trace("POST", "/pair/start");
+        Communications.makeWebRequest(
+            url("/pair/start"),
+            {},
+            {
+                :method => Communications.HTTP_REQUEST_METHOD_POST,
+                :headers => { "Content-Type" => Communications.REQUEST_CONTENT_TYPE_JSON },
+                :responseType => Communications.HTTP_RESPONSE_CONTENT_TYPE_JSON
+            },
+            callback
+        );
+    }
+
+    //! 202 while the phone has not answered, 200 with the token once it has.
+    function pairPoll(code as String, callback as Method) as Void {
+        Communications.makeWebRequest(
+            url("/pair/" + code),
+            null,
+            {
+                :method => Communications.HTTP_REQUEST_METHOD_GET,
+                :responseType => Communications.HTTP_RESPONSE_CONTENT_TYPE_JSON
+            },
+            callback
+        );
+    }
+
     // --- Helpers --------------------------------------------------------------
 
     static function mediaEncoding(encoding as String) as Number {
@@ -159,11 +215,16 @@ class ProxyClient {
         return Media.ENCODING_M4A;
     }
 
-    //! The phone setting overrides the default baked in at build time.
+    //! What was entered on the watch, then the phone setting, then the default
+    //! baked in at build time.
     //!
     //! An empty value counts as none here: a side-loaded app gets no settings
     //! screen in Garmin Connect, otherwise the default would have no effect.
-    private static function readSetting(key as String, fallback as String) as String {
+    private static function readSetting(storeKey as String, key as String, fallback as String) as String {
+        var local = Store.configValue(storeKey);
+        if (local != null) {
+            return local;
+        }
         var value = Application.Properties.getValue(key);
         if (value instanceof String && value.length() > 0) {
             return value;

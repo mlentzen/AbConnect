@@ -116,6 +116,7 @@ class ChapterMenuDelegate extends WatchUi.Menu2InputDelegate {
     }
 
     function onSelect(item as WatchUi.MenuItem) as Void {
+        Idle.poke();
         var id = item.getId();
         if (id == $.RESUME_ITEM) {
             Log.info("Chapters: agreeing with the server before playing");
@@ -159,6 +160,7 @@ class ChapterMenuDelegate extends WatchUi.Menu2InputDelegate {
     }
 
     function onBack() as Void {
+        Idle.poke();
         WatchUi.popView(WatchUi.SLIDE_IMMEDIATE);
     }
 }

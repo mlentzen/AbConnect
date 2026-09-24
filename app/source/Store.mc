@@ -13,8 +13,7 @@ module Store {
     function checkSchema() as Void {
         var version = Application.Storage.getValue(Keys.SCHEMA);
         if (!(version instanceof Number) || version != Keys.SCHEMA_VERSION) {
-            Application.Storage.clearValues();
-            Application.Storage.setValue(Keys.SCHEMA, Keys.SCHEMA_VERSION);
+            clearKeepingConfig();
         }
     }
 
@@ -29,8 +28,66 @@ module Store {
     //! precisely that.
     function reset() as Void {
         Media.resetContentCache();
+        clearKeepingConfig();
+    }
+
+    //! Storage.clearValues() takes everything; the connection settings are put
+    //! back, because without them the watch cannot even sync its way back.
+    function clearKeepingConfig() as Void {
+        var keys = [Keys.CFG_URL, Keys.CFG_TOKEN, Keys.CFG_AUTO_SYNC] as Array<String>;
+        var kept = [] as Array;
+        for (var i = 0; i < keys.size(); ++i) {
+            kept.add(Application.Storage.getValue(keys[i]));
+        }
         Application.Storage.clearValues();
+        for (var i = 0; i < keys.size(); ++i) {
+            if (kept[i] != null) {
+                Application.Storage.setValue(keys[i], kept[i] as Application.PropertyValueType);
+            }
+        }
         Application.Storage.setValue(Keys.SCHEMA, Keys.SCHEMA_VERSION);
+    }
+
+    // --- Connection settings ----------------------------------------------
+
+    //! What was entered on the watch, or null when nothing was.
+    function configValue(key as String) as String? {
+        var value = Application.Storage.getValue(key);
+        if (value instanceof String && value.length() > 0) {
+            return value;
+        }
+        return null;
+    }
+
+    //! An empty value removes the entry, so the next source takes over again.
+    function setConfigValue(key as String, value as String) as Void {
+        if (value.length() == 0) {
+            Application.Storage.deleteValue(key);
+        } else {
+            Application.Storage.setValue(key, value);
+        }
+    }
+
+    //! Whether the watch may sync on its own while it charges. The toggle on
+    //! the watch wins, then the phone setting; on by default.
+    function autoSync() as Boolean {
+        var local = Application.Storage.getValue(Keys.CFG_AUTO_SYNC);
+        if (local instanceof Boolean) {
+            return local;
+        }
+        try {
+            var property = Application.Properties.getValue(Settings.AUTO_SYNC);
+            if (property instanceof Boolean) {
+                return property;
+            }
+        } catch (ex) {
+            // An older properties.xml without the key.
+        }
+        return true;
+    }
+
+    function setAutoSync(enabled as Boolean) as Void {
+        Application.Storage.setValue(Keys.CFG_AUTO_SYNC, enabled);
     }
 
     // --- Target from the playlist ----------------------------------------

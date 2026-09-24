@@ -115,6 +115,8 @@ class ProgressPush {
     //! never had a route out. A slow one went somewhere and failed there.
     private var _startedMs as Number;
     private var _requestMs as Number;
+    //! Whether this run holds the idle clock.
+    private var _holding as Boolean;
 
     function initialize() {
         _client = new ProxyClient();
@@ -130,6 +132,7 @@ class ProgressPush {
         _loading = null;
         _startedMs = 0;
         _requestMs = 0;
+        _holding = false;
     }
 
     //! The menu row.
@@ -198,6 +201,9 @@ class ProgressPush {
         _stoppedPlayback = true;
         Media.stopPlayback();
         _attempts = 0;
+        // Retries can take longer than the idle timeout, with no key pressed.
+        Idle.hold();
+        _holding = true;
         showLoading();
         arm(method(:onAttempt), SETTLE_MS);
     }
@@ -385,6 +391,10 @@ class ProgressPush {
     //! The run is over, whichever way it went: nothing more is owed an answer,
     //! and a book that was asked for goes on.
     private function done() as Void {
+        if (_holding) {
+            _holding = false;
+            Idle.release();
+        }
         _awaiting = false;
         _stoppedPlayback = false;
         _loading = null;

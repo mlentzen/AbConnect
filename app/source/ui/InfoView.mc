@@ -19,6 +19,10 @@ class InfoView extends WatchUi.View {
         View.initialize();
     }
 
+    function onShow() as Void {
+        Idle.poke();
+    }
+
     function onUpdate(dc as Graphics.Dc) as Void {
         dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_BLACK);
         dc.clear();

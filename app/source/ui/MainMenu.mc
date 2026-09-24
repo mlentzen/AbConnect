@@ -12,6 +12,7 @@ const BOOKS_ITEM = :books;
 const SYNC_ITEM = :syncNow;
 const RESET_ITEM = :resetAll;
 const INFO_ITEM = :info;
+const SETTINGS_ITEM = :settings;
 
 //! What the app opens on.
 //!
@@ -41,6 +42,7 @@ class MainMenu extends WatchUi.Menu2 {
     //! screen, and there a rebuild would only throw the cursor to the top.
     function onShow() as Void {
         Menu2.onShow();
+        Idle.poke();
         if (state().equals(_state)) {
             return;
         }
@@ -59,7 +61,8 @@ class MainMenu extends WatchUi.Menu2 {
         return ((resumable == null) ? "" : resumable)
             + "|" + Store.localBooks().size().toString()
             + "|" + ProgressPush.pending().toString()
-            + "|" + (Media.getCacheStatistics().size / 1048576).toString();
+            + "|" + (Media.getCacheStatistics().size / 1048576).toString()
+            + "|" + settingsSubtitle();
     }
 
     private function build() as Void {
@@ -110,6 +113,13 @@ class MainMenu extends WatchUi.Menu2 {
             $.RESET_ITEM, Rez.Drawables.IconReset
         ));
 
+        // Where URL and token come from when the build did not bring them. The
+        // subtitle only speaks up when something is missing.
+        addItem(row(
+            Rez.Strings.menuSettings, settingsSubtitle(),
+            $.SETTINGS_ITEM, Rez.Drawables.IconInfo
+        ));
+
         // With an icon like every other row, so the labels line up.
         addItem(row(
             Rez.Strings.menuInfo, null,
@@ -129,6 +139,13 @@ class MainMenu extends WatchUi.Menu2 {
             new MenuIcon(icon),
             null
         );
+    }
+
+    private static function settingsSubtitle() as String? {
+        if (new ProxyClient().isConfigured()) {
+            return null;
+        }
+        return WatchUi.loadResource(Rez.Strings.notConfigured) as String;
     }
 
     //! An empty watch is the state that needs explaining; a full one only needs
@@ -179,6 +196,7 @@ class MainMenuDelegate extends WatchUi.Menu2InputDelegate {
     }
 
     function onSelect(item as WatchUi.MenuItem) as Void {
+        Idle.poke();
         var id = item.getId();
 
         if (id == $.CONTINUE_ITEM) {
@@ -229,6 +247,12 @@ class MainMenuDelegate extends WatchUi.Menu2InputDelegate {
                 new ResetConfirmationDelegate(),
                 WatchUi.SLIDE_IMMEDIATE
             );
+            return;
+        }
+
+        if (id == $.SETTINGS_ITEM) {
+            Log.info("Menu: settings");
+            WatchUi.pushView(new SettingsMenu(), new SettingsMenuDelegate(), WatchUi.SLIDE_IMMEDIATE);
             return;
         }
 

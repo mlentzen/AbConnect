@@ -33,8 +33,9 @@ class SyncConfigView extends WatchUi.View {
             WatchUi.popView(WatchUi.SLIDE_IMMEDIATE);
             return;
         }
+        Idle.poke();
         if (!_client.isConfigured()) {
-            showMessage(Rez.Strings.notConfigured);
+            showSettings();
             return;
         }
         Log.info("Config: fetching playlist");
@@ -60,7 +61,7 @@ class SyncConfigView extends WatchUi.View {
             return;
         }
         if (code == 401 || code == 403) {
-            showMessage(Rez.Strings.notConfigured);
+            showSettings();
             return;
         }
         if (code != 200 || !(data instanceof Dictionary)) {
@@ -132,6 +133,14 @@ class SyncConfigView extends WatchUi.View {
         return WatchUi.loadResource(Rez.Strings.statusPending) as String;
     }
 
+    //! Nothing to show without a working connection — so the place to fix it.
+    //! BACK out of it comes through onShow() again and leaves, like the list.
+    private function showSettings() as Void {
+        Log.info("Config: not configured, opening settings");
+        _menuShown = true;
+        WatchUi.pushView(new SettingsMenu(), new SettingsMenuDelegate(), WatchUi.SLIDE_IMMEDIATE);
+    }
+
     private function showMessage(resource as Lang.ResourceId) as Void {
         WatchUi.switchToView(
             new MessageView(WatchUi.loadResource(resource) as String),
@@ -161,6 +170,7 @@ class SyncConfigDelegate extends WatchUi.Menu2InputDelegate {
     }
 
     function onSelect(item as WatchUi.MenuItem) as Void {
+        Idle.poke();
         // The books are display only: what is on the watch is decided by the
         // playlist. Only the send-progress row does anything here.
         if (item.getId() == $.PROGRESS_ITEM) {
