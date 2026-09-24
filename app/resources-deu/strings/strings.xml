@@ -9,7 +9,7 @@
     <string id="menuSyncTitle">Bücher</string>
     <string id="loading">Lädt…</string>
     <string id="noBooks">Keine Bücher gefunden</string>
-    <string id="notConfigured">Proxy-URL und Token zuerst in der Handy-App eintragen</string>
+    <string id="notConfigured">Proxy-URL und Token fehlen – siehe Einstellungen</string>
     <string id="statusPreparing">wird vorbereitet</string>
     <string id="statusReady">auf der Uhr</string>
     <string id="statusPending">nicht vorbereitet</string>
@@ -41,4 +41,23 @@
     <string id="infoAgo">her</string>
     <string id="progressNotSent">Fortschritt nicht synchronisiert</string>
     <string id="tries">Versuche</string>
+    <string id="menuSettings">Einstellungen</string>
+    <string id="settingUrl">Proxy-URL</string>
+    <string id="settingPair">Mit Handy koppeln</string>
+    <string id="settingToken">Token (manuell)</string>
+    <string id="settingTest">Verbindung testen</string>
+    <string id="settingAutoSync">Sync beim Laden</string>
+    <string id="settingAutoSyncTitle">Sync beim Laden</string>
+    <string id="settingAutoSyncPrompt">Bücher automatisch laden, während die Uhr lädt</string>
+    <string id="notSet">nicht gesetzt</string>
+    <string id="isSet">gesetzt</string>
+    <string id="noTextInput">Keine Texteingabe auf dieser Uhr</string>
+    <string id="pairNeedsUrl">Zuerst die Proxy-URL eintragen</string>
+    <string id="pairOpen">Auf dem Handy öffnen</string>
+    <string id="pairWaiting">Warte auf Handy…</string>
+    <string id="pairExpired">Code abgelaufen</string>
+    <string id="pairDone">Gekoppelt</string>
+    <string id="connectionOk">Verbindung OK</string>
+    <string id="tokenInvalid">Token abgelehnt</string>
+    <string id="serverUnhealthy">Proxy erreichbar, Server nicht bereit</string>
 </strings>
