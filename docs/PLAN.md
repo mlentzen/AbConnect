@@ -338,6 +338,7 @@ deploy/                      quadlet unit, example secrets, setup docs
 | `POST /v1/progress` | batch upload, conversion to book time, forwarding to ABS |
 | `GET /v1/status` | the caller's ABS reachability, playlist found, ffmpeg |
 | `GET /health` | public liveness only: `{"status": "ok"}` |
+| `POST /pair/start`, `GET`/`POST /pair`, `GET /pair/{code}` | public pairing: a token typed on the phone is collected by the watch (added later, see `app/README.md`) |
 
 ### Auth between watch and proxy
 

@@ -12,10 +12,23 @@ Object Store — flat, because each value there is limited to 8 KB.
 
 | File | Mode |
 |---|---|
+| `AbConnectApp.mc` | entry point: hands each mode its view or delegate |
 | `ui/SyncConfigView.mc` | sync configuration: shows the playlist and its state |
 | `sync/SyncDelegate.mc` | sync: report progress, read the playlist, mirror it |
 | `ui/PlaybackConfigView.mc`, `MainMenu.mc`, `BookMenu.mc`, `ChapterMenu.mc`, `InfoView.mc` | playback configuration: the app menu |
+| `ui/SettingsMenu.mc`, `PairView.mc` | settings on the watch: proxy URL, pairing, auto sync |
+| `ui/ProgressPush.mc` | progress sync over the phone, used from the menus |
 | `playback/ContentDelegate.mc`, `ContentIterator.mc` | playback |
+
+Shared across modes:
+
+| File | Purpose |
+|---|---|
+| `Store.mc`, `Keys.mc` | Object Store access and key layout (flat values, 8 KB each) |
+| `net/ProxyClient.mc` | every HTTP call to the proxy, config precedence |
+| `Progress.mc` | settles the proxy's answer to a progress push |
+| `Idle.mc` | ends the configuration modes after 2 min without input |
+| `Log.mc`, `Version.mc` | logging with a build-time level, version constant |
 
 Selection does not happen on the watch but in Audiobookshelf: the playlist
 `Garmin` is the target, the sync mirrors it. If the playlist is missing or the
@@ -30,9 +43,10 @@ in the middle of a chapter.
 ## Building
 
 ```sh
+CIQ_HOME=/path/to/sdk ./build.sh             # set up URL and token on the watch
 PROXY_URL=https://abconnect.example \
-PROXY_TOKEN=<this watch's token from users.toml> \
-CIQ_HOME=/path/to/sdk ./build.sh
+PROXY_TOKEN=<token from users.toml> \
+CIQ_HOME=/path/to/sdk ./build.sh             # or bake them in
 ```
 
 You need the Connect IQ SDK, a developer key (`CIQ_KEY`, default
@@ -41,35 +55,37 @@ You need the Connect IQ SDK, a developer key (`CIQ_KEY`, default
 `build.sh` reads a `.env` next to the script. If it contains `PROXY_URL` and
 `PROXY_TOKEN`, they end up as `source/BuildDefaults.mc` in the build and the app
 runs without further setup. The file is regenerated on every build and is not
-checked in — it contains the token. Whatever is set in the phone app's settings
-still takes precedence.
+checked in, because it contains the token. Values entered on the watch take
+precedence (see below).
 
 The real device profiles are only downloaded by the SDK Manager after a Garmin
 login. If you do not have that, `python3 ../tools/stub_device.py` can create a
 **substitute profile**. It lets you compile and type-check — but such a build
 says nothing about memory limits, layout and behavior on the watch.
 
-### Why the credentials belong in the build
+### Where URL and token come from
 
-Side-loaded Connect IQ apps get **no** settings page in Garmin Connect — so the
-app on the watch would never see the proxy URL and token. That is why
-`build.sh` sets both as default values in the package:
-`resources/settings/properties.xml.in` is the template in git, the
-`properties.xml` generated from it is in `.gitignore` because it contains the
-token.
+Side-loaded Connect IQ apps get **no** settings page in Garmin Connect.
+`ProxyClient.readSetting()` therefore checks three sources, in this order:
 
-| Variable | Required | Default | Meaning |
-|---|---|---|---|
-| `PROXY_URL` | effectively yes | empty | base URL of the proxy |
-| `PROXY_TOKEN` | effectively yes | empty | this watch's token from the proxy's `users.toml` |
-| `LOG_LEVEL` | — | `0` | 0 errors, 1 warnings, 2 course of events, 3 everything |
-| `DELETE_FINISHED` | — | `false` | remove finished books from the watch |
+1. **The watch.** Values entered under *Settings* (keyboard or pairing) are
+   stored in the Object Store. They survive *Reset everything* and schema
+   changes.
+2. **Phone settings** (`resources/settings/`). Garmin Connect only shows these
+   for apps installed from the Connect IQ store.
+3. **Build defaults.** `build.sh` writes `PROXY_URL`/`PROXY_TOKEN` from the
+   environment or `app/.env` into `source/BuildDefaults.mc`. That file is
+   generated and git-ignored.
 
-Without the two values the script still builds, but warns: the app then reports
-*"Settings needed"* on the watch. The settings page is kept and overrides the
-defaults, should the app ever be installed from the Connect IQ store.
+| Variable | Default | Meaning |
+|---|---|---|
+| `PROXY_URL` | empty | base URL of the proxy |
+| `PROXY_TOKEN` | empty | this watch's token from the proxy's `users.toml` |
+| `LOG_LEVEL` | `0` | 0 errors, 1 warnings, 2 course of events, 3 everything |
 
-**The finished `.prg` therefore contains the token** — do not share it.
+Without URL and token the build still succeeds, but warns. The app then opens
+*Settings* in place of the playlist. **A `.prg` built with `PROXY_TOKEN`
+contains the token**, so do not share it.
 
 ### Version
 
@@ -107,16 +123,56 @@ AbConnect
 ├─ Books            everything playable on the watch → chapters → Resume / From the start
 ├─ Sync progress    positions both ways over the phone, no Wi-Fi, no sync mode
 ├─ Download books   Wi-Fi: report progress, read the playlist, mirror it
-├─ Reset everything media cache and store, after a confirmation
+├─ Reset everything media cache and store, after a confirmation (keeps the settings)
+├─ Settings
+│  ├─ Proxy URL        watch keyboard; "https://" is added to a bare host
+│  ├─ Pair with phone  shows a code; enter it with the token at https://<proxy>/pair
+│  ├─ Token (manual)   watch keyboard, the fallback
+│  ├─ Test connection  GET /v1/status
+│  └─ Sync on charger  toggle, on by default
 └─ Info             version, commit, build date, and what is on the watch
 ```
 
-A sync only ever runs because it was asked for: `isSyncNeeded()` answers yes
-only while a manual request is fresh — the Download books row and the system's sync
-configuration each stamp one, good for two minutes — so the system never
-schedules one of its own. A plain no is not an option: the system then skips
-`onStartSync()` and the sync screen freezes at 0 %. The Info screen shows how
-long ago the playlist was last read, which is the number to decide on.
+### Pairing
+
+The token is too long to type on five buttons. Pairing lets you enter it on the
+phone instead:
+
+1. The watch calls `POST /pair/start` and shows the code together with
+   `<host>/pair`.
+2. On the phone, the page takes the code and the token.
+3. The watch polls `GET /pair/<code>` every 3 s. The token is handed out once.
+4. The watch stores the token and checks it with `/v1/status`.
+
+A code expires after 10 minutes. The proxy only accepts a token that is already
+valid, so pairing grants nothing new. The server side is in
+`proxy/abconnect_proxy/pairing.py`.
+
+### Idle close
+
+The app menu is a normal app on screen. `Idle` ends it with `System.exit()`
+after **2 minutes** without input. Every input delegate and every shown view
+resets the clock. Work that runs without input holds the clock while it runs:
+a progress push, a pairing that waits for the phone, a watch-keyboard entry.
+The sync and the system player are not affected.
+
+A sync starts in one of two ways (`AbSyncDelegate.isSyncNeeded()`):
+
+- **By hand.** *Download books* and the system's sync configuration each stamp
+  a ticket that stays valid for two minutes. A manual trigger must be answered
+  with yes. Otherwise the system skips `onStartSync()` and the sync screen
+  freezes at 0 %.
+- **On the charger.** When the system asks on its own schedule, the answer is
+  yes only if all of these hold:
+  - the watch is charging
+  - *Sync on charger* is on
+  - the app is configured
+  - the playlist was last read more than 6 hours ago
+
+  This works like the automatic sync of Spotify and co. Switch it off in
+  *Settings* to allow manual syncs only.
+
+The Info screen shows how long ago the playlist was last read.
 
 The other way in is the system's own sync configuration, which is what shows the
 playlist and the state of each book on the server:
@@ -128,7 +184,7 @@ playlist and the state of each book on the server:
 5. Check the books
 6. **BACK** until the watch prompts for synchronization
 
-Downloading happens over Wi-Fi, sensibly on the charger.
+Downloading happens over Wi-Fi, ideally on the charger.
 
 ## Status
 
@@ -144,3 +200,7 @@ Open:
 - The playlist view shows up to 100 books without paging.
 - The progress push on pause is untested: whether the watch holds a phone
   connection at all during playback will only be shown by hardware.
+- Not yet run on hardware:
+  - pairing and the watch keyboard (`TextPicker`)
+  - the idle exit
+  - whether the system asks `isSyncNeeded()` while the watch charges on Wi-Fi

@@ -203,8 +203,17 @@ every caller shows up as `127.0.0.1`, the reverse proxy does not send
 `FORWARDED_ALLOW_IPS` in the quadlet. Never set it to `*`: uvicorn then
 believes whatever a client writes into the header itself.
 
+## Pairing
+
+If the reverse proxy only forwards selected paths, add `/pair` and `/pair/*`
+to them. The watch uses them to collect its token from the phone (see
+[../app/README.md](../app/README.md#pairing)). They are public, but only accept
+a token that is already valid, and they have their own backoff. The
+client-address note above applies to them too.
+
 ## Rotating a token without locking out the watch
 
 `tokens` is a list per user. Prepend the new token, replace the secret and
-restart (see *Changing users*), enter it in that user's watch app settings,
-then remove the old one from the list.
+restart (see *Changing users*), pair the watch again
+(*Settings → Pair with phone*) or enter the token in its settings, then remove
+the old one from the list.
