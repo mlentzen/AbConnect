@@ -10,15 +10,18 @@ user's own Audiobookshelf, cache and playlist.
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
 from contextlib import asynccontextmanager
+from urllib.parse import parse_qs
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from . import auth, media, progress
+from .pairing import CODE_TTL_SECONDS, PairingFull, PairingRegistry
 from .abs_client import AbsClient, AbsError
 from .cache import SAFE_ID, UnsafeBookId
 from .config import Config
@@ -62,6 +65,10 @@ def create_app(config: Config, *, abs_clients: dict[str, AbsClient] | None = Non
         # One semaphore for every user: a single prepare job at a time.
         app.state.users, app.state.budget = build_runtimes(config, asyncio.Semaphore(1), injected)
         app.state.failures = auth.FailureTracker()
+        # Pairing is public, so it gets a backoff of its own: a phone fumbling
+        # a code must not lock the watch out of /v1 behind the same address.
+        app.state.pairing = PairingRegistry()
+        app.state.pair_failures = auth.FailureTracker()
         sweeper = asyncio.create_task(_sweep_forever(app), name="cache-sweeper")
         # Run in the background so a book newly added to a playlist is already
         # segmented and ready before that user's watch syncs the next time.
@@ -407,3 +414,94 @@ def _register(app: FastAPI) -> None:
             results.append(result)
 
         return {"books": results}
+
+    # --- Pairing ------------------------------------------------------------
+    #
+    # The token is typed on the phone, not on the watch. See pairing.py.
+
+    @app.post("/pair/start")
+    async def pair_start(request: Request):
+        """The watch asks for a code to show."""
+        _pair_guard(request)
+        try:
+            code = request.app.state.pairing.start()
+        except PairingFull:
+            raise HTTPException(503, "Too many pairings open, try again later") from None
+        log.info("Pairing code issued to %s", _client(request))
+        return {"code": code, "expires_in": int(CODE_TTL_SECONDS)}
+
+    @app.get("/pair/{code}")
+    async def pair_poll(code: str, request: Request):
+        """The watch polls: 202 while waiting, the token once, 404 when gone."""
+        _pair_guard(request)
+        known, token = request.app.state.pairing.poll(code)
+        if not known:
+            request.app.state.pair_failures.record_failure(_client(request))
+            raise HTTPException(404, "Unknown or expired code")
+        if token is None:
+            return JSONResponse({"status": "pending"}, status_code=202)
+        log.info("Pairing completed for %s", _client(request))
+        return {"token": token}
+
+    @app.get("/pair", response_class=HTMLResponse)
+    async def pair_form():
+        return _pair_page()
+
+    @app.post("/pair", response_class=HTMLResponse)
+    async def pair_submit(request: Request):
+        """The phone hands over code and token.
+
+        Parsed by hand: an urlencoded form of two fields does not warrant
+        python-multipart as a dependency.
+        """
+        _pair_guard(request)
+        form = parse_qs((await request.body()).decode("utf-8", "replace"))
+        code = (form.get("code") or [""])[0]
+        token = (form.get("token") or [""])[0].strip()
+        config: Config = request.app.state.config
+        failures: auth.FailureTracker = request.app.state.pair_failures
+        client = _client(request)
+
+        if not token or auth.match_user(token, config.users) is None:
+            failures.record_failure(client)
+            log.warning("%s tried to pair with an invalid token", client)
+            return HTMLResponse(_pair_page(error="Token not valid.", code=code), status_code=401)
+        if not request.app.state.pairing.complete(code, token):
+            failures.record_failure(client)
+            return HTMLResponse(
+                _pair_page(error="Code unknown or expired. Start pairing on the watch again."),
+                status_code=404,
+            )
+        failures.record_success(client)
+        return _pair_page(done=True)
+
+
+def _client(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def _pair_guard(request: Request) -> None:
+    remaining = request.app.state.pair_failures.locked(_client(request))
+    if remaining:
+        raise HTTPException(429, f"Too many failed attempts, locked for {int(remaining)} s")
+
+
+def _pair_page(error: str = "", code: str = "", done: bool = False) -> str:
+    if done:
+        body = "<p class=ok>Paired. Look at your watch.</p>"
+    else:
+        message = f"<p class=err>{html.escape(error)}</p>" if error else ""
+        body = f"""{message}
+<form method=post action=/pair>
+<label>Code shown on the watch<input name=code value="{html.escape(code)}" autocomplete=off
+ autocapitalize=characters spellcheck=false required maxlength=12></label>
+<label>Token<input name=token type=password autocomplete=off required></label>
+<button>Pair</button>
+</form>"""
+    return f"""<!doctype html>
+<html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<meta name=robots content=noindex><title>AbConnect pairing</title>
+<style>body{{font:16px system-ui,sans-serif;max-width:26rem;margin:2rem auto;padding:0 1rem}}
+label{{display:block;margin:1rem 0}}input{{display:block;width:100%;font-size:1.2rem;padding:.4rem;box-sizing:border-box}}
+button{{font-size:1.1rem;padding:.5rem 1.5rem}}.err{{color:#b00}}.ok{{color:#070;font-size:1.3rem}}</style>
+</head><body><h1>AbConnect</h1>{body}</body></html>"""
