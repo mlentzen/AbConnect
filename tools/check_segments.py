@@ -154,7 +154,10 @@ def main() -> int:
     target = Path(args.keep) if args.keep else Path(tempfile.mkdtemp(prefix="abconnect-"))
     target.mkdir(parents=True, exist_ok=True)
 
-    header = f"{'Seg':>3}  {'Codec':<12} {'Rate':>6} {'Ch':>3}  {'Length':>8} {'Δ':>6}  {'Bytes':>10} {'Ø dB':>7} {'Max dB':>7}  Decode run"
+    header = (
+        f"{'Seg':>3}  {'Codec':<12} {'Rate':>6} {'Ch':>3}  {'Length':>8} {'Δ':>6}  "
+        f"{'Bytes':>10} {'Ø dB':>7} {'Max dB':>7}  Decode run"
+    )
     print(header)
     print("-" * len(header))
 

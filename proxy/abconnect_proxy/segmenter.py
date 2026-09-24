@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from itertools import pairwise
 
 from .models import Chapter, Segment, SegmentPlan, SourceFile
 
@@ -50,7 +51,7 @@ def validate_chapters(chapters: list[Chapter], total_duration: float) -> str:
     for chapter in ordered:
         if chapter.duration <= 0:
             return f"chapter '{chapter.title}' has no duration"
-    for previous, current in zip(ordered, ordered[1:]):
+    for previous, current in pairwise(ordered):
         if current.start < previous.end - TOLERANCE:
             return f"chapters overlap at '{current.title}'"
 

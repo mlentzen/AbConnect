@@ -2,7 +2,12 @@ import pytest
 
 from abconnect_proxy.pairing import ALPHABET, CODE_LENGTH, PairingFull, PairingRegistry
 
-from .test_api import BOB_TOKEN, TOKEN, build_client, config  # noqa: F401 (fixture)
+from .test_api import BOB_TOKEN, TOKEN, build_client, load_config
+
+
+@pytest.fixture
+def config(tmp_path):
+    return load_config(tmp_path)
 
 
 class TestRegistry:
