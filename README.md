@@ -80,8 +80,20 @@ python3 -m venv .venv && .venv/bin/pip install -e './proxy[dev]'
 CIQ_HOME=/path/to/sdk ./app/build.sh
 ```
 
-CI (`.github/workflows/build.yml`) runs the proxy tests. It also compiles the
-app against a substitute device profile.
+CI (`.github/workflows/build.yml`) runs on every push and pull request:
+
+| Job | What it does |
+|---|---|
+| `lint` | `ruff check` over `proxy/` and `tools/` (config in `proxy/pyproject.toml`) |
+| `proxy` | the proxy tests, with ffmpeg |
+| `app` | compiles the app against a substitute device profile; the `.prg` is attached to the run as artifact **`abconnect-prg`** (Actions → run → Artifacts) |
+| `image` | builds `proxy/Containerfile`; pushes `ghcr.io/<owner>/abconnect-proxy` from the default branch (`latest`) and `v*` tags (version) |
+
+The CI `.prg` contains no proxy URL or token; set both up on the watch. Each
+run signs the app with a throwaway key unless the repository secret
+`CIQ_DEVELOPER_KEY` holds one (`base64 -w0 developer_key`). With a throwaway
+key, a new build may not install over an older one, so delete the app from the
+watch first.
 
 ## Status
 

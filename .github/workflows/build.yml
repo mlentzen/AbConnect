@@ -3,9 +3,31 @@ name: build
 on:
   push:
     branches: ["**"]
+    tags: ["v*"]
   pull_request:
 
+permissions:
+  contents: read
+
+# A newer push to the same ref makes the running build moot.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Ruff
+        # The config lives with the proxy; tools/ is checked by the same rules.
+        run: |
+          pip install ruff
+          ruff check --config proxy/pyproject.toml --output-format github proxy tools
+
   proxy:
     runs-on: ubuntu-latest
     steps:
@@ -13,6 +35,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: proxy/pyproject.toml
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: Dependencies
@@ -29,12 +53,26 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - name: Fetch Connect IQ SDK
+      - name: Latest Connect IQ SDK
+        id: sdk
         run: |
           set -euo pipefail
           curl -sSL https://developer.garmin.com/downloads/connect-iq/sdks/sdks.json -o sdks.json
-          file=$(python3 -c "import json;print(json.load(open('sdks.json'))[-1]['linux'])")
-          curl -sSL "https://developer.garmin.com/downloads/connect-iq/sdks/$file" -o sdk.zip
+          echo "file=$(python3 -c "import json;print(json.load(open('sdks.json'))[-1]['linux'])")" >> "$GITHUB_OUTPUT"
+
+      # Keyed by the SDK's file name: a new SDK release is a new key.
+      - name: Cache SDK
+        id: sdk-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/ciq
+          key: ciq-sdk-${{ steps.sdk.outputs.file }}
+
+      - name: Fetch Connect IQ SDK
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          curl -sSL "https://developer.garmin.com/downloads/connect-iq/sdks/${{ steps.sdk.outputs.file }}" -o sdk.zip
           mkdir -p "$HOME/ciq" && unzip -q sdk.zip -d "$HOME/ciq"
 
       # The real device profiles are only provided by the SDK Manager after a
@@ -44,14 +82,82 @@ jobs:
       - name: Substitute device profile
         run: python3 tools/stub_device.py
 
+      # A repository secret CIQ_DEVELOPER_KEY (base64 of the DER key) signs
+      # every build with the same key, so a newer .prg can replace an older one
+      # on the watch. Without it each run signs with a throwaway key.
       - name: Developer key
-        run: |
-          mkdir -p "$HOME/.ciq"
-          openssl genrsa -out "$HOME/.ciq/dev.pem" 4096
-          openssl pkcs8 -topk8 -inform PEM -outform DER \
-            -in "$HOME/.ciq/dev.pem" -out "$HOME/.ciq/developer_key" -nocrypt
-
-      - name: Build
         env:
-          CIQ_HOME: ${{ github.workspace }}/../ciq
-        run: CIQ_HOME="$HOME/ciq" ./app/build.sh
+          CIQ_DEVELOPER_KEY: ${{ secrets.CIQ_DEVELOPER_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.ciq"
+          if [[ -n "${CIQ_DEVELOPER_KEY:-}" ]]; then
+            echo "$CIQ_DEVELOPER_KEY" | base64 -d > "$HOME/.ciq/developer_key"
+          else
+            openssl genrsa -out "$HOME/.ciq/dev.pem" 4096
+            openssl pkcs8 -topk8 -inform PEM -outform DER \
+              -in "$HOME/.ciq/dev.pem" -out "$HOME/.ciq/developer_key" -nocrypt
+          fi
+
+      # No PROXY_URL/PROXY_TOKEN: the artifact carries no secret. URL and
+      # token are set on the watch (Settings, Pair with phone).
+      - name: Build
+        run: |
+          set -euo pipefail
+          OUTPUT="build/abconnect-${GITHUB_SHA::7}.prg" CIQ_HOME="$HOME/ciq" ./app/build.sh
+
+      - name: Upload .prg
+        uses: actions/upload-artifact@v4
+        with:
+          name: abconnect-prg
+          path: app/build/abconnect-*.prg
+          if-no-files-found: error
+          retention-days: 30
+
+  image:
+    needs: [lint, proxy]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      # Published from the default branch and from version tags only; every
+      # other push and pull request just proves the Containerfile builds.
+      PUBLISH: ${{ github.event_name == 'push' && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || startsWith(github.ref, 'refs/tags/v')) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Image name
+        id: name
+        # ghcr.io wants the owner in lower case.
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/abconnect-proxy" >> "$GITHUB_OUTPUT"
+
+      - name: Tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.name.outputs.image }}
+          tags: |
+            type=sha
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Log in to ghcr.io
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: proxy
+          file: proxy/Containerfile
+          push: ${{ env.PUBLISH == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

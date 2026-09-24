@@ -69,6 +69,13 @@ image is produced on first start from `proxy/Containerfile`.
 | `abconnect-proxy-rebuild.path` | `~/.config/systemd/user/` | watches the branch tip |
 | `abconnect-proxy-rebuild.service` | `~/.config/systemd/user/` | rebuilds and restarts |
 
+*Alternative:* CI publishes a ready-made image as
+`ghcr.io/<owner>/abconnect-proxy:latest` (default branch) and `:<version>`
+(tags). To use it instead of building locally, set
+`Image=ghcr.io/<owner>/abconnect-proxy:latest` in the `.container` unit and
+drop the `.build` unit and the rebuild units. The package is private until you
+make it public on GitHub; otherwise log Podman in to ghcr.io first.
+
 Two lines are machine-dependent — the build context and the watched ref file.
 The script fills both in from the actual location of the checkout and the
 checked-out branch; the repo only holds default values. So after a branch
