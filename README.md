@@ -1,4 +1,4 @@
-# AbConnect
+# <img src="app/resources/drawables/ab.svg" alt="" width="40" height="40"> AbConnect
 
 [![build](https://github.com/mlentzen/AbConnect/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/mlentzen/AbConnect/actions/workflows/build.yml)
 [![proxy image](https://github.com/mlentzen/AbConnect/actions/workflows/proxy-image.yml/badge.svg?branch=main)](https://github.com/mlentzen/AbConnect/actions/workflows/proxy-image.yml)
@@ -39,8 +39,7 @@ uv run --directory proxy --extra dev pytest
 # Proxy: install and run -> deploy/README.md
 ./deploy/install.sh
 
-# Build the app -> app/README.md (URL and token go into the .prg)
-PROXY_URL=https://abconnect.example PROXY_TOKEN=... \
+# Build the app yourself -> app/README.md
 CIQ_HOME=/path/to/sdk ./app/build.sh
 ```
 
