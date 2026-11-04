@@ -62,6 +62,28 @@ class MessageView extends WatchUi.View {
     }
 }
 
+//! Menu2 on the fēnix draws the IQ screen if a label or subtitle is "".
+//! null is a missing subtitle; "" is not.
+module MenuText {
+
+    function label(text as String, fallback as String) as String {
+        if (text.length() > 0) {
+            return text;
+        }
+        if (fallback.length() > 0) {
+            return fallback;
+        }
+        return "-";
+    }
+
+    function sublabel(text as String) as String? {
+        if (text.length() == 0) {
+            return null;
+        }
+        return text;
+    }
+}
+
 class BackDelegate extends WatchUi.BehaviorDelegate {
 
     function initialize() {

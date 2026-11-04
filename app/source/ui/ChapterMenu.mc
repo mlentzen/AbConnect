@@ -10,7 +10,7 @@ class ChapterMenu extends WatchUi.Menu2 {
 
     function initialize(bookId as String) {
         var info = Store.bookInfo(bookId);
-        Menu2.initialize({ :title => info[0] });
+        Menu2.initialize({ :title => MenuText.label(info[0], bookId) });
 
         var refs = Store.orderedRefs(bookId);
         var position = Store.position(bookId);
@@ -41,9 +41,12 @@ class ChapterMenu extends WatchUi.Menu2 {
             if (parts == null) {
                 continue;
             }
-            addItem(
-                new WatchUi.MenuItem(parts[2], clock(start), Store.toNumber(parts[0]), null)
-            );
+            addItem(new WatchUi.MenuItem(
+                MenuText.label(parts[2], Store.toNumber(parts[0]).toString()),
+                clock(start),
+                Store.toNumber(parts[0]),
+                null
+            ));
             start += Store.toNumber(parts[1]);
         }
     }
