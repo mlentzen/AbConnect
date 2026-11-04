@@ -2,7 +2,7 @@
     <string id="AppName">AbConnect</string>
 
     <string id="settingProxyUrlTitle">Proxy URL</string>
-    <string id="settingProxyUrlPrompt">Base URL of abconnect-proxy, e.g. https://abconnect.example</string>
+    <string id="settingProxyUrlPrompt">Base URL of abconnect-proxy, e.g. https://abconnect.example.com</string>
     <string id="settingProxyTokenTitle">Proxy token</string>
     <string id="settingProxyTokenPrompt">This watch's token from the proxy's users.toml</string>
 

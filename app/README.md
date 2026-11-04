@@ -33,9 +33,9 @@ middle of a chapter.
 
 ## Building
 
+Build the `.prg` yourself.
+
 ```sh
-PROXY_URL=https://abconnect.example \
-PROXY_TOKEN=<this watch's token from users.toml> \
 CIQ_HOME=/path/to/sdk ./build.sh
 ```
 
@@ -44,24 +44,19 @@ You need the Connect IQ SDK, a developer key (`CIQ_KEY`, default
 `DEVICE` selects it and defaults to `fenix7xpro`.
 
 `build.sh` reads a `.env` next to the script (copy `.env.example`). `PROXY_URL` and `PROXY_TOKEN`
-are written into `source/BuildDefaults.mc` and baked into the package, so a
-side-loaded app has them without a settings page in Garmin Connect. The file
-is regenerated on every build and stays out of git, because it contains the
-token. Settings from the phone still take precedence. **The finished `.prg`
-contains the token. Do not share it.**
-
-The URL and the token are configured during the build, so each person sets
-them by hand. A settings pane for entering them is planned.
+are optional. Left unset, the build uses `https://abconnect.example.com` and
+`replace-me`. Enter the real values in the app under **Settings**, or set them
+at build time to bake them in. A value stored on the watch overrides the one
+from the build. They are written into `source/BuildDefaults.mc`, which is
+regenerated on every build and stays out of git, because a build given a real
+token contains it. **Do not share a `.prg` built with your token.**
 
 | Variable | Required | Default | Meaning |
 |---|---|---|---|
-| `PROXY_URL` | effectively yes | empty | base URL of the proxy |
-| `PROXY_TOKEN` | effectively yes | empty | this watch's token from the proxy's `users.toml` |
+| `PROXY_URL` | - | `https://abconnect.example.com` | base URL of the proxy |
+| `PROXY_TOKEN` | - | `replace-me` | this watch's token from the proxy's `users.toml` |
 | `LOG_LEVEL` | - | `0` | 0 errors, 1 warnings, 2 course of events, 3 everything |
 | `DEVICE` | - | `fenix7xpro` | device id passed to the compiler |
-
-Without the URL and token the script still builds and warns. The app then
-reports *"Settings needed"* on the watch.
 
 `copy.sh` copies the build to a watch mounted over MTP; it needs `WATCH_MTP` in the same `.env` (see the script).
 
@@ -82,12 +77,13 @@ the app menu is the library behind those controls.
 
 ```
 AbConnect
-├─ Continue         the book that was last playing, one press  (only when there is one)
-├─ Books            everything playable on the watch → chapters → Resume / From the start
-├─ Sync progress    positions both ways over the phone, no Wi-Fi, no sync mode
-├─ Download books   Wi-Fi: report progress, read the playlist, mirror it
-├─ Reset everything media cache and store, after a confirmation
-└─ Info             version, commit, build date, and what is on the watch
+├─ Continue              the book that was last playing, one press  (only when there is one)
+├─ Books                 everything playable on the watch → chapters → Resume / From the start
+├─ Sync progress         positions both ways over the phone, no Wi-Fi, no sync mode
+├─ Download books        Wi-Fi: report progress, read the playlist, mirror it
+├─ Chosen on the server  the playlist and the state of each book
+├─ Settings              proxy URL, token, and Reset everything
+└─ Info                  version, commit, build date, and what is on the watch
 ```
 
 A sync runs only when you ask for it, from **Download books** or from the
