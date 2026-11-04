@@ -50,6 +50,9 @@ is regenerated on every build and stays out of git, because it contains the
 token. Settings from the phone still take precedence. **The finished `.prg`
 contains the token. Do not share it.**
 
+The URL and the token are configured during the build, so each person sets
+them by hand. A settings pane for entering them is planned.
+
 | Variable | Required | Default | Meaning |
 |---|---|---|---|
 | `PROXY_URL` | effectively yes | empty | base URL of the proxy |
