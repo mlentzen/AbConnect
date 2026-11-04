@@ -8,9 +8,10 @@ import Toybox.WatchUi;
 // Symbols, so they never collide with book IDs (always strings).
 const CONTINUE_ITEM = :continuePlayback;
 const BOOKS_ITEM = :books;
+const SERVER_ITEM = :onServer;
 const SYNC_ITEM = :syncNow;
-const RESET_ITEM = :resetAll;
 const INFO_ITEM = :info;
+const SETTINGS_ITEM = :settings;
 
 class MainMenu extends WatchUi.Menu2 {
 
@@ -38,15 +39,21 @@ class MainMenu extends WatchUi.Menu2 {
     }
 
     private static function state() as String {
+        return stateWith(Store.playlistCounts());
+    }
+
+    private static function stateWith(counts as Array<Number>) as String {
         var resumable = Store.resumableBook();
         return ((resumable == null) ? "" : resumable)
-            + "|" + Store.localBooks().size().toString()
+            + "|" + counts[0].toString()
+            + "|" + counts[1].toString()
             + "|" + ProgressPush.pending().toString()
             + "|" + (Media.getCacheStatistics().size / 1048576).toString();
     }
 
     private function build() as Void {
-        _state = state();
+        var counts = Store.playlistCounts();
+        _state = stateWith(counts);
 
         var resumable = Store.resumableBook();
         if (resumable != null) {
@@ -60,7 +67,7 @@ class MainMenu extends WatchUi.Menu2 {
         var books = Store.localBooks();
         Log.debugCode("Menu: playable", books.size());
         addItem(row(
-            Rez.Strings.menuBooks, booksSubtitle(books.size()),
+            Rez.Strings.menuBooks, localSubtitle(books.size()),
             $.BOOKS_ITEM, Rez.Drawables.IconBooks
         ));
 
@@ -74,10 +81,14 @@ class MainMenu extends WatchUi.Menu2 {
             $.SYNC_ITEM, Rez.Drawables.IconSync
         ));
 
-        var stats = Media.getCacheStatistics();
         addItem(row(
-            Rez.Strings.resetAll, (stats.size / 1048576).toString() + " MB",
-            $.RESET_ITEM, Rez.Drawables.IconReset
+            Rez.Strings.syncFromServer, serverSubtitle(counts),
+            $.SERVER_ITEM, Rez.Drawables.IconSync
+        ));
+
+        addItem(row(
+            Rez.Strings.menuSettings, null,
+            $.SETTINGS_ITEM, Rez.Drawables.IconSettings
         ));
 
         addItem(row(
@@ -98,11 +109,21 @@ class MainMenu extends WatchUi.Menu2 {
         );
     }
 
-    private static function booksSubtitle(count as Number) as String {
+    private static function localSubtitle(count as Number) as String {
         if (count == 0) {
             return WatchUi.loadResource(Rez.Strings.nothingOnWatch) as String;
         }
         return count.toString() + " " + (WatchUi.loadResource(Rez.Strings.booksCount) as String);
+    }
+
+    private static function serverSubtitle(counts as Array<Number>) as String? {
+        if (counts[0] == 0) {
+            return null;
+        }
+        if (counts[1] > 0) {
+            return counts[1].toString() + " " + (WatchUi.loadResource(Rez.Strings.progressPending) as String);
+        }
+        return counts[0].toString() + " " + (WatchUi.loadResource(Rez.Strings.booksCount) as String);
     }
 }
 
@@ -130,10 +151,12 @@ class MainMenuDelegate extends WatchUi.Menu2InputDelegate {
 
     // Held as a field so it is not collected while its response is in flight.
     private var _push as ProgressPush;
+    private var _catalog as ProxyClient?;
 
     function initialize() {
         Menu2InputDelegate.initialize();
         _push = new ProgressPush();
+        _catalog = null;
     }
 
     function onSelect(item as WatchUi.MenuItem) as Void {
@@ -166,19 +189,29 @@ class MainMenuDelegate extends WatchUi.Menu2InputDelegate {
             return;
         }
 
+        if (id == $.SERVER_ITEM) {
+            // The page whose subtitle is "Chosen on the server". Sync
+            // configuration shows it; the watch never opens that mode.
+            Log.info("Menu: playlist on the server");
+            if (Store.playlistRows().size() > 0) {
+                SyncConfigView.openStored();
+                refreshCatalog();
+                return;
+            }
+            WatchUi.pushView(new PlaylistFetchView(), new BackDelegate(), WatchUi.SLIDE_IMMEDIATE);
+            return;
+        }
+
         if (id == $.PROGRESS_ITEM) {
             Log.info("Menu: syncing progress over the phone");
             _push.start();
             return;
         }
 
-        if (id == $.RESET_ITEM) {
-            Log.info("Menu: asking about reset");
-            WatchUi.pushView(
-                new WatchUi.Confirmation(WatchUi.loadResource(Rez.Strings.resetConfirm) as String),
-                new ResetConfirmationDelegate(),
-                WatchUi.SLIDE_IMMEDIATE
-            );
+        if (id == $.SETTINGS_ITEM) {
+            Log.info("Menu: settings");
+            var menu = new SettingsMenu();
+            WatchUi.pushView(menu, new SettingsMenuDelegate(menu), WatchUi.SLIDE_IMMEDIATE);
             return;
         }
 
@@ -200,6 +233,29 @@ class MainMenuDelegate extends WatchUi.Menu2InputDelegate {
 
     function onBack() as Void {
         WatchUi.popView(WatchUi.SLIDE_IMMEDIATE);
+    }
+
+    //! Updates the stored playlist while the page already on screen stays put.
+    private function refreshCatalog() as Void {
+        if (_catalog == null) {
+            _catalog = new ProxyClient();
+        }
+        var catalog = _catalog;
+        if (catalog == null || !catalog.isConfigured()) {
+            return;
+        }
+        catalog.playlist(method(:onCatalog));
+    }
+
+    function onCatalog(code as Number, data as Dictionary or String or Null) as Void {
+        if (code != 200 || !(data instanceof Dictionary)) {
+            return;
+        }
+        var books = data["books"];
+        if (!(books instanceof Array) || books.size() == 0) {
+            return;
+        }
+        Store.rememberPlaylist(books as Array);
     }
 }
 

@@ -29,6 +29,8 @@
     <string id="menuContinue">Fortsetzen</string>
     <string id="menuBooks">Bücher</string>
     <string id="menuInfo">Info</string>
+    <string id="menuSettings">Einstellungen</string>
+    <string id="settingNotSet">Nicht gesetzt</string>
     <string id="menuSync">Bücher herunterladen</string>
     <string id="booksCount">auf der Uhr</string>
     <string id="progressPending">wartend</string>

@@ -52,6 +52,91 @@ module Store {
         Application.Storage.setValue(Keys.LAST_CHECK, Time.now().value());
     }
 
+    //! Remember the server playlist so Info and the Books page can show it
+    //! without opening sync configuration. Title is last because it may contain "|".
+    function rememberPlaylist(books as Array) as Void {
+        var rows = [] as Array<String>;
+        var ids = [] as Array<String>;
+        for (var i = 0; i < books.size(); ++i) {
+            var book = books[i];
+            if (!(book instanceof Dictionary)) {
+                continue;
+            }
+            var id = book["id"];
+            if (!(id instanceof String)) {
+                continue;
+            }
+            var status = book["status"];
+            var percent = book["percent"];
+            var title = book["title"];
+            rows.add(
+                (id as String)
+                    + "|" + ((status instanceof String) ? status as String : "")
+                    + "|" + ((percent instanceof Number) ? (percent as Number).toString() : "")
+                    + "|" + ((title instanceof String) ? title as String : "")
+            );
+            ids.add(id as String);
+        }
+        Application.Storage.setValue(Keys.PLAYLIST, rows);
+        setDesired(ids);
+    }
+
+    //! [id, status, percent, title] of one stored playlist row.
+    function playlistEntry(row as String) as Array<String> {
+        var parts = split(row, "|");
+        var title = "";
+        for (var i = 3; i < parts.size(); ++i) {
+            if (i > 3) {
+                title += "|";
+            }
+            title += parts[i];
+        }
+        return [
+            (parts.size() > 0) ? parts[0] : "",
+            (parts.size() > 1) ? parts[1] : "",
+            (parts.size() > 2) ? parts[2] : "",
+            title
+        ] as Array<String>;
+    }
+
+    function playlistRows() as Array<String> {
+        var stored = Application.Storage.getValue(Keys.PLAYLIST);
+        if (stored instanceof Array) {
+            return stored as Array<String>;
+        }
+        return [] as Array<String>;
+    }
+
+    //! [books in the playlist, books not on the watch yet].
+    //!
+    //! Without a fetched playlist, the books already stored are the whole count
+    //! and nothing is waiting.
+    function playlistCounts() as Array<Number> {
+        var rows = playlistRows();
+        var total = rows.size();
+        var waiting = 0;
+        if (total == 0) {
+            var ids = desired();
+            total = ids.size();
+            for (var i = 0; i < ids.size(); ++i) {
+                if (!onWatch(ids[i], 0)) {
+                    waiting += 1;
+                }
+            }
+            if (total == 0) {
+                return [localBooks().size(), 0] as Array<Number>;
+            }
+            return [total, waiting] as Array<Number>;
+        }
+        for (var i = 0; i < rows.size(); ++i) {
+            var id = playlistEntry(rows[i])[0];
+            if (id.length() == 0 || !onWatch(id, 0)) {
+                waiting += 1;
+            }
+        }
+        return [total, waiting] as Array<Number>;
+    }
+
     function lastCheck() as Number {
         var stored = Application.Storage.getValue(Keys.LAST_CHECK);
         if (stored instanceof Number) {
@@ -62,35 +147,98 @@ module Store {
 
     // --- Local inventory -----------------------------------------------------
 
-    //! Map refId -> "segIdx|duration|title" for a book.
-    function localTracks(bookId as String) as Dictionary {
-        var stored = Application.Storage.getValue(Keys.local(bookId));
+    //! How many tracks go into one stored map. The watch rejected a single map
+    //! at about sixty segments (System Error in setValue), which killed the
+    //! sync before the remaining books were reached.
+    const TRACKS_PER_CHUNK = 16;
+    const MAX_TRACK_CHUNKS = 40;
+
+    function readChunk(bookId as String, chunk as Number) as Dictionary? {
+        var stored = Application.Storage.getValue(Keys.localChunk(bookId, chunk));
         if (stored instanceof Dictionary) {
             return stored;
         }
-        return {};
+        return null;
     }
 
+    function writeChunk(bookId as String, chunk as Number, tracks as Dictionary) as Boolean {
+        try {
+            Application.Storage.setValue(Keys.localChunk(bookId, chunk), tracks);
+            return true;
+        } catch (ex) {
+            Log.error("Store: segment did not fit for " + bookId);
+            return false;
+        }
+    }
+
+    //! Map refId -> "segIdx|duration|title" for a book, across every chunk.
+    function localTracks(bookId as String) as Dictionary {
+        var merged = {};
+        for (var chunk = 0; chunk < MAX_TRACK_CHUNKS; ++chunk) {
+            var stored = readChunk(bookId, chunk);
+            if (stored == null) {
+                break;
+            }
+            var ids = stored.keys();
+            for (var i = 0; i < ids.size(); ++i) {
+                merged[ids[i]] = stored[ids[i]];
+            }
+        }
+        return merged;
+    }
+
+    //! False when the store refused the write. The caller keeps syncing.
     function addLocalTrack(
         bookId as String, refId as Object, segment as Number, duration as Number, title as String
-    ) as Void {
+    ) as Boolean {
         remember(bookId);
-        var tracks = localTracks(bookId);
-        tracks[refId] = segment.toString() + "|" + duration.toString() + "|" + title;
-        Application.Storage.setValue(Keys.local(bookId), tracks);
+        var record = segment.toString() + "|" + duration.toString() + "|" + title;
+        var open = -1;
+        for (var chunk = 0; chunk < MAX_TRACK_CHUNKS; ++chunk) {
+            var stored = readChunk(bookId, chunk);
+            if (stored == null) {
+                if (open < 0) {
+                    open = chunk;
+                }
+                break;
+            }
+            if (stored[refId] != null) {
+                stored[refId] = record;
+                return writeChunk(bookId, chunk, stored);
+            }
+            if (open < 0 && stored.size() < TRACKS_PER_CHUNK) {
+                open = chunk;
+            }
+        }
+        if (open < 0) {
+            Log.error("Store: no room left in " + bookId);
+            return false;
+        }
+        var tracks = readChunk(bookId, open);
+        if (tracks == null) {
+            tracks = {};
+        }
+        tracks[refId] = record;
+        return writeChunk(bookId, open, tracks);
     }
 
     //! [segIdx, duration, title] of a local track, or null.
     function trackInfo(bookId as String, refId as Object) as Array<String>? {
-        var stored = localTracks(bookId)[refId];
-        if (!(stored instanceof String)) {
-            return null;
+        for (var chunk = 0; chunk < MAX_TRACK_CHUNKS; ++chunk) {
+            var stored = readChunk(bookId, chunk);
+            if (stored == null) {
+                break;
+            }
+            var value = stored[refId];
+            if (value instanceof String) {
+                var parts = split(value, "|");
+                if (parts.size() < 3) {
+                    return null;
+                }
+                return parts;
+            }
         }
-        var parts = split(stored, "|");
-        if (parts.size() < 3) {
-            return null;
-        }
-        return parts;
+        return null;
     }
 
     //! The refIds of a book in segment order, gaps left out.
@@ -166,7 +314,16 @@ module Store {
     }
 
     function forgetBook(bookId as String) as Void {
-        Application.Storage.deleteValue(Keys.local(bookId));
+        for (var chunk = 0; chunk < MAX_TRACK_CHUNKS; ++chunk) {
+            var key = Keys.localChunk(bookId, chunk);
+            if (Application.Storage.getValue(key) == null) {
+                if (chunk > 0) {
+                    break;
+                }
+                continue;
+            }
+            Application.Storage.deleteValue(key);
+        }
         Application.Storage.deleteValue(Keys.book(bookId));
         var known = knownBooks();
         if (known.indexOf(bookId) >= 0) {
@@ -208,16 +365,47 @@ module Store {
         return ["", "", "0"] as Array<String>;
     }
 
-    //! Books that have at least one playable segment on the watch.
+    //! Books whose every segment is stored. A partial download is not on the watch.
     function localBooks() as Array<String> {
         var books = [] as Array<String>;
         var ids = knownBooks();
         for (var i = 0; i < ids.size(); ++i) {
-            if (localTracks(ids[i]).size() > 0) {
+            if (onWatch(ids[i], 0)) {
                 books.add(ids[i]);
             }
         }
         return books;
+    }
+
+    //! True when at least as many segments are stored as the book is supposed to have.
+    //!
+    //! The menu calls this once per playlist row. Walking every segment and
+    //! splitting its record trips the watchdog ("Code Executed Too Long"),
+    //! so this only counts entries. expectedHint is the server's segment
+    //! count when the caller has it. The stored book info is used as well,
+    //! and the larger of the two wins, so a short local list cannot pass
+    //! for a finished book. A count of 0 means the length is not known yet,
+    //! and the book stays off the watch.
+    function onWatch(bookId as String, expectedHint as Number) as Boolean {
+        var expected = toNumber(bookInfo(bookId)[2]);
+        if (expectedHint > expected) {
+            expected = expectedHint;
+        }
+        if (expected <= 0) {
+            return false;
+        }
+        var count = 0;
+        for (var chunk = 0; chunk < MAX_TRACK_CHUNKS; ++chunk) {
+            var stored = readChunk(bookId, chunk);
+            if (stored == null) {
+                break;
+            }
+            count += stored.size();
+            if (count >= expected) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // --- Progress ---------------------------------------------------------
@@ -309,6 +497,56 @@ module Store {
     //! system asks later must be decided without it.
     function clearSyncRequest() as Void {
         Application.Storage.deleteValue(Keys.SYNC_REQUEST);
+    }
+
+    //! A stop this soon after a restart is the same Back press arriving again.
+    const RESUME_ECHO_SECONDS = 3;
+    //! After a restart, a second stop inside this window is the user cancelling.
+    //! A later stop is treated as a notification dismiss and the sync restarts.
+    const RESUME_CANCEL_WINDOW_SECONDS = 20;
+    //! Restarts of one dismiss. Past this the restart gives up, so a Back press
+    //! the system keeps repeating cannot loop forever.
+    const RESUME_ECHO_LIMIT = 2;
+
+    //! Record a restart. The count grows only inside the echo window and
+    //! starts over after it, so a later dismiss is a new case.
+    function noteResume() as Number {
+        var now = Time.now().value();
+        var count = 1;
+        var existing = Application.Storage.getValue(Keys.SYNC_RESUME);
+        if (existing instanceof Array && existing.size() >= 2) {
+            var stamped = existing[0];
+            var previous = existing[1];
+            if (stamped instanceof Number && previous instanceof Number) {
+                if (now - stamped < RESUME_ECHO_SECONDS) {
+                    count = previous + 1;
+                }
+            }
+        }
+        try {
+            Application.Storage.setValue(Keys.SYNC_RESUME, [now, count]);
+        } catch (ex) {
+            Log.error("Store: resume stamp did not fit");
+        }
+        return count;
+    }
+
+    //! True when this stop is a second Back soon after a restart.
+    function resumeWasCancelled() as Boolean {
+        var existing = Application.Storage.getValue(Keys.SYNC_RESUME);
+        if (!(existing instanceof Array) || existing.size() < 1) {
+            return false;
+        }
+        var stamped = existing[0];
+        if (!(stamped instanceof Number)) {
+            return false;
+        }
+        var age = Time.now().value() - stamped;
+        return age >= RESUME_ECHO_SECONDS && age < RESUME_CANCEL_WINDOW_SECONDS;
+    }
+
+    function clearResume() as Void {
+        Application.Storage.deleteValue(Keys.SYNC_RESUME);
     }
 
     //! A day, for the plugged-in sync. A manual request is not limited by this.

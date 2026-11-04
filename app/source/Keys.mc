@@ -28,8 +28,19 @@ module Keys {
     //! startSync() ends the app and relaunches it in sync mode; this stamp is
     //! how isSyncNeeded() can still tell that the sync was asked for by hand.
     const SYNC_REQUEST = "SYN";
+    //! [timestamp, count] when a sync was restarted after Back.
+    //!
+    //! Dismissing a notification with Back ends the sync session. The restart
+    //! is how the download continues, and the count stops a restart loop.
+    const SYNC_RESUME = "RSM";
     //! When a plugged-in sync last started. Manual syncs do not write this.
     const LAST_AUTO_SYNC = "AUT";
+    //! Last playlist fetched from the proxy: id, status, percent, title.
+    //!
+    //! Sync configuration is where the simulator shows this list. The watch
+    //! never opens that mode from the music menu, so the playback menu reads
+    //! the same snapshot.
+    const PLAYLIST = "PLS";
     //! Books that have segments on the watch.
     //!
     //! Application.Storage cannot enumerate its keys. Without this list a
@@ -37,7 +48,10 @@ module Keys {
     //! in the media cache forever.
     const KNOWN = "KNW";
 
-    //! Prefix: map refId -> "segIdx|duration" for a book.
+    //! Prefix: map refId -> "segIdx|duration|title" for a book.
+    //!
+    //! Chunk 0 keeps this key. Further chunks append "#n", because one map
+    //! is capped at 8 KB and a long book does not fit in it.
     const LOCAL_PREFIX = "L_";
     //! Prefix: "title|author|segmentCount" for a book.
     const BOOK_PREFIX = "B_";
@@ -47,6 +61,14 @@ module Keys {
 
     function local(bookId as String) as String {
         return LOCAL_PREFIX + bookId;
+    }
+
+    //! Chunk 0 is the original key, so a store written before chunking still loads.
+    function localChunk(bookId as String, chunk as Number) as String {
+        if (chunk <= 0) {
+            return local(bookId);
+        }
+        return local(bookId) + "#" + chunk.toString();
     }
 
     function book(bookId as String) as String {

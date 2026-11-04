@@ -24,7 +24,7 @@ class AbContentIterator extends Media.ContentIterator {
         _index = 0;
         _startPosition = 0;
         _startApplied = false;
-        _profile = makeProfile();
+        _profile = PlaybackProfile.standard();
         Log.info("Iterator: opening book " + bookId);
 
         var info = Store.bookInfo(bookId);
@@ -404,8 +404,61 @@ class AbContentIterator extends Media.ContentIterator {
     function getPlaybackProfile() as Media.PlaybackProfile? {
         return _profile;
     }
+}
 
-    private function makeProfile() as Media.PlaybackProfile {
+//! The player calls methods on whatever getContentIterator() returns. null
+//! is a Null Reference on the watch ("Failed invoking <symbol>"), which is
+//! the IQ screen when playback starts and no book is stored.
+class EmptyIterator extends Media.ContentIterator {
+
+    private var _profile as Media.PlaybackProfile;
+
+    function initialize() {
+        ContentIterator.initialize();
+        _profile = PlaybackProfile.standard();
+    }
+
+    function get() as Media.Content? {
+        return null;
+    }
+
+    function next() as Media.Content? {
+        return null;
+    }
+
+    function previous() as Media.Content? {
+        return null;
+    }
+
+    function peekNext() as Media.Content? {
+        return null;
+    }
+
+    function peekPrevious() as Media.Content? {
+        return null;
+    }
+
+    function shuffling() as Boolean {
+        return false;
+    }
+
+    function repeatMode() as Media.RepeatMode? {
+        return Media.REPEAT_MODE_OFF;
+    }
+
+    function canSkip() as Boolean {
+        return false;
+    }
+
+    function getPlaybackProfile() as Media.PlaybackProfile? {
+        return _profile;
+    }
+}
+
+//! Shared so the empty iterator and a real book expose the same controls.
+module PlaybackProfile {
+
+    function standard() as Media.PlaybackProfile {
         var profile = new Media.PlaybackProfile();
         // The first entry may act as a hotkey, so skip forward goes first.
         // PLAYBACK must stay, or no play/pause is rendered; first, it binds a

@@ -20,6 +20,12 @@ class AbSyncDelegate extends Communications.SyncDelegate {
     //! From here on the downloads count.
     const PHASE_DOWNLOAD = 5;
 
+    //! Which request is in flight, so a cancel can repeat that request.
+    const STEP_PROGRESS = 1;
+    const STEP_PLAYLIST = 2;
+    const STEP_SEGMENTS = 3;
+    const STEP_DOWNLOAD = 4;
+
     //! Watchdog tick, and the idle ticks after which it ends the sync. Generous,
     //! because a segment can take many minutes over Bluetooth.
     const WATCHDOG_TICK_MS = 30000;
@@ -43,6 +49,9 @@ class AbSyncDelegate extends Communications.SyncDelegate {
     private var _stillPreparing as Number;
     private var _failure as String?;
     private var _stopped as Boolean;
+    //! Set before notifySyncComplete. Back during a notification calls
+    //! onStopSync, and that completion can call onStopSync again.
+    private var _finished as Boolean;
     private var _phase as Number;
     private var _reported as Number;
     private var _segmentBytes as Number;
@@ -50,6 +59,14 @@ class AbSyncDelegate extends Communications.SyncDelegate {
     private var _watchdog as Timer.Timer?;
     private var _activity as Number;
     private var _idleTicks as Number;
+    //! Which request to repeat when Back cancels it.
+    private var _step as Number;
+    private var _retry as Timer.Timer?;
+    private var _cancelRetries as Number;
+    //! Highest notification count seen this session. A drop means one was
+    //! dismissed, which is the Back press that should not end the sync.
+    private var _notePeak as Number;
+    private var _notes as Timer.Timer?;
 
     function initialize() {
         SyncDelegate.initialize();
@@ -68,6 +85,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         _stillPreparing = 0;
         _failure = null;
         _stopped = false;
+        _finished = false;
         _phase = 0;
         _reported = -1;
         _segmentBytes = 0;
@@ -75,6 +93,11 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         _watchdog = null;
         _activity = 0;
         _idleTicks = 0;
+        _step = 0;
+        _retry = null;
+        _cancelRetries = 0;
+        _notePeak = 0;
+        _notes = null;
     }
 
     //! Manual request, or a plugged-in watch that has not synced in a day.
@@ -110,6 +133,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         logEnvironment();
         enterPhase(PHASE_START);
         startWatchdog();
+        startNoteWatch();
         if (!_client.isConfigured()) {
             finish("Proxy not configured");
             return;
@@ -118,10 +142,40 @@ class AbSyncDelegate extends Communications.SyncDelegate {
     }
 
     function onStopSync() as Void {
-        Log.info("Sync: onStopSync");
-        _stopped = true;
-        Communications.cancelAllRequests();
-        finish(null);
+        if (_finished) {
+            return;
+        }
+        // Back on the sync screen and Back on a notification both land here.
+        // A notification also lowers the count sampled while the sync ran, and
+        // that stop restarts the download. A second Back soon after a restart,
+        // with no notification dismissed, is the user stopping for real.
+        sampleNotifications();
+        var dropped = notificationCount() < _notePeak;
+        if (Store.resumeWasCancelled() && !dropped) {
+            Log.warn("Sync: onStopSync, cancelled");
+            Store.clearResume();
+            _stopped = true;
+            Communications.cancelAllRequests();
+            finish(null);
+            return;
+        }
+        var echoes = Store.noteResume();
+        if (echoes > Store.RESUME_ECHO_LIMIT) {
+            Log.warn("Sync: onStopSync, resume gave up");
+            Store.clearResume();
+            _stopped = true;
+            Communications.cancelAllRequests();
+            finish(null);
+            return;
+        }
+        Log.warn("Sync: onStopSync, resuming");
+        // The relaunch is a new process. isSyncNeeded() only continues when
+        // this ticket is set, including when the watch is not on the charger.
+        Store.requestSync();
+        complete(null);
+        Communications.startSync2({
+            :message => WatchUi.loadResource(Rez.Strings.AppName) as String
+        });
     }
 
     // --- Visibility -----------------------------------------------------------
@@ -152,13 +206,37 @@ class AbSyncDelegate extends Communications.SyncDelegate {
     }
 
     //! Ends the sync by exactly one route. Otherwise the watchdog keeps running.
+    //!
+    //! The flag is raised before the system call. On this watch, dismissing a
+    //! notification with Back cancels the sync, and notifySyncComplete calls
+    //! onStopSync again. A second completion crashes.
+    //!
+    //! This clears the restart stamp. A restart must go through complete() so
+    //! the new process still sees why it was launched.
     private function finish(error as String?) as Void {
-        stopWatchdog();
+        if (_finished) {
+            return;
+        }
+        Store.clearResume();
         if (error == null) {
             Log.info("Sync: end, no error");
         } else {
             Log.error("Sync: end, error=" + error);
         }
+        complete(error);
+    }
+
+    //! Notifies the system once. A restart uses this directly so the restart
+    //! stamp survives; finish() clears that stamp before it gets here.
+    private function complete(error as String?) as Void {
+        if (_finished) {
+            return;
+        }
+        _finished = true;
+        _stopped = true;
+        stopWatchdog();
+        stopNoteWatch();
+        stopRetry();
         Communications.notifySyncComplete(error);
     }
 
@@ -182,6 +260,54 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         if (timer != null) {
             timer.stop();
             _watchdog = null;
+        }
+    }
+
+    //! Samples the notification count so a dismiss can be told from Back on
+    //! the sync screen. The count only rises while the notification is up.
+    private function startNoteWatch() as Void {
+        _notePeak = notificationCount();
+        try {
+            var timer = new Timer.Timer();
+            timer.start(method(:onNoteSample), 1000, true);
+            _notes = timer;
+        } catch (ex) {
+            _notes = null;
+        }
+    }
+
+    private function stopNoteWatch() as Void {
+        var timer = _notes;
+        if (timer != null) {
+            timer.stop();
+            _notes = null;
+        }
+    }
+
+    function onNoteSample() as Void {
+        sampleNotifications();
+    }
+
+    private function sampleNotifications() as Void {
+        var count = notificationCount();
+        if (count > _notePeak) {
+            _notePeak = count;
+        }
+    }
+
+    private function notificationCount() as Number {
+        var settings = System.getDeviceSettings();
+        if (settings has :notificationCount) {
+            return settings.notificationCount;
+        }
+        return 0;
+    }
+
+    private function stopRetry() as Void {
+        var timer = _retry;
+        if (timer != null) {
+            timer.stop();
+            _retry = null;
         }
     }
 
@@ -239,8 +365,10 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         if (_stopped) {
             return;
         }
-        // All local books, so listening done on the phone comes back too.
-        var entries = Store.syncEntries(Store.localBooks());
+        // Every book with something stored, including a partial download, so
+        // listening done on the phone comes back too. localBooks() is only the
+        // finished ones.
+        var entries = Store.syncEntries(Store.knownBooks());
         Log.debugCode("Sync: progress entries", entries.size());
         if (entries.size() == 0) {
             enterPhase(PHASE_PROGRESS_PUSHED);
@@ -248,17 +376,99 @@ class AbSyncDelegate extends Communications.SyncDelegate {
             return;
         }
         _sentEntries = entries;
+        _step = STEP_PROGRESS;
         _client.pushProgress(entries, method(:onProgressPushed));
     }
 
     function onProgressPushed(code as Number, data as Dictionary or String or Null) as Void {
         stirred();
         Log.response("Sync: progress", code);
+        // Back cancels the request with -1003 while the sync screen is going
+        // away. Reporting progress from here is the crash.
+        if (gaveUp(code)) {
+            return;
+        }
         if (code == 200) {
             Progress.settle(_sentEntries, data);
         }
         enterPhase(PHASE_PROGRESS_PUSHED);
         fetchPlaylist();
+    }
+
+    //! True when this callback must not start further work.
+    //!
+    //! Back on a notification cancels the request in flight with -1003, and
+    //! reporting progress from that callback crashes. The request is repeated
+    //! a moment later, once the notification is gone. A cancel that arrives
+    //! while onStopSync is already running just returns.
+    private function gaveUp(code as Number) as Boolean {
+        if (_stopped || _finished) {
+            return true;
+        }
+        if (code == Communications.REQUEST_CANCELLED) {
+            scheduleRetry();
+            return true;
+        }
+        _cancelRetries = 0;
+        return false;
+    }
+
+    //! Repeats the cancelled request after the notification has closed.
+    //! Doing it inside the cancel callback is what used to crash.
+    private function scheduleRetry() as Void {
+        if (_retry != null || _stopped || _finished) {
+            return;
+        }
+        try {
+            var timer = new Timer.Timer();
+            timer.start(method(:onRetry), 1000, false);
+            _retry = timer;
+        } catch (ex) {
+            Log.warn("Sync: no retry timer");
+        }
+    }
+
+    function onRetry() as Void {
+        _retry = null;
+        if (_stopped || _finished) {
+            return;
+        }
+        _cancelRetries += 1;
+        if (_cancelRetries > 3) {
+            Log.warn("Sync: cancelled too often");
+            finish(null);
+            return;
+        }
+        Log.warnCode("Sync: retry", _step);
+        if (_step == STEP_DOWNLOAD) {
+            requeuePending();
+            downloadNext();
+            return;
+        }
+        if (_step == STEP_SEGMENTS) {
+            fetchSegmentsPage();
+            return;
+        }
+        if (_step == STEP_PLAYLIST) {
+            fetchPlaylist();
+            return;
+        }
+        pushProgress();
+    }
+
+    //! downloadNext() already took the segment off the queue. A cancel has to
+    //! put it back, or that segment is skipped.
+    private function requeuePending() as Void {
+        var segment = _pending;
+        if (!(segment instanceof Dictionary)) {
+            return;
+        }
+        _pending = null;
+        var restored = [segment] as Array<Dictionary>;
+        for (var i = 0; i < _downloads.size(); ++i) {
+            restored.add(_downloads[i]);
+        }
+        _downloads = restored;
     }
 
     // --- Phase 2: read the playlist ---------------------------------------------
@@ -268,13 +478,14 @@ class AbSyncDelegate extends Communications.SyncDelegate {
             return;
         }
         Log.info("Sync: fetching playlist");
+        _step = STEP_PLAYLIST;
         _client.playlist(method(:onPlaylist));
     }
 
     function onPlaylist(code as Number, data as Dictionary or String or Null) as Void {
         stirred();
         Log.response("Sync: playlist", code);
-        if (_stopped) {
+        if (gaveUp(code)) {
             return;
         }
         if (code == 409) {
@@ -293,14 +504,8 @@ class AbSyncDelegate extends Communications.SyncDelegate {
             return;
         }
 
-        var wanted = [] as Array<String>;
-        for (var i = 0; i < books.size(); ++i) {
-            var book = books[i];
-            if (book instanceof Dictionary && book["id"] instanceof String) {
-                wanted.add(book["id"] as String);
-            }
-        }
-        Store.setDesired(wanted);
+        Store.rememberPlaylist(books as Array);
+        var wanted = Store.desired();
 
         // Books no longer in the playlist are removed from the watch.
         var gone = orphans(wanted);
@@ -343,13 +548,14 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         if (bookId == null) {
             return;
         }
+        _step = STEP_SEGMENTS;
         _client.segments(bookId, _segmentsAfter, method(:onSegments));
     }
 
     function onSegments(code as Number, data as Dictionary or String or Null) as Void {
         stirred();
         Log.response("Sync: segments", code);
-        if (_stopped) {
+        if (gaveUp(code)) {
             return;
         }
         if (code == 409) {
@@ -442,6 +648,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         _pending = segment;
         _segmentBytes = 0;
         _segmentSize = 0;
+        _step = STEP_DOWNLOAD;
         Log.info("Sync: downloading " + path);
         _client.downloadSegment(
             path,
@@ -464,7 +671,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         stirred();
         Log.response("Sync: segment downloaded", code);
         Log.debugCode("Sync: bytes", _segmentBytes);
-        if (_stopped) {
+        if (gaveUp(code)) {
             return;
         }
         var segment = _pending;
@@ -474,13 +681,16 @@ class AbSyncDelegate extends Communications.SyncDelegate {
             if (segmentTitle.length() == 0) {
                 segmentTitle = numberOf(segment["index"]).toString();
             }
-            Store.addLocalTrack(
+            // A full map used to throw here and take the rest of the sync with it.
+            if (!Store.addLocalTrack(
                 bookId,
                 data.getId(),
                 numberOf(segment["index"]),
                 numberOf(segment["duration"]),
                 segmentTitle
-            );
+            )) {
+                _failure = "Store full";
+            }
         } else {
             // The next sync only fetches the gap.
             _failure = "HTTP " + code.toString();
@@ -503,6 +713,11 @@ class AbSyncDelegate extends Communications.SyncDelegate {
     }
 
     private function report() as Void {
+        // A byte callback can still be running while Back tears the sync down.
+        // notifySyncProgress from there crashes.
+        if (_stopped || _finished) {
+            return;
+        }
         var percent = _phase;
         if (_booksTotal > 0) {
             var withinBook = 0.0;
