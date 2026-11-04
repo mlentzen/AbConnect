@@ -1,5 +1,6 @@
 import asyncio
 import dataclasses
+import logging
 import shutil
 from pathlib import Path
 
@@ -183,6 +184,36 @@ class TestHappyPath:
             else []
         )
         assert leftovers == []
+
+    async def test_names_each_segment_before_cutting_it(
+        self, tmp_path, single_book, caplog, monkeypatch
+    ):
+        """A long encode has to say which segment it is on, before ffmpeg runs.
+
+        Otherwise the log stops after the download and the job looks stuck.
+        """
+        item, source = single_book
+        preparer, _, _, _ = await build(tmp_path, item, source)
+        real_cut = media.cut
+        seen: list[str] = []
+
+        async def watching(*args, **kwargs):
+            seen.append(caplog.text)
+            return await real_cut(*args, **kwargs)
+
+        monkeypatch.setattr("abconnect_proxy.preparer.cut", watching)
+
+        with caplog.at_level(logging.INFO, logger="abconnect_proxy.preparer"):
+            state = await run(preparer)
+
+        assert state.status is Status.READY
+        assert "downloaded" in seen[0]
+        assert "buch.m4b" in seen[0]
+        assert "segment 1/2" in seen[0]
+        assert "Verhaftung" in seen[0]
+        assert "segment 2/2" not in seen[0]
+        assert "segment 2/2" in seen[1]
+        assert "Untersuchung" in seen[1]
 
     async def test_a_chapterless_m4b_is_withheld(self, tmp_path, caplog):
         item = parsed(
