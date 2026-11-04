@@ -1,0 +1,22 @@
+<drawables>
+    <!-- ab.svg declares 40 x 40, the launcher size of the fenix 7 range, so it
+         is rasterised at exactly that size. A bare scaleX="40" is not read as
+         pixels: the resource compiler ran out of heap on it. The apps list and
+         the music providers list both show this one. -->
+    <bitmap id="LauncherIcon" filename="ab.svg" dithering="none"/>
+    <!-- For getProviderIconInfo(): the watch shows it on the entry that opens
+         this app's menu, among the system's own entries, so it is a plain menu
+         symbol in their style rather than the artwork. -->
+    <bitmap id="ProviderIcon" filename="menu_glyph.svg" dithering="none">
+        <palette>
+            <color>AAAAAA</color>
+        </palette>
+    </bitmap>
+    <!-- Row icons of the app menu, on the same 40 x 40 grid and in the same
+         grey as the system's own menu icons. -->
+    <bitmap id="IconContinue" filename="icon_play.svg" dithering="none"/>
+    <bitmap id="IconBooks" filename="icon_books.svg" dithering="none"/>
+    <bitmap id="IconSync" filename="icon_sync.svg" dithering="none"/>
+    <bitmap id="IconReset" filename="icon_reset.svg" dithering="none"/>
+    <bitmap id="IconInfo" filename="icon_info.svg" dithering="none"/>
+</drawables>

@@ -1,0 +1,5 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+<!-- Books: an open book, two pages either side of the spine. -->
+<path d="M19 11.5 C15 9 10 8.6 5 9.2 L5 30.2 C10 29.6 15 30 19 32.4 Z" fill="#AAAAAA" stroke="#AAAAAA" stroke-width="1.2" stroke-linejoin="round"/>
+<path d="M21 11.5 C25 9 30 8.6 35 9.2 L35 30.2 C30 29.6 25 30 21 32.4 Z" fill="#AAAAAA" stroke="#AAAAAA" stroke-width="1.2" stroke-linejoin="round"/>
+</svg>

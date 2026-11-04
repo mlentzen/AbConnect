@@ -1,0 +1,98 @@
+# Running abconnect-proxy
+
+[![ghcr.io/mlentzen/abconnect-proxy](https://img.shields.io/badge/ghcr.io-mlentzen%2Fabconnect--proxy-0969da)](https://github.com/mlentzen/AbConnect/pkgs/container/abconnect-proxy)
+
+Setup is described for Podman Quadlet. The image also runs under Docker Compose, but no compose file is provided.
+
+## Users
+
+One proxy serves any number of people. Each entry is one Audiobookshelf account, its API key, the playlist the watch mirrors, and the token the watch sends. The token is the only thing the watch knows.
+
+```toml
+[users.alex]
+tokens = ["<token for alex's watch>"]
+abs_url = "https://audiobookshelf.example.com"
+abs_api_key = "<API key of alex's ABS account>"
+playlist = "Garmin"            # optional, defaults to Garmin
+
+[users.anna]
+tokens = ["<token for anna's watch>"]
+abs_url = "https://audiobookshelf.example.com"
+abs_api_key = "<API key of anna's ABS account>"
+```
+
+* The API key is created in Audiobookshelf under *Settings → Users → API Keys*. The proxy acts as that user.
+* A token is at least 16 characters and unique across all users. `openssl rand -hex 24`. It goes into that user's watch app settings.
+* The name (`alex`) is the cache directory and the log label: letters, digits, `_` and `-`.
+
+```sh
+podman secret create abconnect-users users.toml
+shred -u users.toml
+```
+
+The container reads it at `/run/secrets/users.toml`. A broken file refuses to start; `journalctl --user -u abconnect-proxy -n 30` lists every problem.
+
+Replace the secret and restart to change it:
+
+```sh
+podman secret inspect --showsecret --format '{{.SecretData}}' abconnect-users > users.toml
+$EDITOR users.toml
+podman secret create --replace abconnect-users users.toml && shred -u users.toml
+systemctl --user restart abconnect-proxy
+```
+
+`tokens` is a list. To rotate one while the watch still has the old token, prepend the new one, restart, enter it on the watch, then remove the old one.
+
+## Install
+
+```sh
+./deploy/install.sh
+```
+
+The script installs the quadlet and starts `ghcr.io/mlentzen/abconnect-proxy:latest`, published when `proxy/` changes on `main`. A failed publish leaves the running image in place.
+
+The proxy listens on `127.0.0.1:18543`.
+
+## Updates
+
+Optional. The container is labeled `AutoUpdate=registry`.
+
+```sh
+systemctl --user start podman-auto-update.service          # once
+systemctl --user enable --now podman-auto-update.timer     # daily
+```
+
+## Check
+
+```sh
+curl -s localhost:18543/health
+TOKEN=<one user's token>
+curl -s -H "Authorization: Bearer $TOKEN" localhost:18543/v1/status | python3 -m json.tool
+```
+
+`/health` answers `{"status": "ok"}` and names no user. `/v1/status` is that token's user: `audiobookshelf: "ok"` means the address and API key work. `playlist_found: false` means that playlist is missing; the proxy leaves the watch alone, and `/v1/playlist` answers 409.
+
+Books on the watch are that user's Audiobookshelf playlist (`Garmin`, or the entry's `playlist`).
+
+## Configuration
+
+Environment on the quadlet. Unset variables keep these defaults.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ABS_PLAYLIST` | `Garmin` | playlist when a user sets none |
+| `CACHE_MAX_BYTES` | 200 GiB | eviction limit across all users |
+| `RELEASE_TTL_DAYS` | 30 | how long a removed book stays cached |
+| `TRANSCODE_BITRATE_KBPS` | 64 | bitrate when an m4b chapter is encoded to mp3 |
+| `LOG_LEVEL` | `INFO` | |
+| `FORWARDED_ALLOW_IPS` | `127.0.0.1` | peers whose `X-Forwarded-For` is trusted |
+
+A book of mp3 files is copied file by file and not re-encoded. An m4b is cut on its chapter marks and each chapter is encoded to mp3 at `TRANSCODE_BITRATE_KBPS`. An m4b without chapters, or any other container, is left out of the playlist; the reason is a warning in the log.
+
+A book that is already `ready` keeps the segments it was cut with. To re-cut one, delete its cache directory and reset the watch before the next sync. The sync compares segments by index and would keep the old copies:
+
+```sh
+podman exec abconnect-proxy rm -rf /var/cache/abconnect/users/<name>/<book-id>
+```
+
+Five wrong tokens in a minute lock that address out for 60 seconds, so the address has to be the caller's. Send a wrong token through the public URL and look for `presented a missing or invalid token` in `journalctl --user -u abconnect-proxy`. It must show your address. If every caller is `127.0.0.1`, the reverse proxy is not sending `X-Forwarded-For`. If they share another fixed address, add it to `FORWARDED_ALLOW_IPS`. Leave `*` unset: uvicorn would then trust the header from any client.

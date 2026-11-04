@@ -1,0 +1,45 @@
+# Podman quadlet: goes into ~/.config/containers/systemd/, easiest via
+# deploy/install.sh.
+#
+# The image contains neither a server address nor a key. Users, their ABS
+# instances and keys come from the abconnect-users secret (see deploy/README.md).
+# If it is missing or invalid, the container does not start.
+#
+# The image is built on GitHub (.github/workflows/proxy-image.yml) and published
+# as ghcr.io/mlentzen/abconnect-proxy:latest. AutoUpdate=registry lets
+# podman-auto-update pull a new digest and restart this unit when an operator
+# runs it; deploy/install.sh does not enable the timer. The reference has to
+# stay fully qualified, including the tag, or the registry check has nothing
+# to compare.
+
+[Unit]
+Description=AbConnect proxy (Audiobookshelf -> Garmin)
+After=audiobookshelf.service
+Wants=audiobookshelf.service
+
+[Container]
+Image=ghcr.io/mlentzen/abconnect-proxy:latest
+ContainerName=abconnect-proxy
+AutoUpdate=registry
+
+Secret=abconnect-users,type=mount,target=/run/secrets/users.toml,uid=10001,mode=0400
+
+# Disk space is available: a generous budget so released books stay around and
+# re-selecting one does not require a second download.
+Environment=CACHE_MAX_BYTES=214748364800
+Environment=RELEASE_TTL_DAYS=30
+Environment=LOG_LEVEL=INFO
+
+Volume=abconnect-cache:/var/cache/abconnect
+Volume=abconnect-work:/var/tmp/abconnect
+
+PublishPort=127.0.0.1:18543:8080
+HealthCmd=/usr/bin/curl -fsS http://localhost:8080/health
+HealthInterval=60s
+HealthStartPeriod=20s
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

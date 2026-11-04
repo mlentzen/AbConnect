@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<iq:manifest xmlns:iq="http://www.garmin.com/xml/connectiq" version="3">
+    <iq:application id="08f8baf9f0044b9e9cc2f74e3dfd6af2" type="audio-content-provider-app" name="@Strings.AppName" entry="AbConnectApp" launcherIcon="@Drawables.LauncherIcon" minApiLevel="5.2.0">
+        <iq:products>
+            <iq:product id="fenix7xpro"/>
+        </iq:products>
+        <iq:permissions>
+            <iq:uses-permission id="Background"/>
+            <iq:uses-permission id="BluetoothLowEnergy"/>
+            <iq:uses-permission id="Communications"/>
+            <iq:uses-permission id="Notifications"/>
+        </iq:permissions>
+        <iq:languages>
+            <iq:language>deu</iq:language>
+            <iq:language>eng</iq:language>
+        </iq:languages>
+        <iq:barrels/>
+    </iq:application>
+</iq:manifest>

@@ -1,0 +1,99 @@
+name: proxy image
+
+# Runs on main. Publishes :latest, which the quadlet tracks
+# (deploy/abconnect-proxy.container), plus a sha tag.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "proxy/**"
+      - ".github/workflows/proxy-image.yml"
+  workflow_dispatch:
+
+jobs:
+  test:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Dependencies
+        run: pip install -e './proxy[dev]'
+      - name: Tests
+        run: python -m pytest proxy/tests
+
+  container:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -f proxy/Containerfile -t abconnect-proxy:ci proxy
+
+      - name: Health check
+        run: |
+          set -euo pipefail
+          cat > users.toml <<'EOF'
+          [users.ci]
+          tokens = ["0123456789abcdef"]
+          abs_url = "https://audiobookshelf.example.com"
+          abs_api_key = "0123456789abcdef"
+          EOF
+          chmod 0444 users.toml
+          docker run -d --name abconnect-proxy-ci -p 127.0.0.1:8080:8080 \
+            -v "$PWD/users.toml:/run/secrets/users.toml:ro" \
+            abconnect-proxy:ci
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/health; then
+              echo
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs abconnect-proxy-ci
+          exit 1
+
+  publish:
+    needs: container
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Image name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/abconnect-proxy" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest
+            type=sha
+
+      - id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: proxy
+          file: proxy/Containerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

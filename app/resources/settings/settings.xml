@@ -1,0 +1,8 @@
+<settings>
+    <setting propertyKey="@Properties.proxyUrl" title="@Strings.settingProxyUrlTitle" prompt="@Strings.settingProxyUrlPrompt">
+        <settingConfig type="alphaNumeric" maxLength="120" required="true"/>
+    </setting>
+    <setting propertyKey="@Properties.proxyToken" title="@Strings.settingProxyTokenTitle" prompt="@Strings.settingProxyTokenPrompt">
+        <settingConfig type="alphaNumeric" maxLength="120" required="true"/>
+    </setting>
+</settings>

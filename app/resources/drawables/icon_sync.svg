@@ -1,0 +1,7 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+<!-- Sync: two arcs chasing each other clockwise around the centre. -->
+<path d="M 9.37 17.15 A 11 11 0 0 1 30.63 17.15" stroke="#AAAAAA" stroke-width="3.2" fill="none"/>
+<path d="M 34.40 16.14 L 31.80 21.50 L 26.86 18.16 Z" fill="#AAAAAA"/>
+<path d="M 30.63 22.85 A 11 11 0 0 1 9.37 22.85" stroke="#AAAAAA" stroke-width="3.2" fill="none"/>
+<path d="M 5.60 23.86 L 8.20 18.50 L 13.14 21.84 Z" fill="#AAAAAA"/>
+</svg>

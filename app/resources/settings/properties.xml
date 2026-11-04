@@ -1,0 +1,4 @@
+<properties>
+    <property id="proxyUrl" type="string"></property>
+    <property id="proxyToken" type="string"></property>
+</properties>

@@ -1,0 +1,8 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+<!-- A plain menu symbol for the entry that opens this app's menu. Drawn to the
+     system's own icons: 40 x 40, filled shapes, bars as thick as their strokes,
+     and #AAAAAA like their dark-theme variants. -->
+<rect x="7" y="10.2" width="26" height="3.6" rx="1.8" fill="#AAAAAA"/>
+<rect x="7" y="18.2" width="26" height="3.6" rx="1.8" fill="#AAAAAA"/>
+<rect x="7" y="26.2" width="26" height="3.6" rx="1.8" fill="#AAAAAA"/>
+</svg>
