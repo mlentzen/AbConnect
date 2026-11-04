@@ -47,12 +47,13 @@ class InfoView extends WatchUi.View {
 
         dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
         var stats = Media.getCacheStatistics();
+        var counts = Store.playlistCounts();
         row(dc, left, right, y + rowHeight * 1,
-            Rez.Strings.infoBooks, Store.localBooks().size().toString());
+            Rez.Strings.infoBooks, counts[0].toString());
         row(dc, left, right, y + rowHeight * 2,
             Rez.Strings.infoCache, (stats.size / 1048576).toString() + " MB");
         row(dc, left, right, y + rowHeight * 3,
-            Rez.Strings.infoPending, ProgressPush.pending().toString());
+            Rez.Strings.infoPending, counts[1].toString());
         row(dc, left, right, y + rowHeight * 4,
             Rez.Strings.infoChecked, lastCheck());
     }
