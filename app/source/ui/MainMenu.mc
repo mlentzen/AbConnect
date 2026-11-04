@@ -51,7 +51,8 @@ class MainMenu extends WatchUi.Menu2 {
         var resumable = Store.resumableBook();
         if (resumable != null) {
             addItem(row(
-                Rez.Strings.menuContinue, Store.bookInfo(resumable)[0],
+                Rez.Strings.menuContinue,
+                MenuText.sublabel(Store.bookInfo(resumable)[0]),
                 $.CONTINUE_ITEM, Rez.Drawables.IconContinue
             ));
         }

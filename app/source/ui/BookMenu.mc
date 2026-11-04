@@ -9,8 +9,15 @@ class BookMenu extends WatchUi.Menu2 {
         var books = Store.localBooks();
         Log.debugCode("Books: playable", books.size());
         for (var i = 0; i < books.size(); ++i) {
+            // Listed as soon as one segment is on the watch, so the title line
+            // can still be missing and the author can be blank.
             var info = Store.bookInfo(books[i]);
-            addItem(new WatchUi.MenuItem(info[0], info[1], books[i], null));
+            addItem(new WatchUi.MenuItem(
+                MenuText.label(info[0], books[i]),
+                MenuText.sublabel(info[1]),
+                books[i],
+                null
+            ));
         }
     }
 }

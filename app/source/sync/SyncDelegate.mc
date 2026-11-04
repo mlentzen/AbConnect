@@ -470,12 +470,16 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         var segment = _pending;
         var bookId = _currentBook;
         if (code == 200 && data instanceof Media.ContentRef && segment != null && bookId != null) {
+            var segmentTitle = SyncConfigView.stringOr(segment["title"], "");
+            if (segmentTitle.length() == 0) {
+                segmentTitle = numberOf(segment["index"]).toString();
+            }
             Store.addLocalTrack(
                 bookId,
                 data.getId(),
                 numberOf(segment["index"]),
                 numberOf(segment["duration"]),
-                SyncConfigView.stringOr(segment["title"], "")
+                segmentTitle
             );
         } else {
             // The next sync only fetches the gap.
