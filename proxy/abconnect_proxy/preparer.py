@@ -290,9 +290,11 @@ class Preparer:
             else None
         )
         if bitrate is None:
-            log.info("%s: mp3 files copied unchanged", item.title)
+            log.info(
+                "%s: copying %d mp3 files unchanged", item.title, len(plan.segments)
+            )
         else:
-            log.info("%s: m4b cut into %d segments", item.title, len(plan.segments))
+            log.info("%s: m4b, %d segments to cut", item.title, len(plan.segments))
 
         largest = max(f.size for f in item.files) if item.files else 0
         needed = item.total_bytes + largest
@@ -323,12 +325,26 @@ class Preparer:
                     share = (base + written) / max(1, item.total_bytes)
                     self._set(book_id, percent=int(share * WEIGHT_DOWNLOAD * 100))
 
-                await self.abs_client.download_file(
+                written = await self.abs_client.download_file(
                     book_id, source.ino, work_file, on_progress=report
                 )
                 done_bytes += source.size or work_file.stat().st_size
+                log.info(
+                    "%s: downloaded %s (%.1f MB)",
+                    item.title,
+                    source.filename,
+                    written / 1024**2,
+                )
 
                 for position, segment in enumerate(segments):
+                    log.info(
+                        "%s: segment %d/%d %s (%.0fs)",
+                        item.title,
+                        segment.index + 1,
+                        len(plan.segments),
+                        segment.title,
+                        segment.duration,
+                    )
                     destination = self.cache.segment_path(book_id, segment.filename)
                     size = await cut(
                         work_file,
