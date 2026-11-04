@@ -13,7 +13,7 @@ class AbContentDelegate extends Media.ContentDelegate {
 
     private const PUSH_THROTTLE_SECONDS = 30;
 
-    private var _iterator as AbContentIterator?;
+    private var _iterator as Media.ContentIterator?;
     private var _bookId as String?;
     private var _client as ProxyClient;
     private var _lastPush as Number;
@@ -54,6 +54,8 @@ class AbContentDelegate extends Media.ContentDelegate {
     function getContentIterator() as Media.ContentIterator? {
         _playerHasIterator = true;
         if (_iterator == null) {
+            // Still hand back an iterator. null is invoked by the player and
+            // becomes the IQ screen.
             Log.error("Playback: getContentIterator has nothing to hand over");
             _iterator = openIterator(true);
         } else if (Log.LEVEL >= Log.DEBUG) {
@@ -72,25 +74,19 @@ class AbContentDelegate extends Media.ContentDelegate {
             } else if (Log.LEVEL >= Log.DEBUG) {
                 Log.debug("Playback: resetContentIterator keeps the stored position");
             }
-            if (_iterator == null) {
-                Log.error("Playback: no iterator was built");
-            }
             return _iterator;
         }
         if (Log.LEVEL >= Log.DEBUG) {
             Log.debug("Playback: resetContentIterator from the beginning");
         }
         _iterator = openIterator(false);
-        if (_iterator == null) {
-            Log.error("Playback: no iterator was built");
-        }
         return _iterator;
     }
 
-    private function openIterator(resume as Boolean) as AbContentIterator? {
+    private function openIterator(resume as Boolean) as Media.ContentIterator {
         var bookId = _bookId;
         if (bookId == null) {
-            return null;
+            return new EmptyIterator();
         }
         return new AbContentIterator(bookId, resume);
     }

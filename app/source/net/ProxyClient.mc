@@ -141,11 +141,9 @@ class ProxyClient {
 
     // --- Helpers --------------------------------------------------------------
 
-    //! The phone setting overrides the default baked in at build time.
-    //!
-    //! An empty value counts as none here: a side-loaded app gets no settings
-    //! screen in Garmin Connect, otherwise the default would have no effect.
-    private static function readSetting(key as String, fallback as String) as String {
+    //! A saved property overrides the value baked in at build time.
+    //! An empty property counts as none, so clearing it restores that default.
+    static function readSetting(key as String, fallback as String) as String {
         var value = Application.Properties.getValue(key);
         if (value instanceof String && value.length() > 0) {
             return value;

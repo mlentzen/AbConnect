@@ -5,9 +5,12 @@
 #   CIQ_HOME  Connect IQ SDK (directory containing bin/monkeyc)
 #   CIQ_KEY   developer key in PKCS8 DER format
 #
-# Taken from .env (optional, all of them baked into the build):
+# Optional. Taken from .env when set and baked into the build. Left unset, the
+# URL and the token are placeholders and can be entered in the app settings.
 #   PROXY_URL    base URL of abconnect-proxy
+#                default: https://abconnect.example.com
 #   PROXY_TOKEN  this watch's token from the proxy's users.toml
+#                default: replace-me
 #   LOG_LEVEL    0 errors (default), 1 warnings, 2 course of events, 3 everything
 #
 # Create a key if there is none yet:
@@ -56,11 +59,15 @@ BUILT="$(date -u +%Y-%m-%d)"
 # Write the proxy defaults into a generated source file.
 #
 # Connect IQ has no compiler defines and the values from .env do not reach the
-# compiler on their own. Without this step the app starts with empty settings.
-# The app reads them as defaults as long as nothing else is set in the phone
-# settings. The file is regenerated on every build and not checked in, because
-# it contains the token.
+# compiler on their own. The app uses them until the watch settings say
+# otherwise. The file is regenerated on every build and not checked in,
+# because a build that was given a real token still contains it.
 GENERATED="source/BuildDefaults.mc"
+
+# Placeholders, so a build without .env still has something to edit in the
+# app. A value from the environment or from .env replaces them.
+PROXY_URL="${PROXY_URL:-https://abconnect.example.com}"
+PROXY_TOKEN="${PROXY_TOKEN:-replace-me}"
 
 # In Monkey C string literals, backslash and quotes may only appear escaped;
 # line breaks not at all.
@@ -75,11 +82,11 @@ import Toybox.Lang;
 //! What the build knows and the source cannot: the proxy settings, where this
 //! build came from, and how much it is allowed to say.
 //!
-//! The proxy values are empty when no .env was present at build time; then the
-//! settings from the phone app apply.
+//! The proxy values are placeholders unless the build was given real ones.
+//! Settings stored on the watch override both.
 module BuildDefaults {
-    const PROXY_URL = "$(escape_literal "${PROXY_URL:-}")";
-    const PROXY_TOKEN = "$(escape_literal "${PROXY_TOKEN:-}")";
+    const PROXY_URL = "$(escape_literal "$PROXY_URL")";
+    const PROXY_TOKEN = "$(escape_literal "$PROXY_TOKEN")";
     //! Short commit hash, "+" appended when the tree was dirty. Empty outside a
     //! git checkout.
     const COMMIT = "$(escape_literal "$COMMIT")";
@@ -89,10 +96,6 @@ module BuildDefaults {
     const LOG_LEVEL = $LOG_LEVEL;
 }
 EOF
-
-if [[ -z "${PROXY_URL:-}" || -z "${PROXY_TOKEN:-}" ]]; then
-    echo "Warning: PROXY_URL/PROXY_TOKEN not set. Building without defaults." >&2
-fi
 
 "$CIQ_HOME/bin/monkeyc" \
     -f monkey.jungle \

@@ -1,3 +1,4 @@
+import Toybox.Communications;
 import Toybox.Graphics;
 import Toybox.Lang;
 import Toybox.Math;
@@ -50,6 +51,11 @@ class SyncConfigView extends WatchUi.View {
 
     function onPlaylist(code as Number, data as Dictionary or String or Null) as Void {
         Log.response("Config: playlist", code);
+        // Dismissing a notification with Back cancels the request. The page
+        // is already gone, and opening another one crashes.
+        if (code == Communications.REQUEST_CANCELLED) {
+            return;
+        }
         if (code == 409) {
             showMessage(Rez.Strings.syncNoPlaylist);
             return;
@@ -68,40 +74,53 @@ class SyncConfigView extends WatchUi.View {
             return;
         }
 
-        var titles = [] as Array<String>;
-        var statuses = [] as Array<String>;
-        for (var i = 0; i < books.size(); ++i) {
-            var book = books[i];
-            if (!(book instanceof Dictionary)) {
-                continue;
-            }
-            var id = book["id"];
-            titles.add(stringOr(book["title"], stringOr(id, "?")));
-            statuses.add(statusLine(book));
-        }
-        if (titles.size() == 0) {
-            showMessage(Rez.Strings.playlistEmpty);
-            return;
-        }
-
         var title = stringOr(data["playlist"], "");
         if (title.length() == 0) {
             title = WatchUi.loadResource(Rez.Strings.menuSyncTitle) as String;
         }
-        Log.debugCode("Config: playlist status rows", titles.size());
-        var status = new PlaylistStatusView(title, titles, statuses);
+        if (!openStatus(title, books as Array)) {
+            showMessage(Rez.Strings.playlistEmpty);
+            return;
+        }
         _statusShown = true;
-        WatchUi.pushView(status, new PlaylistStatusDelegate(status), WatchUi.SLIDE_IMMEDIATE);
     }
 
-    private function statusLine(book as Dictionary) as String {
+    //! Builds the playlist menu and pushes it. False when there are no rows.
+    static function openStatus(title as String, books as Array) as Boolean {
+        Store.rememberPlaylist(books);
+        if (Store.playlistRows().size() == 0) {
+            return false;
+        }
+        var heading = title;
+        if (heading.length() == 0) {
+            heading = WatchUi.loadResource(Rez.Strings.syncFromServer) as String;
+        }
+        WatchUi.pushView(new PlaylistMenu(heading), new PlaylistMenuDelegate(), WatchUi.SLIDE_IMMEDIATE);
+        return true;
+    }
+
+    //! Last fetched playlist, for when the phone is not reachable.
+    static function openStored() as Boolean {
+        if (Store.playlistRows().size() == 0) {
+            return false;
+        }
+        var title = WatchUi.loadResource(Rez.Strings.syncFromServer) as String;
+        WatchUi.pushView(new PlaylistMenu(title), new PlaylistMenuDelegate(), WatchUi.SLIDE_IMMEDIATE);
+        return true;
+    }
+
+    static function statusLine(book as Dictionary) as String {
         var status = book["status"];
         if (!(status instanceof String)) {
             return "";
         }
         if (status.equals("ready")) {
-            var local = (book["id"] instanceof String) && Store.localTracks(book["id"] as String).size() > 0;
-            if (local) {
+            var hinted = 0;
+            if (book["segments"] instanceof Number) {
+                hinted = book["segments"] as Number;
+            }
+            var id = book["id"];
+            if (id instanceof String && Store.onWatch(id as String, hinted)) {
                 return WatchUi.loadResource(Rez.Strings.statusReady) as String;
             }
             return WatchUi.loadResource(Rez.Strings.statusWaitingForSync) as String;
@@ -136,23 +155,29 @@ class SyncConfigView extends WatchUi.View {
     }
 }
 
-//! Titles and statuses of the server playlist, scrolled as a page rather than
-//! a menu. Up and down move the window; nothing on the page can be chosen.
+//! Titles and statuses of the server playlist. Up and down move the selection.
+//! Start opens a book that is already on the watch.
 class PlaylistStatusView extends WatchUi.View {
 
     private var _title as String;
+    private var _ids as Array<String>;
     private var _titles as Array<String>;
     private var _statuses as Array<String>;
     private var _offset as Number;
+    private var _selected as Number;
     //! How many books fit under the heading. Known after the first draw.
     private var _window as Number;
 
-    function initialize(title as String, titles as Array<String>, statuses as Array<String>) {
+    function initialize(
+        title as String, titles as Array<String>, statuses as Array<String>, ids as Array<String>
+    ) {
         View.initialize();
         _title = title;
+        _ids = ids;
         _titles = titles;
         _statuses = statuses;
         _offset = 0;
+        _selected = 0;
         _window = titles.size();
         if (_window < 1) {
             _window = 1;
@@ -160,22 +185,46 @@ class PlaylistStatusView extends WatchUi.View {
     }
 
     function scroll(delta as Number) as Void {
-        var next = _offset + delta;
+        if (_titles.size() == 0) {
+            return;
+        }
+        var next = _selected + delta;
         if (next < 0) {
             next = 0;
         }
-        var limit = _titles.size() - _window;
-        if (limit < 0) {
-            limit = 0;
+        if (next >= _titles.size()) {
+            next = _titles.size() - 1;
         }
-        if (next > limit) {
-            next = limit;
-        }
-        if (next == _offset) {
+        if (next == _selected) {
             return;
         }
-        _offset = next;
+        _selected = next;
+        reveal();
         WatchUi.requestUpdate();
+    }
+
+    function selectedId() as String? {
+        if (_selected < 0 || _selected >= _ids.size()) {
+            return null;
+        }
+        var id = _ids[_selected];
+        if (id.length() == 0) {
+            return null;
+        }
+        return id;
+    }
+
+    private function reveal() as Void {
+        if (_selected < _offset) {
+            _offset = _selected;
+        }
+        var last = _offset + _window - 1;
+        if (_selected > last) {
+            _offset = _selected - _window + 1;
+        }
+        if (_offset < 0) {
+            _offset = 0;
+        }
     }
 
     function onUpdate(dc as Graphics.Dc) as Void {
@@ -233,12 +282,17 @@ class PlaylistStatusView extends WatchUi.View {
         if (_offset < 0) {
             _offset = 0;
         }
+        reveal();
 
         var y = listTop;
         for (var i = 0; i < window; ++i) {
             var index = _offset + i;
             var inset = sideInset(dc, y + bodyH);
             var rowWidth = width - inset * 2;
+            if (index == _selected) {
+                dc.setColor(Graphics.COLOR_DK_BLUE, Graphics.COLOR_TRANSPARENT);
+                dc.fillRectangle(inset, y, rowWidth, bookH);
+            }
             dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
             dc.drawText(
                 centre, y, bodyFont,
@@ -347,5 +401,169 @@ class PlaylistStatusDelegate extends WatchUi.BehaviorDelegate {
         Log.debugCode("Config: back, playlist state", Store.desired().size());
         WatchUi.popView(WatchUi.SLIDE_IMMEDIATE);
         return true;
+    }
+
+    function onSelect() as Boolean {
+        var id = _view.selectedId();
+        if (id == null || Store.localTracks(id).size() == 0) {
+            return true;
+        }
+        Log.info("Playlist: open " + id);
+        WatchUi.pushView(new ChapterMenu(id), new ChapterMenuDelegate(id), WatchUi.SLIDE_IMMEDIATE);
+        return true;
+    }
+}
+
+//! One row per book on the server playlist. The label is the title, the
+//! subtitle is the sync status. A book already on the watch opens its chapters.
+class PlaylistMenu extends WatchUi.Menu2 {
+
+    function initialize(title as String) {
+        Menu2.initialize({ :title => title });
+        var rows = Store.playlistRows();
+        for (var i = 0; i < rows.size(); ++i) {
+            var entry = Store.playlistEntry(rows[i]);
+            if (entry[0].length() == 0) {
+                continue;
+            }
+            var book = {
+                "id" => entry[0],
+                "status" => entry[1],
+                "title" => entry[3]
+            } as Dictionary;
+            if (entry[2].length() > 0) {
+                var percent = entry[2].toNumber();
+                if (percent != null) {
+                    book["percent"] = percent;
+                }
+            }
+            var label = entry[3];
+            if (label.length() == 0) {
+                label = entry[0];
+            }
+            addItem(new WatchUi.MenuItem(
+                MenuText.label(label, entry[0]),
+                MenuText.sublabel(SyncConfigView.statusLine(book)),
+                entry[0],
+                null
+            ));
+        }
+    }
+}
+
+class PlaylistMenuDelegate extends WatchUi.Menu2InputDelegate {
+
+    function initialize() {
+        Menu2InputDelegate.initialize();
+    }
+
+    function onSelect(item as WatchUi.MenuItem) as Void {
+        var id = item.getId();
+        if (!(id instanceof String)) {
+            return;
+        }
+        var bookId = id as String;
+        if (Store.localTracks(bookId).size() == 0) {
+            return;
+        }
+        Log.info("Playlist: open " + bookId);
+        WatchUi.pushView(new ChapterMenu(bookId), new ChapterMenuDelegate(bookId), WatchUi.SLIDE_IMMEDIATE);
+    }
+
+    function onBack() as Void {
+        WatchUi.popView(WatchUi.SLIDE_IMMEDIATE);
+    }
+}
+
+//! Fetches the playlist for the server menu. Does not stamp a sync ticket.
+class PlaylistFetchView extends WatchUi.View {
+
+    private var _client as ProxyClient;
+    private var _started as Boolean;
+    private var _opened as Boolean;
+
+    function initialize() {
+        View.initialize();
+        _client = new ProxyClient();
+        _started = false;
+        _opened = false;
+    }
+
+    function onShow() as Void {
+        if (_opened) {
+            WatchUi.popView(WatchUi.SLIDE_IMMEDIATE);
+            return;
+        }
+        if (_started) {
+            return;
+        }
+        _started = true;
+        if (!_client.isConfigured()) {
+            WatchUi.switchToView(
+                new MessageView(WatchUi.loadResource(Rez.Strings.notConfigured) as String),
+                null,
+                WatchUi.SLIDE_IMMEDIATE
+            );
+            return;
+        }
+        Log.info("Playlist: fetching");
+        _client.playlist(method(:onPlaylist));
+    }
+
+    function onUpdate(dc as Graphics.Dc) as Void {
+        dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_BLACK);
+        dc.clear();
+        dc.drawText(
+            dc.getWidth() / 2,
+            dc.getHeight() / 2,
+            Graphics.FONT_SMALL,
+            WatchUi.loadResource(Rez.Strings.loading) as String,
+            Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER
+        );
+    }
+
+    function onPlaylist(code as Number, data as Dictionary or String or Null) as Void {
+        Log.response("Playlist: fetched", code);
+        if (code == Communications.REQUEST_CANCELLED) {
+            return;
+        }
+        if (code == 409) {
+            show(Rez.Strings.syncNoPlaylist);
+            return;
+        }
+        if (code == 401 || code == 403) {
+            show(Rez.Strings.notConfigured);
+            return;
+        }
+        if (code != 200 || !(data instanceof Dictionary)) {
+            if (SyncConfigView.openStored()) {
+                _opened = true;
+                return;
+            }
+            WatchUi.switchToView(new MessageView("HTTP " + code.toString()), null, WatchUi.SLIDE_IMMEDIATE);
+            return;
+        }
+        var books = data["books"];
+        if (!(books instanceof Array) || books.size() == 0) {
+            show(Rez.Strings.playlistEmpty);
+            return;
+        }
+        var title = SyncConfigView.stringOr(data["playlist"], "");
+        if (title.length() == 0) {
+            title = WatchUi.loadResource(Rez.Strings.menuSyncTitle) as String;
+        }
+        if (!SyncConfigView.openStatus(title, books as Array)) {
+            show(Rez.Strings.playlistEmpty);
+            return;
+        }
+        _opened = true;
+    }
+
+    private function show(resource as Lang.ResourceId) as Void {
+        WatchUi.switchToView(
+            new MessageView(WatchUi.loadResource(resource) as String),
+            null,
+            WatchUi.SLIDE_IMMEDIATE
+        );
     }
 }

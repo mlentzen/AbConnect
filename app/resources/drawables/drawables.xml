@@ -19,4 +19,5 @@
     <bitmap id="IconSync" filename="icon_sync.svg" dithering="none"/>
     <bitmap id="IconReset" filename="icon_reset.svg" dithering="none"/>
     <bitmap id="IconInfo" filename="icon_info.svg" dithering="none"/>
+    <bitmap id="IconSettings" filename="icon_settings.svg" dithering="none"/>
 </drawables>
