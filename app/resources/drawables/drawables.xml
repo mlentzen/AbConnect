@@ -1,7 +1,7 @@
 <drawables>
-    <!-- ab.svg has a viewBox and no fixed pixel size, so the resource compiler
-         rasterises it at each device's launcher icon size. The apps list and
-         the music providers list both show this one. -->
+    <!-- 40x40: launcher size of the fēnix 7 family and other MIP peers.
+         Devices that need a different size override this via monkey.jungle
+         resource overlays (resources-54x54, …). -->
     <bitmap id="LauncherIcon" filename="ab.svg" dithering="none"/>
     <!-- For getProviderIconInfo(): the watch shows it on the entry that opens
          this app's menu, among the system's own entries, so it is a plain menu
