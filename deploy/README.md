@@ -40,9 +40,6 @@ $EDITOR users.toml
 podman secret create --replace abconnect-users users.toml && shred -u users.toml
 systemctl --user restart abconnect-proxy
 ```
-
-`tokens` is a list. To rotate one while the watch still has the old token, prepend the new one, restart, enter it on the watch, then remove the old one.
-
 ## Install
 
 ```sh
@@ -81,18 +78,8 @@ Environment on the quadlet. Unset variables keep these defaults.
 | Variable | Default | Meaning |
 |---|---|---|
 | `ABS_PLAYLIST` | `Garmin` | playlist when a user sets none |
-| `CACHE_MAX_BYTES` | 200 GiB | disk limit across all users |
+| `CACHE_MAX_BYTES` | 20 GiB | disk limit across all users |
 | `RELEASE_TTL_DAYS` | 30 | how long a removed book stays cached |
 | `TRANSCODE_BITRATE_KBPS` | 64 | bitrate when an m4b chapter is encoded to mp3 |
 | `LOG_LEVEL` | `INFO` | |
 | `FORWARDED_ALLOW_IPS` | `127.0.0.1` | peers whose `X-Forwarded-For` is trusted |
-
-A book of mp3 files is copied file by file and not re-encoded. An m4b is cut on its chapter marks and each chapter is encoded to mp3 at `TRANSCODE_BITRATE_KBPS`. An m4b without chapters, or any other container, is left out of the playlist; the reason is a warning in the log.
-
-A book that is already `ready` keeps the segments it was cut with. To re-cut one, delete its cache directory and reset the watch before the next sync. The sync compares segments by index and would keep the old copies:
-
-```sh
-podman exec abconnect-proxy rm -rf /var/cache/abconnect/users/<name>/<book-id>
-```
-
-Five wrong tokens in a minute lock that address out for 60 seconds, so the address has to be the caller's. Send a wrong token through the public URL and look for `presented a missing or invalid token` in `journalctl --user -u abconnect-proxy`. It must show your address. If every caller is `127.0.0.1`, the reverse proxy is not sending `X-Forwarded-For`. If they share another fixed address, add it to `FORWARDED_ALLOW_IPS`. Leave `*` unset: uvicorn would then trust the header from any client.
