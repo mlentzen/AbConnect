@@ -177,11 +177,6 @@ class AbContentIterator extends Media.ContentIterator {
     //! skips through the book.
     private function applyMetadata(content as Media.Content, position as Number) as Void {
         var metadata = content.getMetadata();
-        if (metadata == null) {
-            Log.warn("Iterator: cache metadata is null, building one");
-            content.setMetadata(metadataFor(position));
-            return;
-        }
         metadata.title = _titles[position];
         metadata.album = _album;
         metadata.artist = _artist;
@@ -189,21 +184,12 @@ class AbContentIterator extends Media.ContentIterator {
         content.setMetadata(metadata);
     }
 
-    //! Fallback for content without metadata; lacks the duration.
-    private function metadataFor(position as Number) as Media.ContentMetadata {
-        var metadata = new Media.ContentMetadata();
-        metadata.title = _titles[position];
-        metadata.album = _album;
-        metadata.artist = _artist;
-        metadata.trackNumber = position + 1;
-        return metadata;
-    }
-
     //! null when the index is outside the playlist. A PlaybackFailure when the
     //! segment should be there and the cache cannot provide it. Content otherwise.
     //!
     //! The content object must come from getCachedContentObj(). A hand-made
     //! `new Media.Content(ref, metadata)` is accepted but never starts decoding.
+    //! getCachedContentObj either returns Content or throws; it does not return null.
     private function contentAt(position as Number) as Object? {
         if (Log.LEVEL >= Log.DEBUG) {
             Log.debugCode("Iterator: content asked for", position);
@@ -211,27 +197,23 @@ class AbContentIterator extends Media.ContentIterator {
         if (position < 0 || position >= _refs.size()) {
             return null;
         }
-        var content = null as Media.Content?;
         try {
-            content = Media.getCachedContentObj(
+            var content = Media.getCachedContentObj(
                 new Media.ContentRef(_refs[position], Media.CONTENT_TYPE_AUDIO)
             );
+            if (Log.LEVEL >= Log.DEBUG) {
+                describeResolved(content, position);
+                describeMetadata("before", content);
+            }
+            applyMetadata(content, position);
+            if (Log.LEVEL >= Log.DEBUG) {
+                describeMetadata("after", content);
+            }
+            return content;
         } catch (ex) {
             var message = ex.getErrorMessage();
             return failure("Iterator: cache threw " + ((message == null) ? "?" : message));
         }
-        if (content == null) {
-            return failure("Iterator: nothing in cache at " + position.toString());
-        }
-        if (Log.LEVEL >= Log.DEBUG) {
-            describeResolved(content, position);
-            describeMetadata("before", content);
-        }
-        applyMetadata(content, position);
-        if (Log.LEVEL >= Log.DEBUG) {
-            describeMetadata("after", content);
-        }
-        return content;
     }
 
     //! Only called while debugging. The player asks for content often, and
@@ -268,10 +250,6 @@ class AbContentIterator extends Media.ContentIterator {
     //! Logs what the player will show, to verify our metadata write survived.
     private function describeMetadata(when as String, content as Media.Content) as Void {
         var meta = content.getMetadata();
-        if (meta == null) {
-            Log.warn("Iterator: metadata " + when + " is null");
-            return;
-        }
         Log.debug(
             "Iterator: metadata " + when
                 + " title=" + ((meta.title == null) ? "null" : meta.title)

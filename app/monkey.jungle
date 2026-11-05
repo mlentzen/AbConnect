@@ -1,1 +1,20 @@
 project.manifest = manifest.xml
+
+# Launcher icon size varies by device. Base resources ship a 40x40 SVG (fēnix 7
+# family). The groups below append an overlay that redefines LauncherIcon at the
+# device's native size so the store export does not scale a mismatched bitmap.
+
+launcher54 = fr165m;fr170m;fr57042mm;venu441mm;vivoactive6
+launcher54.resourcePath = $(launcher54.resourcePath);resources-54x54
+
+launcher56 = vivoactive5
+launcher56.resourcePath = $(launcher56.resourcePath);resources-56x56
+
+launcher60 = d2mach1;epix2;epix2pro42mm;epix2pro47mm;epix2pro51mm;fenix843mm;fenix943mm;fenix9pro43mm;fenixe;fr265;fr265s;marq2;marq2aviator
+launcher60.resourcePath = $(launcher60.resourcePath);resources-60x60
+
+launcher65 = d2mach2;d2mach2pro;fenix847mm;fenix8pro47mm;fenix947mm;fenix9pro47mm;fenix9pro51mm;fr57047mm;fr965;fr970;venu445mm
+launcher65.resourcePath = $(launcher65.resourcePath);resources-65x65
+
+launcher70 = venu3;venu3s
+launcher70.resourcePath = $(launcher70.resourcePath);resources-70x70

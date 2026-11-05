@@ -32,7 +32,6 @@ class ProgressPush {
     private var _resumeAfter as String?;
     private var _announce as Boolean;
     private var _ask as Array<String>;
-    private var _stoppedPlayback as Boolean;
     // Frozen before stopPlayback() can touch the store; every attempt resends it.
     private var _entries as Array?;
     private var _loading as MessageView?;
@@ -48,7 +47,6 @@ class ProgressPush {
         _resumeAfter = null;
         _announce = true;
         _ask = [] as Array<String>;
-        _stoppedPlayback = false;
         _entries = null;
         _loading = null;
         _startedMs = 0;
@@ -78,7 +76,6 @@ class ProgressPush {
             return;
         }
         _startedMs = System.getTimer();
-        _stoppedPlayback = false;
         _awaiting = false;
         // Before stopPlayback(): its STOP event overwrites the stored position.
         var entries = Store.syncEntries(_ask);
@@ -89,7 +86,6 @@ class ProgressPush {
         _entries = entries;
         Log.debugCode("Push: entries", entries.size());
         Log.info("Push: stopping playback to free the radio");
-        _stoppedPlayback = true;
         Media.stopPlayback();
         _attempts = 0;
         showLoading();
@@ -215,7 +211,6 @@ class ProgressPush {
 
     private function done() as Void {
         _awaiting = false;
-        _stoppedPlayback = false;
         _loading = null;
         _timer.stop();
         resume();

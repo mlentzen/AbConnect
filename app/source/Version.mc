@@ -1,6 +1,6 @@
 import Toybox.Lang;
 
-//! The version of the app, bumped by hand.
+//! The version of the app. Bump with `make bump-app` (or `make bump-both`).
 //!
 //! On its own a version number cannot say which build is on the watch: two
 //! builds of "0.1.0" are indistinguishable, and the interesting ones are always
