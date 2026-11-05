@@ -18,7 +18,8 @@ help:
 bump-app:
 	@python3 tools/bump_version.py app $(PART)
 
+# https://docs.astral.sh/uv/guides/package/#updating-your-version
 bump-proxy:
-	@python3 tools/bump_version.py proxy $(PART)
+	@cd proxy && uv version --bump $(PART) --no-sync
 
 bump-both: bump-proxy bump-app
