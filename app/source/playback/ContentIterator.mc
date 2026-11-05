@@ -177,6 +177,9 @@ class AbContentIterator extends Media.ContentIterator {
     //! skips through the book.
     private function applyMetadata(content as Media.Content, position as Number) as Void {
         var metadata = content.getMetadata();
+        if (metadata == null) {
+            metadata = new Media.ContentMetadata();
+        }
         metadata.title = _titles[position];
         metadata.album = _album;
         metadata.artist = _artist;
