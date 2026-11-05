@@ -7,6 +7,7 @@ talks here.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from pathlib import Path
@@ -28,6 +29,18 @@ class AbsAuthError(AbsError):
     """The API key was rejected (HTTP 401 or 403)."""
 
 
+class _TransferBroken(Exception):
+    """A download hung or broke off. The httpx error is its __cause__."""
+
+
+def _describe(error: BaseException | None) -> str:
+    """Name an error even when it carries no message, as httpx timeouts do."""
+    if error is None:
+        return "unknown error"
+    text = str(error)
+    return f"{type(error).__name__}: {text}" if text else type(error).__name__
+
+
 class AbsClient:
     """Calls one Audiobookshelf server."""
 
@@ -38,6 +51,8 @@ class AbsClient:
         *,
         timeout: float = 60.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        download_attempts: int = 3,
+        retry_delay: float = 2.0,
     ) -> None:
         """Open a client for one Audiobookshelf server.
 
@@ -47,7 +62,13 @@ class AbsClient:
             timeout: Seconds for a request. The connect timeout stays at 10.
             transport: Replaces the network stack. Tests pass an httpx mock,
                 and production leaves it unset.
+            download_attempts: How often one file is tried when its transfer
+                hangs or breaks off. HTTP errors are not retried.
+            retry_delay: Seconds before the second attempt, growing with each
+                further one.
         """
+        self._download_attempts = max(1, download_attempts)
+        self._retry_delay = retry_delay
         self._base_url = base_url.rstrip("/")
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
@@ -148,6 +169,39 @@ class AbsClient:
             AbsAuthError: The API key was rejected.
             AbsError: The transfer failed or returned no data.
         """
+        # A transfer can hang or break midway, somewhere between this proxy
+        # and Audiobookshelf, even though Audiobookshelf sent everything. The
+        # broken connection is dropped by httpx, so a retry uses a new one.
+        for attempt in range(1, self._download_attempts + 1):
+            try:
+                return await self._download_once(
+                    item_id, ino, destination, on_progress=on_progress
+                )
+            except _TransferBroken as broken:
+                error = broken.__cause__
+                if attempt == self._download_attempts:
+                    raise AbsError(
+                        f"Download of {ino} aborted after {attempt} attempts: "
+                        f"{_describe(error)}"
+                    ) from error
+                log.warning(
+                    "Download of %s broke off (%s), attempt %d of %d, retrying",
+                    ino,
+                    _describe(error),
+                    attempt,
+                    self._download_attempts,
+                )
+                await asyncio.sleep(self._retry_delay * attempt)
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    async def _download_once(
+        self,
+        item_id: str,
+        ino: str,
+        destination: Path,
+        *,
+        on_progress: Callable[[int, int], None] | None,
+    ) -> int:
         destination.parent.mkdir(parents=True, exist_ok=True)
         partial = destination.with_suffix(destination.suffix + ".part")
         written = 0
@@ -166,9 +220,12 @@ class AbsClient:
                         written += len(chunk)
                         if on_progress:
                             on_progress(written, total)
+        except httpx.TransportError as error:
+            partial.unlink(missing_ok=True)
+            raise _TransferBroken from error
         except httpx.HTTPError as error:
             partial.unlink(missing_ok=True)
-            raise AbsError(f"Download of {ino} aborted: {error}") from error
+            raise AbsError(f"Download of {ino} aborted: {_describe(error)}") from error
         except BaseException:
             partial.unlink(missing_ok=True)
             raise

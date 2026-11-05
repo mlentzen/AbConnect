@@ -13,9 +13,13 @@ LIBRARIES = {
 }
 
 
-def client_for(handler) -> AbsClient:
+def client_for(handler, **options) -> AbsClient:
+    options.setdefault("retry_delay", 0)
     return AbsClient(
-        "https://abs.example", "key-123", transport=httpx.MockTransport(handler)
+        "https://abs.example",
+        "key-123",
+        transport=httpx.MockTransport(handler),
+        **options,
     )
 
 
@@ -73,6 +77,52 @@ class TestDownload:
             )
 
         assert list(tmp_path.iterdir()) == []
+
+    async def test_retries_a_transfer_that_hangs(self, tmp_path):
+        calls = []
+
+        def handler(request):
+            calls.append(request.url.path)
+            if len(calls) < 3:
+                raise httpx.ReadTimeout("", request=request)
+            return httpx.Response(200, content=b"audio")
+
+        size = await client_for(handler).download_file(
+            "li_1", "9001", tmp_path / "book.mp3"
+        )
+
+        assert size == 5
+        assert len(calls) == 3
+        assert (tmp_path / "book.mp3").read_bytes() == b"audio"
+
+    async def test_gives_up_after_the_last_attempt_and_names_the_error(self, tmp_path):
+        calls = []
+
+        def handler(request):
+            calls.append(1)
+            raise httpx.ReadTimeout("", request=request)
+
+        with pytest.raises(AbsError, match="after 2 attempts: ReadTimeout"):
+            await client_for(handler, download_attempts=2).download_file(
+                "li_1", "9001", tmp_path / "book.mp3"
+            )
+
+        assert len(calls) == 2
+        assert list(tmp_path.iterdir()) == []
+
+    async def test_does_not_retry_an_http_error(self, tmp_path):
+        calls = []
+
+        def handler(request):
+            calls.append(1)
+            return httpx.Response(500)
+
+        with pytest.raises(AbsError, match="HTTP 500"):
+            await client_for(handler).download_file(
+                "li_1", "9001", tmp_path / "book.mp3"
+            )
+
+        assert len(calls) == 1
 
     async def test_rejects_an_empty_response(self, tmp_path):
         with pytest.raises(AbsError, match="no data"):
