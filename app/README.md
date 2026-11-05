@@ -6,9 +6,8 @@ App of type `audio-content-provider-app`. It downloads audiobook segments from
 [abconnect-proxy](../proxy/README.md), plays them through the system media
 player and remembers the listening progress.
 
-> The watch app was written with Claude Code and has only been tried
-> on a fēnix 7X Pro, the one device `manifest.xml` declares. Extension to other devices
-> is possible but might require a few layout changes.
+> Claude Code was used to write this Garmin app and it has only been tested on a Fenix7XPro. Other
+> devices are configured in the manifest file, but layout issues might come up.
 
 ## Structure
 
@@ -58,8 +57,6 @@ token contains it. **Do not share a `.prg` built with your token.**
 | `LOG_LEVEL` | - | `0` | 0 errors, 1 warnings, 2 course of events, 3 everything |
 | `DEVICE` | - | `fenix7xpro` | device id passed to the compiler |
 | `JUNGLES` | - | `monkey.jungle` | `monkeyc -f` jungles; CI sets `monkey-ci.jungle` (fenix7xpro stub, no device overlays) |
-
-`copy.sh` copies the build to a watch mounted over MTP; it needs `WATCH_MTP` in the same `.env` (see the script).
 
 Device profiles come from the SDK Manager after a Garmin login. Without that
 login, `python3 ../tools/stub_device.py` writes a substitute profile that
