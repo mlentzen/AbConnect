@@ -1,4 +1,4 @@
 <drawables>
-    <!-- Overrides LauncherIcon for devices whose launcher is 56x56. -->
+    <!-- 56x56 LauncherIcon; regenerate from resources-launcher/ab.svg. -->
     <bitmap id="LauncherIcon" filename="ab.svg" dithering="none"/>
 </drawables>

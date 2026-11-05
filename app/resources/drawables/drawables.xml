@@ -1,7 +1,6 @@
 <drawables>
     <!-- 40x40: launcher size of the fēnix 7 family and other MIP peers.
-         Devices that need a different size override this via monkey.jungle
-         resource overlays (resources-54x54, …). -->
+         Other sizes live under resources-launcher/<NxN>/ (see monkey.jungle). -->
     <bitmap id="LauncherIcon" filename="ab.svg" dithering="none"/>
     <!-- For getProviderIconInfo(): the watch shows it on the entry that opens
          this app's menu, among the system's own entries, so it is a plain menu
