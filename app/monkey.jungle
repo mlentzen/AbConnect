@@ -1,1 +1,50 @@
 project.manifest = manifest.xml
+
+# Launcher icon size varies by device. Base resources/ ships 40x40 (fēnix 7
+# family). Overlays under resources-launcher/<size>/ redefine LauncherIcon.
+#
+# Use $(base.resourcePath), not $(device.resourcePath): a self-reference
+# StackOverflows the jungle evaluator when the device has no inherited path.
+# CI uses monkey-ci.jungle instead (fenix7xpro stub only).
+
+# 54x54
+fr165m.resourcePath = $(base.resourcePath);resources-launcher/54x54
+fr170m.resourcePath = $(base.resourcePath);resources-launcher/54x54
+fr57042mm.resourcePath = $(base.resourcePath);resources-launcher/54x54
+venu441mm.resourcePath = $(base.resourcePath);resources-launcher/54x54
+vivoactive6.resourcePath = $(base.resourcePath);resources-launcher/54x54
+
+# 56x56
+vivoactive5.resourcePath = $(base.resourcePath);resources-launcher/56x56
+
+# 60x60
+d2mach1.resourcePath = $(base.resourcePath);resources-launcher/60x60
+epix2.resourcePath = $(base.resourcePath);resources-launcher/60x60
+epix2pro42mm.resourcePath = $(base.resourcePath);resources-launcher/60x60
+epix2pro47mm.resourcePath = $(base.resourcePath);resources-launcher/60x60
+epix2pro51mm.resourcePath = $(base.resourcePath);resources-launcher/60x60
+fenix843mm.resourcePath = $(base.resourcePath);resources-launcher/60x60
+fenix943mm.resourcePath = $(base.resourcePath);resources-launcher/60x60
+fenix9pro43mm.resourcePath = $(base.resourcePath);resources-launcher/60x60
+fenixe.resourcePath = $(base.resourcePath);resources-launcher/60x60
+fr265.resourcePath = $(base.resourcePath);resources-launcher/60x60
+fr265s.resourcePath = $(base.resourcePath);resources-launcher/60x60
+marq2.resourcePath = $(base.resourcePath);resources-launcher/60x60
+marq2aviator.resourcePath = $(base.resourcePath);resources-launcher/60x60
+
+# 65x65
+d2mach2.resourcePath = $(base.resourcePath);resources-launcher/65x65
+d2mach2pro.resourcePath = $(base.resourcePath);resources-launcher/65x65
+fenix847mm.resourcePath = $(base.resourcePath);resources-launcher/65x65
+fenix8pro47mm.resourcePath = $(base.resourcePath);resources-launcher/65x65
+fenix947mm.resourcePath = $(base.resourcePath);resources-launcher/65x65
+fenix9pro47mm.resourcePath = $(base.resourcePath);resources-launcher/65x65
+fenix9pro51mm.resourcePath = $(base.resourcePath);resources-launcher/65x65
+fr57047mm.resourcePath = $(base.resourcePath);resources-launcher/65x65
+fr965.resourcePath = $(base.resourcePath);resources-launcher/65x65
+fr970.resourcePath = $(base.resourcePath);resources-launcher/65x65
+venu445mm.resourcePath = $(base.resourcePath);resources-launcher/65x65
+
+# 70x70
+venu3.resourcePath = $(base.resourcePath);resources-launcher/70x70
+venu3s.resourcePath = $(base.resourcePath);resources-launcher/70x70

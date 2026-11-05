@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Creates a substitute device profile so `monkeyc` builds without the SDK Manager.
+"""Creates a substitute fenix7xpro profile so `monkeyc` builds without the SDK Manager.
 
 WHAT THIS IS GOOD FOR: The Connect IQ compiler requires a device profile under
 ~/.Garmin/ConnectIQ/Devices/. The real profiles are only downloaded by the SDK
 Manager after a Garmin login. Without them the code cannot even be compiled.
+CI only stubs fenix7xpro — enough for `./app/build.sh` with the default jungle.
 
 WHAT IT IS NOT FOR: The values here are reconstructed, not from Garmin. A green
 build proves that the code is syntactically correct, that all API symbols
@@ -30,11 +31,36 @@ PROFILE = {
     "resolution": {"width": 280, "height": 280},
     "launcherIcon": {"width": 40, "height": 40},
     "appTypes": [
-        {"type": "watchApp", "memoryLimit": 1048576, "prgLimit": 4194304, "fitSessionMemory": 16384},
-        {"type": "audioContentProvider", "memoryLimit": 1048576, "prgLimit": 4194304, "fitSessionMemory": 0},
-        {"type": "widget", "memoryLimit": 524288, "prgLimit": 2097152, "fitSessionMemory": 0},
-        {"type": "background", "memoryLimit": 65536, "prgLimit": 1048576, "fitSessionMemory": 0},
-        {"type": "glance", "memoryLimit": 65536, "prgLimit": 1048576, "fitSessionMemory": 0},
+        {
+            "type": "watchApp",
+            "memoryLimit": 1048576,
+            "prgLimit": 4194304,
+            "fitSessionMemory": 16384,
+        },
+        {
+            "type": "audioContentProvider",
+            "memoryLimit": 1048576,
+            "prgLimit": 4194304,
+            "fitSessionMemory": 0,
+        },
+        {
+            "type": "widget",
+            "memoryLimit": 524288,
+            "prgLimit": 2097152,
+            "fitSessionMemory": 0,
+        },
+        {
+            "type": "background",
+            "memoryLimit": 65536,
+            "prgLimit": 1048576,
+            "fitSessionMemory": 0,
+        },
+        {
+            "type": "glance",
+            "memoryLimit": 65536,
+            "prgLimit": 1048576,
+            "fitSessionMemory": 0,
+        },
     ],
     # Do not add supportedAPIAnnotations. An empty list makes the SDK 9
     # compiler throw a NullPointerException while rasterizing SVGs, and
@@ -65,9 +91,13 @@ def main() -> int:
 
     target = args.root / PROFILE["deviceId"]
     target.mkdir(parents=True, exist_ok=True)
-    (target / "compiler.json").write_text(json.dumps(PROFILE, indent=1), encoding="utf-8")
+    (target / "compiler.json").write_text(
+        json.dumps(PROFILE, indent=1) + "\n", encoding="utf-8"
+    )
     print(f"Substitute profile written: {target / 'compiler.json'}")
-    print("Caution: reconstructed values. Does not replace a build against the real profile.")
+    print(
+        "Caution: reconstructed values. Does not replace a build against the real profile."
+    )
     return 0
 
 

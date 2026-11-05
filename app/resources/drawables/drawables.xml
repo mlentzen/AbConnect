@@ -1,8 +1,6 @@
 <drawables>
-    <!-- ab.svg declares 40 x 40, the launcher size of the fenix 7 range, so it
-         is rasterised at exactly that size. A bare scaleX="40" is not read as
-         pixels: the resource compiler ran out of heap on it. The apps list and
-         the music providers list both show this one. -->
+    <!-- 40x40: launcher size of the fēnix 7 family and other MIP peers.
+         Other sizes live under resources-launcher/<NxN>/ (see monkey.jungle). -->
     <bitmap id="LauncherIcon" filename="ab.svg" dithering="none"/>
     <!-- For getProviderIconInfo(): the watch shows it on the entry that opens
          this app's menu, among the system's own entries, so it is a plain menu

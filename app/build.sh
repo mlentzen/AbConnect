@@ -31,6 +31,9 @@ CIQ_HOME="${CIQ_HOME:-/opt/ciq}"
 CIQ_KEY="${CIQ_KEY:-$HOME/.ciq/developer_key}"
 DEVICE="${DEVICE:-fenix7xpro}"
 OUTPUT="${OUTPUT:-build/abconnect.prg}"
+# Default: monkey.jungle (per-device launcher overlays for export).
+# CI: JUNGLES=monkey-ci.jungle (fenix7xpro stub only).
+JUNGLES="${JUNGLES:-monkey.jungle}"
 # 2 = informative: reports what matters without getting stuck on the generic
 # type parameters of Storage and Method.
 TYPECHECK="${TYPECHECK:-2}"
@@ -98,7 +101,7 @@ module BuildDefaults {
 EOF
 
 "$CIQ_HOME/bin/monkeyc" \
-    -f monkey.jungle \
+    -f "$JUNGLES" \
     -d "$DEVICE" \
     -o "$OUTPUT" \
     -y "$CIQ_KEY" \

@@ -1,0 +1,4 @@
+<drawables>
+    <!-- 70x70 LauncherIcon; regenerate from resources-launcher/ab.svg. -->
+    <bitmap id="LauncherIcon" filename="ab.svg" dithering="none"/>
+</drawables>

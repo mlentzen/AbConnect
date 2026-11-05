@@ -150,7 +150,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         // that stop restarts the download. A second Back soon after a restart,
         // with no notification dismissed, is the user stopping for real.
         sampleNotifications();
-        var dropped = notificationCount() < _notePeak;
+        var dropped = deviceNotificationCount() < _notePeak;
         if (Store.resumeWasCancelled() && !dropped) {
             Log.warn("Sync: onStopSync, cancelled");
             Store.clearResume();
@@ -266,7 +266,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
     //! Samples the notification count so a dismiss can be told from Back on
     //! the sync screen. The count only rises while the notification is up.
     private function startNoteWatch() as Void {
-        _notePeak = notificationCount();
+        _notePeak = deviceNotificationCount();
         try {
             var timer = new Timer.Timer();
             timer.start(method(:onNoteSample), 1000, true);
@@ -289,13 +289,15 @@ class AbSyncDelegate extends Communications.SyncDelegate {
     }
 
     private function sampleNotifications() as Void {
-        var count = notificationCount();
+        var count = deviceNotificationCount();
         if (count > _notePeak) {
             _notePeak = count;
         }
     }
 
-    private function notificationCount() as Number {
+    //! Named apart from DeviceSettings.notificationCount so `has :notificationCount`
+    //! looks up the settings field, not this method.
+    private function deviceNotificationCount() as Number {
         var settings = System.getDeviceSettings();
         if (settings has :notificationCount) {
             return settings.notificationCount;
@@ -600,11 +602,9 @@ class AbSyncDelegate extends Communications.SyncDelegate {
 
         var known = knownSegments(bookId);
         _downloads = [] as Array<Dictionary>;
+        // segments is Array<Dictionary>: only Dictionaries were accumulated above.
         for (var i = 0; i < segments.size(); ++i) {
             var segment = segments[i];
-            if (!(segment instanceof Dictionary)) {
-                continue;
-            }
             var index = segment["index"];
             if (index instanceof Number && known.indexOf(index) < 0) {
                 _downloads.add(segment);
