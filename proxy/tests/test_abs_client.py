@@ -78,6 +78,17 @@ class TestDownload:
 
         assert list(tmp_path.iterdir()) == []
 
+    async def test_asks_for_a_fresh_connection_per_file(self, tmp_path):
+        seen = {}
+
+        def handler(request):
+            seen["connection"] = request.headers.get("connection")
+            return httpx.Response(200, content=b"audio")
+
+        await client_for(handler).download_file("li_1", "9001", tmp_path / "a.mp3")
+
+        assert seen["connection"] == "close"
+
     async def test_retries_a_transfer_that_hangs(self, tmp_path):
         calls = []
 

@@ -206,8 +206,12 @@ class AbsClient:
         partial = destination.with_suffix(destination.suffix + ".part")
         written = 0
         try:
+            # One connection per file: on a kept-alive connection, a transfer
+            # hung after a few hundred MB, while a fresh one never did.
             async with self._client.stream(
-                "GET", f"/api/items/{item_id}/file/{ino}/download"
+                "GET",
+                f"/api/items/{item_id}/file/{ino}/download",
+                headers={"Connection": "close"},
             ) as response:
                 if response.status_code in (401, 403):
                     raise AbsAuthError("Audiobookshelf rejects the API key")
