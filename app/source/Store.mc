@@ -597,8 +597,8 @@ module Store {
     //! Everything the watch knows, plus a question about each of these books.
     //!
     //! /v1/progress only answers about the books it was sent, so a book with
-    //! nothing stored is sent with timestamp 0: it loses every reconciliation
-    //! and the server's position comes back.
+    //! nothing stored is sent with timestamp 0. The newer timestamp wins, so
+    //! this report loses and the server's position comes back.
     function syncEntries(bookIds as Array<String>) as Array<Dictionary> {
         var entries = progressEntries();
         for (var i = 0; i < bookIds.size(); ++i) {

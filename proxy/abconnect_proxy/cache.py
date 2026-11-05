@@ -123,7 +123,7 @@ class Cache:
         (directory / STATE).write_text(json.dumps(state), encoding="utf-8")
 
     def pin(self, book_id: str, now: float | None = None) -> None:
-        """Mark the book as selected so it is not evicted.
+        """Mark the book as selected so the budget leaves it in place.
 
         Args:
             book_id: Audiobookshelf library-item id.
@@ -156,7 +156,7 @@ class Cache:
     def touch(self, book_id: str, now: float | None = None) -> None:
         """Record that the book was just used.
 
-        The budget evicts the least recently used unpinned books first.
+        The budget deletes the least recently used unpinned books first.
 
         Args:
             book_id: Audiobookshelf library-item id.
@@ -207,7 +207,7 @@ class Cache:
             return []
         now = time.time() if now is None else now
         deadline = ttl_days * 86400
-        evicted = []
+        removed = []
         for book_id in self.books():
             state = self._state(book_id)
             released = state.get("released_at")
@@ -215,11 +215,11 @@ class Cache:
                 continue
             if now - released > deadline:
                 self.discard(book_id)
-                evicted.append(book_id)
-        return evicted
+                removed.append(book_id)
+        return removed
 
-    def eviction_candidates(self) -> list[tuple[float, str]]:
-        """List the books the budget is allowed to evict.
+    def removable(self) -> list[tuple[float, str]]:
+        """List the books the budget is allowed to delete.
 
         Returns:
             Pairs of last-access time and book id, for books that are not
@@ -256,10 +256,10 @@ class Budget:
         return self.total_bytes() + needed_bytes <= self.max_bytes
 
     def enforce(self) -> list[tuple[str, str]]:
-        """Evict unpinned books until the cache is within its budget.
+        """Delete unpinned books until the cache is within its budget.
 
         Returns:
-            Pairs of user name and book id for everything evicted. Empty when
+            Pairs of user name and book id for everything deleted. Empty when
             the cache was already within budget.
         """
         total = self.total_bytes()
@@ -269,18 +269,18 @@ class Budget:
         candidates = sorted(
             (access, owner, book_id)
             for owner, cache in self.caches.items()
-            for access, book_id in cache.eviction_candidates()
+            for access, book_id in cache.removable()
         )
 
-        evicted = []
+        removed = []
         for _, owner, book_id in candidates:
             if total <= self.max_bytes:
                 break
             cache = self.caches[owner]
             total -= cache.book_bytes(book_id)
             cache.discard(book_id)
-            evicted.append((owner, book_id))
-            log.info("Cache over budget: %s of %s evicted", book_id, owner)
+            removed.append((owner, book_id))
+            log.info("Cache over budget: %s of %s deleted", book_id, owner)
         if total > self.max_bytes:
             log.warning("Cache still over budget. All remaining books are pinned")
-        return evicted
+        return removed

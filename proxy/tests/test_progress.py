@@ -3,8 +3,8 @@ import pytest
 from abconnect_proxy.progress import (
     Position,
     book_time,
+    choose,
     position,
-    reconcile,
     server_timestamp,
 )
 
@@ -51,18 +51,18 @@ class TestServerTimestamp:
         assert server_timestamp(payload) == 0.0
 
 
-class TestReconcile:
+class TestChoose:
     def test_newer_server_position_wins(self):
-        assert reconcile(
+        assert choose(
             watch_time=100, watch_ts=10, server_time=500, server_ts=20
         ) == ("server", 500)
 
     def test_newer_watch_position_wins(self):
-        assert reconcile(
+        assert choose(
             watch_time=100, watch_ts=30, server_time=500, server_ts=20
         ) == ("watch", 100)
 
     def test_a_tie_goes_to_the_watch(self):
-        assert reconcile(
+        assert choose(
             watch_time=100, watch_ts=20, server_time=500, server_ts=20
         ) == ("watch", 100)

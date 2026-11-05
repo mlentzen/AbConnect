@@ -123,7 +123,7 @@ class Preparer:
             )
         state = self._states.get(book_id, BookState())
         if state.status is Status.READY:
-            # The manifest is gone, so the book was evicted, possibly by the
+            # The manifest is gone, so the book was deleted, possibly by the
             # budget on behalf of another user's job, which never tells this
             # preparer. READY would promise segments that no longer exist.
             return BookState()
