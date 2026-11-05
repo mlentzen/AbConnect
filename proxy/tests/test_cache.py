@@ -39,16 +39,16 @@ class TestManifest:
         assert cache.load_manifest("book") is None
 
 
-class TestEviction:
+class TestSweep:
     def test_sweep_drops_released_books_past_their_ttl(self, cache):
         fill(cache, "old")
         fill(cache, "fresh")
         cache.release("old", now=0)
         cache.release("fresh", now=100 * 86400)
 
-        evicted = cache.sweep(ttl_days=30, now=100 * 86400)
+        removed = cache.sweep(ttl_days=30, now=100 * 86400)
 
-        assert evicted == ["old"]
+        assert removed == ["old"]
         assert cache.is_ready("fresh")
 
     def test_sweep_never_touches_pinned_books(self, cache):
@@ -68,14 +68,14 @@ class TestEviction:
 
 
 class TestBudget:
-    def test_evicts_least_recently_used_first(self, cache):
+    def test_deletes_least_recently_used_first(self, cache):
         for name, access in (("a", 30.0), ("b", 10.0), ("c", 20.0)):
             fill(cache, name, size=1000)
             cache.touch(name, now=access)
 
-        evicted = Budget(max_bytes=2200, caches={"alice": cache}).enforce()
+        removed = Budget(max_bytes=2200, caches={"alice": cache}).enforce()
 
-        assert evicted == [("alice", "b")]  # 3000 -> 2000 bytes, oldest access first
+        assert removed == [("alice", "b")]  # 3000 -> 2000 bytes, oldest access first
 
     def test_leaves_pinned_books_alone_even_when_over(self, cache):
         fill(cache, "pinned", size=5000)
@@ -84,7 +84,7 @@ class TestBudget:
         assert Budget(max_bytes=10, caches={"alice": cache}).enforce() == []
         assert cache.is_ready("pinned")
 
-    def test_counts_and_evicts_across_users(self, tmp_path):
+    def test_counts_and_deletes_across_users(self, tmp_path):
         """The disk is shared: one user's new book may push out another's old one."""
         alice = Cache(root=tmp_path / USERS_DIR / "alice")
         bob = Cache(root=tmp_path / USERS_DIR / "bob")

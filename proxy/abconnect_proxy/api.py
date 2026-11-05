@@ -23,8 +23,8 @@ from .abs_client import AbsClient, AbsError
 from .cache import SAFE_ID, UnsafeBookId, check_id
 from .config import Config
 from .preparer import Status
-from .reconciler import MAX_PLAYLIST_BOOKS
 from .users import UserRuntime, build_runtimes
+from .watcher import MAX_PLAYLIST_BOOKS
 
 log = logging.getLogger(__name__)
 
@@ -96,7 +96,7 @@ def create_app(
         # segmented and ready before that user's watch syncs the next time.
         watchers = [
             asyncio.create_task(
-                user.reconciler.run_forever(), name=f"playlist-watcher:{name}"
+                user.watcher.run_forever(), name=f"playlist-watcher:{name}"
             )
             for name, user in app.state.users.items()
         ]
@@ -255,7 +255,7 @@ async def _user_health(user: UserRuntime) -> dict:
         await user.abs.ping()
     except AbsError as error:
         entry["audiobookshelf"] = str(error)
-    last = user.reconciler.last
+    last = user.watcher.last
     entry["playlist_found"] = last.found
     if last.error:
         entry["playlist_error"] = last.error
@@ -307,7 +307,7 @@ def _register(app: FastAPI) -> None:
     async def playlist(user: UserRuntime = Depends(current_user)):
         """Return the target playlist for the watch.
 
-        Reconciliation runs on every call so a just-added book starts
+        The playlist is refreshed on every call so a just-added book starts
         preparing immediately instead of waiting for the next background pass.
         A playlist name that does not exist is HTTP 409, so the watch does
         not treat it as an empty library.
@@ -318,7 +318,7 @@ def _register(app: FastAPI) -> None:
         Returns:
             The playlist name, whether it was found, and each book's status.
         """
-        result = await user.reconciler.reconcile()
+        result = await user.watcher.refresh()
 
         books = []
         for book in result.books[:MAX_PLAYLIST_BOOKS]:
@@ -506,7 +506,7 @@ def _register(app: FastAPI) -> None:
 
             server_time = float((stored or {}).get("currentTime") or 0.0)
             server_ts = progress.server_timestamp(stored)
-            winner, winning_time = progress.reconcile(
+            winner, winning_time = progress.choose(
                 watch_time=watch_time,
                 watch_ts=entry.ts,
                 server_time=server_time,

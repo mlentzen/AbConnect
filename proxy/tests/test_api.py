@@ -9,7 +9,7 @@ from abconnect_proxy import config as config_module
 from abconnect_proxy.abs_client import AbsClient
 from abconnect_proxy.api import MAX_SEGMENTS_PAGE_BYTES, create_app
 from abconnect_proxy.cache import USERS_DIR, Cache
-from abconnect_proxy.reconciler import MAX_PLAYLIST_BOOKS
+from abconnect_proxy.watcher import MAX_PLAYLIST_BOOKS
 
 from .conftest import write_users
 
@@ -328,7 +328,7 @@ class TestSegments:
         with build_client(config) as client:
             response = client.get("/v1/books/li_a/segments", headers=HEAD)
         assert response.status_code == 409
-        # The exact state depends on whether the playlist reconciliation has
+        # The exact state depends on whether the playlist refresh has
         # already run - what matters is that "not ready" is reported.
         assert "not ready" in response.json()["detail"]
 

@@ -17,8 +17,8 @@ MAX_PLAYLIST_BOOKS = 50
 
 
 @dataclass
-class ReconcileResult:
-    """Outcome of one reconciliation pass.
+class PlaylistResult:
+    """Outcome of one pass over the playlist.
 
     Attributes:
         found: True when the named playlist exists.
@@ -40,7 +40,7 @@ class ReconcileResult:
 
 
 @dataclass
-class PlaylistReconciler:
+class PlaylistWatcher:
     """Keep one user's cache aligned with one playlist in their Audiobookshelf.
 
     Attributes:
@@ -57,15 +57,15 @@ class PlaylistReconciler:
     config: Config
     playlist: str
 
-    _last: ReconcileResult = field(default_factory=ReconcileResult)
+    _last: PlaylistResult = field(default_factory=PlaylistResult)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     @property
-    def last(self) -> ReconcileResult:
+    def last(self) -> PlaylistResult:
         return self._last
 
-    async def reconcile(self) -> ReconcileResult:
-        """Bring the cache in line with this reconciler's playlist.
+    async def refresh(self) -> PlaylistResult:
+        """Bring the cache in line with this watcher's playlist.
 
         Books newly on the playlist are prepared and pinned. A pinned book
         that has left the playlist is released, so its files stay until the
@@ -77,7 +77,7 @@ class PlaylistReconciler:
             The outcome of this pass.
         """
         async with self._lock:
-            result = ReconcileResult()
+            result = PlaylistResult()
             try:
                 playlist = await self.abs_client.playlist(self.playlist)
             except AbsError as error:
@@ -120,7 +120,7 @@ class PlaylistReconciler:
 
             if result.prepared or result.released:
                 log.info(
-                    "Playlist '%s' reconciled: %d newly prepared, %d released",
+                    "Playlist '%s' updated: %d newly prepared, %d released",
                     self.playlist,
                     len(result.prepared),
                     len(result.released),
@@ -129,17 +129,17 @@ class PlaylistReconciler:
             return result
 
     async def run_forever(self) -> None:
-        """Reconcile, wait playlist_poll_seconds, and repeat.
+        """Refresh, wait playlist_poll_seconds, and repeat.
 
         A failure is logged and the loop continues. Cancelling the task
         stops it.
         """
         while True:
             try:
-                await self.reconcile()
+                await self.refresh()
                 await asyncio.sleep(self.config.playlist_poll_seconds)
             except asyncio.CancelledError:
                 raise
             except Exception:
-                log.exception("Playlist reconciliation failed")
+                log.exception("Playlist refresh failed")
                 await asyncio.sleep(self.config.playlist_poll_seconds)

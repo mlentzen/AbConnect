@@ -347,10 +347,10 @@ class TestLifecycle:
         assert state.status is Status.READY
         assert state.segment_count == 2
 
-    async def test_a_book_evicted_behind_its_back_is_pending_again(
+    async def test_a_book_deleted_behind_its_back_is_pending_again(
         self, tmp_path, single_book
     ):
-        """The shared budget may evict a book on behalf of another user's job,
+        """The shared budget may delete a book on behalf of another user's job,
         and nobody tells this preparer. The missing manifest has to be enough."""
         item, source = single_book
         preparer, cache, _, _ = await build(tmp_path, item, source)
@@ -414,7 +414,7 @@ class TestRecut:
     """Changed encoder settings reach a ready book only once its segments are gone.
 
     The segment cache outlives the container. Deleting a book's directory is
-    how an operator makes the next reconciliation cut it again.
+    how an operator makes the next playlist refresh cut it again.
     """
 
     async def test_a_deleted_book_is_cut_again(self, tmp_path, single_book):

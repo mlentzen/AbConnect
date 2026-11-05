@@ -86,7 +86,7 @@ def server_timestamp(progress: dict | None) -> float:
     return value / 1000.0 if value > 1e11 else value
 
 
-def reconcile(
+def choose(
     *,
     watch_time: float,
     watch_ts: float,

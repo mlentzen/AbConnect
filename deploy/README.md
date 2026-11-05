@@ -81,7 +81,7 @@ Environment on the quadlet. Unset variables keep these defaults.
 | Variable | Default | Meaning |
 |---|---|---|
 | `ABS_PLAYLIST` | `Garmin` | playlist when a user sets none |
-| `CACHE_MAX_BYTES` | 200 GiB | eviction limit across all users |
+| `CACHE_MAX_BYTES` | 200 GiB | disk limit across all users |
 | `RELEASE_TTL_DAYS` | 30 | how long a removed book stays cached |
 | `TRANSCODE_BITRATE_KBPS` | 64 | bitrate when an m4b chapter is encoded to mp3 |
 | `LOG_LEVEL` | `INFO` | |

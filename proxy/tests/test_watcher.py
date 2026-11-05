@@ -5,7 +5,7 @@ from abconnect_proxy.abs_client import AbsError
 from abconnect_proxy.cache import Cache
 from abconnect_proxy.parsing import Playlist
 from abconnect_proxy.preparer import BookState, Status
-from abconnect_proxy.reconciler import PlaylistReconciler
+from abconnect_proxy.watcher import PlaylistWatcher
 
 from .conftest import write_users
 
@@ -74,14 +74,14 @@ def make(tmp_path, playlist, states=None, playlist_name="Garmin"):
     cache = Cache(root=cfg.cache_dir)
     abs_client = FakeAbs(playlist)
     preparer = FakePreparer(cache, states)
-    reconciler = PlaylistReconciler(
+    watcher = PlaylistWatcher(
         abs_client=abs_client,
         cache=cache,
         preparer=preparer,
         config=cfg,
         playlist=playlist_name,
     )
-    return reconciler, cache, abs_client, preparer
+    return watcher, cache, abs_client, preparer
 
 
 def playlist_of(*ids):
@@ -102,33 +102,33 @@ def cached(cache, book_id, pinned=True):
 
 
 async def test_asks_for_the_users_own_playlist(tmp_path):
-    reconciler, _, abs_client, _ = make(tmp_path, playlist_of(), playlist_name="Uhr")
+    watcher, _, abs_client, _ = make(tmp_path, playlist_of(), playlist_name="Uhr")
 
-    await reconciler.reconcile()
+    await watcher.refresh()
 
     assert abs_client.asked_for == ["Uhr"]
 
 
 class TestAdding:
     async def test_prepares_books_that_are_new_in_the_playlist(self, tmp_path):
-        reconciler, _, _, preparer = make(tmp_path, playlist_of("li_a", "li_b"))
+        watcher, _, _, preparer = make(tmp_path, playlist_of("li_a", "li_b"))
 
-        result = await reconciler.reconcile()
+        result = await watcher.refresh()
 
         assert result.found
         assert preparer.requested == ["li_a", "li_b"]
         assert result.prepared == ["li_a", "li_b"]
 
     async def test_does_not_prepare_a_book_twice(self, tmp_path):
-        reconciler, _, _, preparer = make(tmp_path, playlist_of("li_a"))
+        watcher, _, _, preparer = make(tmp_path, playlist_of("li_a"))
 
-        await reconciler.reconcile()
-        await reconciler.reconcile()
+        await watcher.refresh()
+        await watcher.refresh()
 
         assert preparer.requested == ["li_a"]
 
     async def test_repins_a_ready_book_that_returned_to_the_playlist(self, tmp_path):
-        reconciler, cache, _, _ = make(
+        watcher, cache, _, _ = make(
             tmp_path,
             playlist_of("li_a"),
             states={"li_a": BookState(status=Status.READY)},
@@ -136,25 +136,25 @@ class TestAdding:
         cached(cache, "li_a", pinned=False)
         assert not cache.pinned("li_a")
 
-        await reconciler.reconcile()
+        await watcher.refresh()
 
-        # Without pinning again, the emergency brake would evict a book that
+        # Without pinning again, the emergency brake would delete a book that
         # belongs on the watch according to the playlist.
         assert cache.pinned("li_a")
 
     async def test_leaves_an_errored_book_alone(self, tmp_path):
-        reconciler, _, _, preparer = make(
+        watcher, _, _, preparer = make(
             tmp_path,
             playlist_of("li_a"),
             states={"li_a": BookState(status=Status.ERROR, error="broken")},
         )
 
-        await reconciler.reconcile()
+        await watcher.refresh()
 
         assert preparer.requested == []
 
     async def test_a_withheld_book_is_left_out_and_released(self, tmp_path):
-        reconciler, cache, _, preparer = make(
+        watcher, cache, _, preparer = make(
             tmp_path,
             playlist_of("li_a", "li_b"),
             states={
@@ -165,7 +165,7 @@ class TestAdding:
         )
         cached(cache, "li_b")
 
-        result = await reconciler.reconcile()
+        result = await watcher.refresh()
 
         assert [b["id"] for b in result.books] == ["li_a"]
         assert result.released == ["li_b"]
@@ -175,31 +175,31 @@ class TestAdding:
 
 class TestRemoving:
     async def test_releases_books_that_left_the_playlist(self, tmp_path):
-        reconciler, cache, _, _ = make(tmp_path, playlist_of("li_a"))
+        watcher, cache, _, _ = make(tmp_path, playlist_of("li_a"))
         cached(cache, "li_a")
         cached(cache, "li_old")
 
-        result = await reconciler.reconcile()
+        result = await watcher.refresh()
 
         assert result.released == ["li_old"]
         assert not cache.pinned("li_old")
         assert cache.is_ready("li_old")  # stays around until the TTL
 
     async def test_an_already_released_book_is_not_released_again(self, tmp_path):
-        reconciler, cache, _, _ = make(tmp_path, playlist_of())
+        watcher, cache, _, _ = make(tmp_path, playlist_of())
         cached(cache, "li_old", pinned=False)
 
-        result = await reconciler.reconcile()
+        result = await watcher.refresh()
 
         assert result.released == []
 
 
 class TestFailureIsNotEmptiness:
     async def test_a_missing_playlist_never_releases_anything(self, tmp_path):
-        reconciler, cache, _, _ = make(tmp_path, None)
+        watcher, cache, _, _ = make(tmp_path, None)
         cached(cache, "li_a")
 
-        result = await reconciler.reconcile()
+        result = await watcher.refresh()
 
         assert not result.found
         assert "does not exist" in result.error
@@ -207,21 +207,21 @@ class TestFailureIsNotEmptiness:
         assert cache.pinned("li_a")
 
     async def test_an_unreachable_server_never_releases_anything(self, tmp_path):
-        reconciler, cache, _, _ = make(tmp_path, AbsError("connection lost"))
+        watcher, cache, _, _ = make(tmp_path, AbsError("connection lost"))
         cached(cache, "li_a")
 
-        result = await reconciler.reconcile()
+        result = await watcher.refresh()
 
         assert result.released == []
         assert cache.pinned("li_a")
         assert "connection lost" in result.error
 
     async def test_an_outage_keeps_reporting_the_last_known_playlist(self, tmp_path):
-        reconciler, _cache, abs_client, _ = make(tmp_path, playlist_of("li_a"))
-        await reconciler.reconcile()
+        watcher, _cache, abs_client, _ = make(tmp_path, playlist_of("li_a"))
+        await watcher.refresh()
 
         abs_client.playlist_value = AbsError("connection lost")
-        result = await reconciler.reconcile()
+        result = await watcher.refresh()
 
         assert result.found  # the last known state, not "empty"
         assert [b["id"] for b in result.books] == ["li_a"]
@@ -229,10 +229,10 @@ class TestFailureIsNotEmptiness:
 
 async def test_only_the_first_fifty_books_belong_on_the_watch(tmp_path):
     ids = [f"li_{i:03d}" for i in range(60)]
-    reconciler, cache, _, preparer = make(tmp_path, playlist_of(*ids))
+    watcher, cache, _, preparer = make(tmp_path, playlist_of(*ids))
     cached(cache, ids[59])
 
-    result = await reconciler.reconcile()
+    result = await watcher.refresh()
 
     assert [b["id"] for b in result.books] == ids[:50]
     assert preparer.requested == ids[:50]

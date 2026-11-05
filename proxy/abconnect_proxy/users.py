@@ -15,7 +15,7 @@ from .abs_client import AbsClient
 from .cache import USERS_DIR, Budget, Cache
 from .config import Config, UserConfig
 from .preparer import Preparer
-from .reconciler import PlaylistReconciler
+from .watcher import PlaylistWatcher
 
 log = logging.getLogger(__name__)
 
@@ -29,14 +29,14 @@ class UserRuntime:
         abs: The HTTP client for that user's own Audiobookshelf.
         cache: Their segment directory.
         preparer: Turns one of their books into segments.
-        reconciler: Keeps their playlist and that cache in step.
+        watcher: Keeps their playlist and that cache in step.
     """
 
     config: UserConfig
     abs: AbsClient
     cache: Cache
     preparer: Preparer
-    reconciler: PlaylistReconciler
+    watcher: PlaylistWatcher
 
 
 def build_runtimes(
@@ -81,14 +81,14 @@ def build_runtimes(
             work_dir=config.work_dir / USERS_DIR / user.name,
             slot=slot,
         )
-        reconciler = PlaylistReconciler(
+        watcher = PlaylistWatcher(
             abs_client=client,
             cache=cache,
             preparer=preparer,
             config=config,
             playlist=user.playlist,
         )
-        runtimes[user.name] = UserRuntime(user, client, cache, preparer, reconciler)
+        runtimes[user.name] = UserRuntime(user, client, cache, preparer, watcher)
 
     # A user renamed or removed in the file leaves their directory behind. It
     # is only reported: a typo in the file must not wipe anyone's books.
