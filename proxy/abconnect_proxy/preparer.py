@@ -30,6 +30,9 @@ log = logging.getLogger(__name__)
 WEIGHT_DOWNLOAD = 0.65
 WEIGHT_CUT = 0.35
 
+#: Seconds an errored book waits before the playlist watcher tries it again.
+ERROR_RETRY_SECONDS = 600.0
+
 
 class Status(str, Enum):
     """Preparation state the watch is told.
@@ -61,12 +64,14 @@ class BookState:
         percent: 0 to 100 while preparing.
         error: Set together with status error. Empty otherwise.
         segment_count: Filled once the book is ready.
+        failed_at: time.monotonic() of the last failure, 0 if none.
     """
 
     status: Status = Status.PENDING
     percent: int = 0
     error: str = ""
     segment_count: int = 0
+    failed_at: float = 0.0
 
 
 @dataclass
@@ -82,6 +87,7 @@ class Preparer:
             is deleted as soon as it has been cut.
         slot: Semaphore every preparer waits on, so only one book is
             prepared at a time across the whole process.
+        retry_after: Seconds before an errored book is tried again.
     """
 
     abs_client: AbsClient
@@ -93,6 +99,7 @@ class Preparer:
     # never share a source file.
     work_dir: Path
     slot: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(1))
+    retry_after: float = ERROR_RETRY_SECONDS
 
     _states: dict[str, BookState] = field(default_factory=dict)
     _tasks: dict[str, asyncio.Task] = field(default_factory=dict)
@@ -141,6 +148,8 @@ class Preparer:
         state = self._states.setdefault(book_id, BookState())
         if status is not None:
             state.status = status
+            if status is Status.ERROR:
+                state.failed_at = time.monotonic()
         if percent is not None:
             state.percent = percent
         if error is not None:
@@ -161,7 +170,8 @@ class Preparer:
 
         A chapter-less m4b, or a book that is neither mp3 files nor an m4b,
         is withheld: the caller leaves it out of the playlist. A ready book
-        is pinned. An errored book is left alone.
+        is pinned. An errored book is left alone until ``retry_after`` has
+        passed, then it is tried again.
 
         Args:
             book_id: Audiobookshelf library-item id.
@@ -177,7 +187,9 @@ class Preparer:
                 self.cache.pin(book_id)
             return state
         if state.status is Status.ERROR:
-            return state
+            if time.monotonic() - state.failed_at < self.retry_after:
+                return state
+            log.info("Retrying %s after the earlier failure: %s", book_id, state.error)
 
         try:
             item = await self.abs_client.get_item(book_id)

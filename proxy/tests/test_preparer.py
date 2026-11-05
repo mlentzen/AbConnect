@@ -302,6 +302,38 @@ class TestFailures:
         assert "connection lost" in state.error
         assert not cache.is_ready("li_1")
 
+    async def test_an_errored_book_waits_for_the_cooldown(self, tmp_path, single_book):
+        item, source = single_book
+        preparer, _, abs_client, _ = await build(tmp_path, item, source)
+        abs_client.fail_download = True
+        await run(preparer)
+        abs_client.fail_download = False
+
+        state = await preparer.admit("li_1")
+
+        assert state.status is Status.ERROR
+        assert abs_client.downloads == []
+
+    async def test_an_errored_book_is_tried_again_after_the_cooldown(
+        self, tmp_path, single_book
+    ):
+        item, source = single_book
+        preparer, cache, abs_client, _ = await build(tmp_path, item, source)
+        preparer.retry_after = 0
+        abs_client.fail_download = True
+        await run(preparer)
+        abs_client.fail_download = False
+
+        state = await preparer.admit("li_1")
+        assert state.status is Status.PREPARING
+        for _ in range(400):
+            await asyncio.sleep(0.02)
+            if preparer.status("li_1").status is not Status.PREPARING:
+                break
+
+        assert preparer.status("li_1").status is Status.READY
+        assert cache.is_ready("li_1")
+
     async def test_an_unusable_item_reports_the_reason(self, tmp_path, single_book):
         _, source = single_book
         preparer, _, _, _ = await build(tmp_path, ItemUnusable("eBook only"), source)
