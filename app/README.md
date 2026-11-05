@@ -57,6 +57,7 @@ token contains it. **Do not share a `.prg` built with your token.**
 | `PROXY_TOKEN` | - | `replace-me` | this watch's token from the proxy's `users.toml` |
 | `LOG_LEVEL` | - | `0` | 0 errors, 1 warnings, 2 course of events, 3 everything |
 | `DEVICE` | - | `fenix7xpro` | device id passed to the compiler |
+| `JUNGLES` | - | `monkey.jungle` | `monkeyc -f` jungles; CI sets `monkey-ci.jungle` (fenix7xpro stub, no device overlays) |
 
 `copy.sh` copies the build to a watch mounted over MTP; it needs `WATCH_MTP` in the same `.env` (see the script).
 

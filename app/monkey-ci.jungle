@@ -1,0 +1,3 @@
+# CI-only jungle: no per-device qualifiers. Paired with tools/stub_device.py
+# (fenix7xpro stub). Export and local store builds use monkey.jungle.
+project.manifest = manifest.xml

@@ -54,6 +54,4 @@ jobs:
             -in "$HOME/.ciq/dev.pem" -out "$HOME/.ciq/developer_key" -nocrypt
 
       - name: Build
-        env:
-          CIQ_HOME: ${{ github.workspace }}/../ciq
-        run: CIQ_HOME="$HOME/ciq" ./app/build.sh
+        run: CIQ_HOME="$HOME/ciq" JUNGLES=monkey-ci.jungle ./app/build.sh
