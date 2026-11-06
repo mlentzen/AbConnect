@@ -412,9 +412,12 @@ class TestLifecycle:
 
 
 class TestTranscoding:
-    """An mp3 file is copied whole. Chapters in the metadata are ignored."""
+    """An mp3 file stays one segment, and is encoded for the watch.
 
-    async def test_an_mp3_file_is_copied_whole(self, tmp_path, make_mp3):
+    Chapters in the metadata are ignored.
+    """
+
+    async def test_an_mp3_file_is_encoded_for_the_watch(self, tmp_path, make_mp3):
         source = make_mp3("kapitel", 20, sample_rate=22050, channels=1)
         item = parsed(
             [
@@ -433,13 +436,67 @@ class TestTranscoding:
 
         manifest = cache.load_manifest("li_1")
         assert manifest["chapter_source"] == "files"
+        assert manifest["bitrate_kbps"] == 64
+        assert manifest["sample_rate"] == 44100
         assert len(manifest["segments"]) == 1
         entry = manifest["segments"][0]
         assert entry["title"] == "Kapitel Eins"
-        assert entry["duration"] == pytest.approx(20, abs=0.05)
+        assert entry["duration"] == pytest.approx(20, abs=0.5)
         probed = probe(cache.segment_path("li_1", entry["file"]))
         assert probed.codec == "mp3"
-        assert probed.sample_rate == 22050
+        assert probed.sample_rate == 44100
+        assert probed.bit_rate == pytest.approx(64000, rel=0.15)
+
+
+class TestParallel:
+    """Encodes share the cores. A book of many files must not wait out each one."""
+
+    async def test_several_files_are_encoded_together(self, tmp_path, make_mp3, monkeypatch):
+        source = make_mp3("parallel", 1)
+        size = source.stat().st_size
+        item = parsed(
+            [
+                SourceFile(ino="1", filename="a.mp3", duration=1, size=size),
+                SourceFile(ino="2", filename="b.mp3", duration=1, size=size),
+            ],
+            [],
+        )
+        preparer, _, _, _ = await build(tmp_path, item, source)
+        preparer.encode_workers = 2
+        starts: list[float] = []
+
+        async def slow(source, destination, **kwargs):
+            starts.append(asyncio.get_running_loop().time())
+            await asyncio.sleep(0.3)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"x")
+            return 1
+
+        monkeypatch.setattr("abconnect_proxy.preparer.cut", slow)
+
+        assert (await run(preparer)).status is Status.READY
+        assert len(starts) == 2
+        assert abs(starts[1] - starts[0]) < 0.2
+
+    async def test_chapters_of_one_file_are_encoded_together(
+        self, tmp_path, single_book, monkeypatch
+    ):
+        preparer, _, _, _ = await build(tmp_path, *single_book)
+        preparer.encode_workers = 2
+        starts: list[float] = []
+
+        async def slow(source, destination, **kwargs):
+            starts.append(asyncio.get_running_loop().time())
+            await asyncio.sleep(0.3)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"x")
+            return 1
+
+        monkeypatch.setattr("abconnect_proxy.preparer.cut", slow)
+
+        assert (await run(preparer)).status is Status.READY
+        assert len(starts) == 2
+        assert abs(starts[1] - starts[0]) < 0.2
 
 
 class TestRecut:

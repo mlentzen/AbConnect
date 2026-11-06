@@ -47,7 +47,33 @@ class TestReencode:
         probed = probe(segment)
         assert probed.sample_rate == 44100
         assert probed.codec == "mp3"
+        assert probed.channels == 1
+        assert probed.bit_rate == pytest.approx(64000, rel=0.15)
         assert probed.duration == pytest.approx(20, abs=0.5)
+
+    async def test_a_stereo_source_is_encoded_at_the_bitrate_per_channel(
+        self, make_m4b, tmp_path
+    ):
+        book = make_m4b("reenc-stereo", 20, [(0, 20, "A")], channels=2)
+        segment = tmp_path / "0000.mp3"
+
+        await media.cut(book, segment, start=0, duration=10, bitrate_kbps=64)
+
+        probed = probe(segment)
+        assert probed.channels == 2
+        assert probed.bit_rate == pytest.approx(128000, rel=0.15)
+
+    async def test_more_than_two_channels_is_mixed_down_to_stereo(
+        self, make_m4b, tmp_path
+    ):
+        book = make_m4b("reenc-wide", 20, [(0, 20, "A")], channels=6)
+        segment = tmp_path / "0000.mp3"
+
+        await media.cut(book, segment, start=0, duration=10, bitrate_kbps=64)
+
+        probed = probe(segment)
+        assert probed.channels == 2
+        assert probed.bit_rate == pytest.approx(128000, rel=0.15)
 
     async def test_reencode_keeps_the_tags(self, make_m4b, tmp_path):
         """Garmin says a file without metadata may not be shown at all."""

@@ -361,7 +361,10 @@ class TestSegments:
             response = client.get("/v1/books/li_a/seg/0000.mp3", headers=HEAD)
         assert response.status_code == 200
         assert response.content == b"audio!!"
+        # The watch reads the length while it encrypts the file onto disk.
+        # Without it the body is buffered and a long chapter comes back -402.
         assert response.headers["content-type"].startswith("audio/mpeg")
+        assert response.headers["content-length"] == "7"
 
     def test_rejects_traversal_in_the_segment_name(self, config):
         prepared_book(config)

@@ -12,7 +12,7 @@ DEFAULTS = {
     "PLAYLIST_POLL_SECONDS": "600",
     "CACHE_DIR": "/var/cache/abconnect",
     "WORK_DIR": "/var/tmp/abconnect",
-    "CACHE_MAX_BYTES": str(200 * 1024**3),
+    "CACHE_MAX_BYTES": str(20 * 1024**3),
     "RELEASE_TTL_DAYS": "30",
     "TRANSCODE_BITRATE_KBPS": "64",
     "HTTP_TIMEOUT_SECONDS": "60",
@@ -79,7 +79,8 @@ class Config:
         cache_max_bytes: Disk budget shared by every user.
         release_ttl_days: How long a book stays on disk after it leaves its
             playlist.
-        transcode_bitrate_kbps: Bitrate of an m4b chapter encoded to mp3.
+        transcode_bitrate_kbps: Bitrate per channel of every segment encoded
+            to mp3. A stereo segment uses twice this.
         http_timeout_seconds: Request timeout for Audiobookshelf calls.
         log_level: Logging level name, such as "INFO".
     """

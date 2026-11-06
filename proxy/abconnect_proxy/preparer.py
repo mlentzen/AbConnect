@@ -4,14 +4,15 @@ The proxy has no access to the Audiobookshelf media directory, so it must downlo
 That is why preparation happens once per book instead of cutting per segment.
 Otherwise every segment would trigger a full download.
 
-The source file disappears immediately after it is cut, even on error. Peak
-usage therefore stays at one source file plus its segments.
+The source file disappears as soon as its segments are encoded, even on
+error. At most one source file per encode worker is on disk at a time.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -20,8 +21,8 @@ from pathlib import Path
 from .abs_client import AbsClient, AbsError
 from .cache import Budget, Cache
 from .config import Config
-from .media import MediaError, cut
-from .models import Segment
+from .media import SAMPLE_RATE, MediaError, cut
+from .models import Segment, SourceFile
 from .parsing import ItemUnusable, ParsedItem
 from .segmenter import NotForWatch, plan_segments
 
@@ -88,6 +89,8 @@ class Preparer:
         slot: Semaphore every preparer waits on, so only one book is
             prepared at a time across the whole process.
         retry_after: Seconds before an errored book is tried again.
+        encode_workers: How many segments to encode at once. None uses the
+            cores this process can run on.
     """
 
     abs_client: AbsClient
@@ -100,6 +103,7 @@ class Preparer:
     work_dir: Path
     slot: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(1))
     retry_after: float = ERROR_RETRY_SECONDS
+    encode_workers: int | None = None
 
     _states: dict[str, BookState] = field(default_factory=dict)
     _tasks: dict[str, asyncio.Task] = field(default_factory=dict)
@@ -281,6 +285,152 @@ class Preparer:
             self.cache.discard(book_id)
             self._set(book_id, status=Status.ERROR, error="Unexpected error, see log")
 
+    def _worker_count(self) -> int:
+        """How many encodes may run at once.
+
+        Returns:
+            The configured count, or the cores this process can run on.
+        """
+        chosen = self.encode_workers
+        if chosen is None:
+            chosen = os.process_cpu_count() or os.cpu_count() or 1
+        return max(1, chosen)
+
+    async def _encode_sources(
+        self,
+        book_id: str,
+        title: str,
+        author: str,
+        total_bytes: int,
+        sources: list[tuple[SourceFile, list[Segment]]],
+    ) -> list[dict]:
+        """Download each source and encode its segments, several at a time.
+
+        A source is deleted as soon as its own segments are encoded, so a
+        book of many files does not sit on disk in full. Encodes of one
+        file, and encodes of different files, share one worker budget.
+
+        Args:
+            book_id: Audiobookshelf library-item id.
+            title: Book title, used as the album tag and in the log.
+            author: Artist tag.
+            total_bytes: Size of every source file together, for the percent.
+            sources: Each source file with the segments cut from it.
+
+        Returns:
+            One manifest entry per segment, in no particular order.
+
+        Raises:
+            AbsError: A download failed.
+            MediaError: An encode failed.
+        """
+        workers = self._worker_count()
+        file_slots = asyncio.Semaphore(workers)
+        encode_slots = asyncio.Semaphore(workers)
+        bitrate = self.config.transcode_bitrate_kbps
+        done_bytes = 0
+        done_segments = 0
+        inflight: dict[str, int] = {}
+        segment_total = sum(len(segments) for _, segments in sources)
+
+        def note_download() -> None:
+            share = (done_bytes + sum(inflight.values())) / max(1, total_bytes)
+            if share > 1.0:
+                share = 1.0
+            self._set(book_id, percent=int(share * WEIGHT_DOWNLOAD * 100))
+
+        async def encode_segment(work_file: Path, segment: Segment) -> dict:
+            nonlocal done_segments
+            async with encode_slots:
+                log.info(
+                    "%s: segment %d/%d %s (%.0fs)",
+                    title,
+                    segment.index + 1,
+                    segment_total,
+                    segment.title,
+                    segment.duration,
+                )
+                destination = self.cache.segment_path(book_id, segment.filename)
+                size = await cut(
+                    work_file,
+                    destination,
+                    start=segment.source_start,
+                    duration=segment.duration,
+                    title=segment.title,
+                    artist=author,
+                    album=title,
+                    track=segment.index + 1,
+                    bitrate_kbps=bitrate,
+                )
+            done_segments += 1
+            cut_share = done_segments / max(1, segment_total)
+            self._set(
+                book_id,
+                percent=int((WEIGHT_DOWNLOAD + cut_share * WEIGHT_CUT) * 100),
+            )
+            return {
+                "index": segment.index,
+                "title": segment.title,
+                "duration": round(segment.duration, 3),
+                "book_start": segment.book_start,
+                "bytes": size,
+                "file": segment.filename,
+            }
+
+        async def process(source: SourceFile, segments: list[Segment]) -> list[dict]:
+            nonlocal done_bytes
+            async with file_slots:
+                work_file = self.work_dir / book_id / source.filename
+                try:
+
+                    def report(written: int, _total: int) -> None:
+                        inflight[source.ino] = written
+                        note_download()
+
+                    written = await self.abs_client.download_file(
+                        book_id, source.ino, work_file, on_progress=report
+                    )
+                    inflight.pop(source.ino, None)
+                    done_bytes += source.size or written
+                    note_download()
+                    log.info(
+                        "%s: downloaded %s (%.1f MB)",
+                        title,
+                        source.filename,
+                        written / 1024**2,
+                    )
+                    tasks = [
+                        asyncio.create_task(encode_segment(work_file, segment))
+                        for segment in segments
+                    ]
+                    try:
+                        return list(await asyncio.gather(*tasks))
+                    except BaseException:
+                        for task in tasks:
+                            task.cancel()
+                        await asyncio.gather(*tasks, return_exceptions=True)
+                        raise
+                finally:
+                    # The source is useless once its segments exist, and on
+                    # failure too. It must not keep the disk.
+                    work_file.unlink(missing_ok=True)
+
+        jobs = [
+            asyncio.create_task(process(source, segments))
+            for source, segments in sources
+        ]
+        try:
+            groups = await asyncio.gather(*jobs)
+        except BaseException:
+            for job in jobs:
+                job.cancel()
+            await asyncio.gather(*jobs, return_exceptions=True)
+            raise
+        work_root = self.work_dir / book_id
+        if work_root.exists() and not any(work_root.iterdir()):
+            work_root.rmdir()
+        return [entry for group in groups for entry in group]
+
     async def _prepare(self, book_id: str) -> None:
         item = self._staged.pop(book_id, None)
         if item is None:
@@ -295,18 +445,12 @@ class Preparer:
             self._withhold(book_id, item.title, error)
             return
 
-        # mp3 files are copied. An m4b chapter is encoded to mp3.
-        bitrate = (
-            self.config.transcode_bitrate_kbps
-            if plan.chapter_source == "chapters"
-            else None
+        log.info(
+            "%s: %d segments to encode at %d kbps per channel",
+            item.title,
+            len(plan.segments),
+            self.config.transcode_bitrate_kbps,
         )
-        if bitrate is None:
-            log.info(
-                "%s: copying %d mp3 files unchanged", item.title, len(plan.segments)
-            )
-        else:
-            log.info("%s: m4b, %d segments to cut", item.title, len(plan.segments))
 
         largest = max(f.size for f in item.files) if item.files else 0
         needed = item.total_bytes + largest
@@ -323,76 +467,17 @@ class Preparer:
             by_file.setdefault(segment.source_ino, []).append(segment)
 
         self.cache.discard(book_id)
-        manifest_segments: list[dict] = []
-        done_bytes = 0
-
-        for file_index, source in enumerate(item.files):
-            segments = by_file.get(source.ino, [])
-            if not segments:
-                continue
-            work_file = self.work_dir / book_id / source.filename
-            try:
-
-                def report(written: int, _total: int, base: int = done_bytes) -> None:
-                    share = (base + written) / max(1, item.total_bytes)
-                    self._set(book_id, percent=int(share * WEIGHT_DOWNLOAD * 100))
-
-                written = await self.abs_client.download_file(
-                    book_id, source.ino, work_file, on_progress=report
-                )
-                done_bytes += source.size or work_file.stat().st_size
-                log.info(
-                    "%s: downloaded %s (%.1f MB)",
-                    item.title,
-                    source.filename,
-                    written / 1024**2,
-                )
-
-                for position, segment in enumerate(segments):
-                    log.info(
-                        "%s: segment %d/%d %s (%.0fs)",
-                        item.title,
-                        segment.index + 1,
-                        len(plan.segments),
-                        segment.title,
-                        segment.duration,
-                    )
-                    destination = self.cache.segment_path(book_id, segment.filename)
-                    size = await cut(
-                        work_file,
-                        destination,
-                        start=segment.source_start,
-                        duration=segment.duration,
-                        title=segment.title,
-                        artist=item.author,
-                        album=item.title,
-                        track=segment.index + 1,
-                        bitrate_kbps=bitrate,
-                    )
-                    manifest_segments.append(
-                        {
-                            "index": segment.index,
-                            "title": segment.title,
-                            "duration": round(segment.duration, 3),
-                            "book_start": segment.book_start,
-                            "bytes": size,
-                            "file": segment.filename,
-                        }
-                    )
-                    cut_share = (position + 1) / len(segments)
-                    file_share = (file_index + cut_share) / len(item.files)
-                    self._set(
-                        book_id,
-                        percent=int((WEIGHT_DOWNLOAD + file_share * WEIGHT_CUT) * 100),
-                    )
-            finally:
-                # The source file is useless from here on. It must not occupy
-                # disk, whether the cut succeeded or not.
-                work_file.unlink(missing_ok=True)
-                parent = work_file.parent
-                if parent.exists() and not any(parent.iterdir()):
-                    parent.rmdir()
-
+        manifest_segments = await self._encode_sources(
+            book_id,
+            item.title,
+            item.author,
+            item.total_bytes,
+            [
+                (source, by_file[source.ino])
+                for source in item.files
+                if source.ino in by_file
+            ],
+        )
         manifest_segments.sort(key=lambda s: s["index"])
         self.cache.store_manifest(
             book_id,
@@ -402,6 +487,8 @@ class Preparer:
                 "author": item.author,
                 "duration": round(plan.total_duration, 3),
                 "chapter_source": plan.chapter_source,
+                "bitrate_kbps": self.config.transcode_bitrate_kbps,
+                "sample_rate": SAMPLE_RATE,
                 "prepared_at": time.time(),
                 "segments": manifest_segments,
             },

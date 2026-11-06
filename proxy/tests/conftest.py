@@ -20,6 +20,8 @@ class ProbedAudio:
     codec: str
     chapters: list[Chapter]
     sample_rate: int
+    bit_rate: int
+    channels: int
 
 
 def probe(path: Path) -> ProbedAudio:
@@ -75,6 +77,8 @@ def probe(path: Path) -> ProbedAudio:
         codec=(audio.get("codec_name") or "").lower(),
         chapters=chapters,
         sample_rate=whole(audio.get("sample_rate")),
+        bit_rate=whole(audio.get("bit_rate")),
+        channels=whole(audio.get("channels")),
     )
 
 
