@@ -6,22 +6,6 @@ on:
   pull_request:
 
 jobs:
-  proxy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-      - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      - name: Dependencies
-        run: pip install -e './proxy[dev]'
-      - name: Lint
-        run: ruff check proxy
-      - name: Tests
-        run: python -m pytest proxy/tests
-
   app:
     runs-on: ubuntu-latest
     steps:

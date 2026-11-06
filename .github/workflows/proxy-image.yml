@@ -1,11 +1,15 @@
 name: proxy image
 
-# Runs on main. Publishes :latest, which the quadlet tracks
+# Lint and tests on every branch and pull request that touches the proxy.
+# On main, publishes :latest, which the quadlet tracks
 # (deploy/abconnect-proxy.container), plus a sha tag.
 on:
   push:
-    branches:
-      - main
+    branches: ["**"]
+    paths:
+      - "proxy/**"
+      - ".github/workflows/proxy-image.yml"
+  pull_request:
     paths:
       - "proxy/**"
       - ".github/workflows/proxy-image.yml"
@@ -13,7 +17,6 @@ on:
 
 jobs:
   test:
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,6 +27,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: Dependencies
         run: pip install -e './proxy[dev]'
+      - name: Lint
+        run: ruff check proxy
       - name: Tests
         run: python -m pytest proxy/tests
 
