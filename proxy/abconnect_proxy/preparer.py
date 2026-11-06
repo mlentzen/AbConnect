@@ -380,7 +380,10 @@ class Preparer:
         async def process(source: SourceFile, segments: list[Segment]) -> list[dict]:
             nonlocal done_bytes
             async with file_slots:
-                work_file = self.work_dir / book_id / source.filename
+                suffix = Path(source.filename).suffix
+                work_file = (
+                    self.work_dir / book_id / f"{segments[0].index:04d}{suffix}"
+                )
                 try:
 
                     def report(written: int, _total: int) -> None:

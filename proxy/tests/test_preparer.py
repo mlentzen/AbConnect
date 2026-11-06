@@ -260,6 +260,118 @@ class TestMultiFile:
             s["index"] for s in manifest["segments"]
         )
 
+    async def test_sources_with_the_same_filename_are_cut_from_their_own_files(
+        self, tmp_path
+    ):
+        """Downloads are addressed by ino. The name is not unique in an item.
+
+        Both downloads finish before either encode starts, so a shared scratch
+        file would be overwritten and both segments would be the same tone.
+        """
+        import array
+        import subprocess
+
+        def tone(name: str, frequency: int) -> Path:
+            target = tmp_path / name
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-nostdin",
+                    "-v",
+                    "error",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    f"sine=frequency={frequency}:duration=4",
+                    "-c:a",
+                    "libmp3lame",
+                    "-b:a",
+                    "64k",
+                    "-ar",
+                    "44100",
+                    "-ac",
+                    "1",
+                    str(target),
+                ],
+                check=True,
+            )
+            return target
+
+        def crossings(path: Path) -> int:
+            raw = subprocess.check_output(
+                [
+                    "ffmpeg",
+                    "-nostdin",
+                    "-v",
+                    "error",
+                    "-i",
+                    str(path),
+                    "-ac",
+                    "1",
+                    "-ar",
+                    "8000",
+                    "-f",
+                    "s16le",
+                    "-t",
+                    "1",
+                    "-",
+                ]
+            )
+            samples = array.array("h")
+            samples.frombytes(raw)
+            previous = samples[0]
+            count = 0
+            for sample in samples:
+                if (previous < 0) != (sample < 0):
+                    count += 1
+                previous = sample
+            return count
+
+        low = tone("low.mp3", 440)
+        high = tone("high.mp3", 1760)
+        item = parsed(
+            [
+                SourceFile(
+                    ino="1", filename="disc.mp3", duration=4, size=low.stat().st_size
+                ),
+                SourceFile(
+                    ino="2", filename="disc.mp3", duration=4, size=high.stat().st_size
+                ),
+            ],
+            [],
+        )
+        preparer, cache, abs_client, _ = await build(tmp_path, item, low)
+        preparer.encode_workers = 2
+        files = {"1": low, "2": high}
+        arrived = 0
+        gate = asyncio.Event()
+
+        async def download(_book_id, ino, destination, on_progress=None):
+            nonlocal arrived
+            abs_client.downloads.append(ino)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(files[ino], destination)
+            arrived += 1
+            if arrived == 2:
+                gate.set()
+            await asyncio.wait_for(gate.wait(), timeout=5)
+            size = destination.stat().st_size
+            if on_progress:
+                on_progress(size, size)
+            return size
+
+        abs_client.download_file = download
+
+        assert (await run(preparer)).status is Status.READY
+
+        segments = {
+            entry["index"]: cache.segment_path("li_1", entry["file"])
+            for entry in cache.load_manifest("li_1")["segments"]
+        }
+        assert crossings(segments[0]) < 1500
+        assert crossings(segments[1]) > 2500
+
 
 class TestFailures:
     async def test_a_failed_cut_leaves_no_source_file_and_no_half_book(
