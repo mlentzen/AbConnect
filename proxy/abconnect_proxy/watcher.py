@@ -26,7 +26,7 @@ class PlaylistResult:
             At most ``MAX_PLAYLIST_BOOKS``, in playlist order.
         total: How many books the playlist holds, including those past the cap.
         prepared: Book ids this pass started preparing.
-        released: Book ids this pass let go of.
+        released: Book ids whose cached files were deleted on this pass.
         error: Set when the server could not be asked, or the playlist name
             does not exist. Empty on success.
     """
@@ -40,15 +40,91 @@ class PlaylistResult:
 
 
 @dataclass
+class Holdings:
+    """Books each playlist still offers the watch.
+
+    A cached book is deleted only once every user has reported a playlist
+    and none of those playlists still list it. A user who has not reported
+    yet blocks deletion: a refresh that has not happened is not an empty
+    playlist. A failed refresh does not call back here, so the previous
+    list stands.
+
+    Attributes:
+        _wanted: User name mapped to the book ids from the last successful
+            read. None means that user has not reported yet.
+    """
+
+    _wanted: dict[str, set[str] | None] = field(default_factory=dict)
+    _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    def add(self, user: str) -> None:
+        """Register a user who has not reported a playlist yet.
+
+        A user already present is left as they are, so a later registration
+        does not wipe a list that was already read.
+
+        Args:
+            user: User name from the configuration.
+        """
+        self._wanted.setdefault(user, None)
+
+    async def remember(self, user: str, book_ids: set[str]) -> None:
+        """Publish the books this user is about to keep, before any deletion.
+
+        Called with every candidate on the playlist, including ones that may
+        yet be withheld. Peers refreshing at the same time then see the book
+        and do not delete a copy this user still lists.
+
+        Args:
+            user: Whose playlist was just read.
+            book_ids: Book ids on that playlist, capped at what the watch shows.
+        """
+        async with self._lock:
+            self._wanted[user] = set(book_ids)
+
+    async def settle(self, user: str, book_ids: set[str], cached: list[str], release) -> list[str]:
+        """Narrow this user's list to the books actually offered, and delete the rest.
+
+        Args:
+            user: Whose playlist was just read.
+            book_ids: Books the watch will be told about. Withheld books are
+                already gone from this set.
+            cached: Book ids currently on disk, in the order ``release``
+                should see them.
+            release: Awaited for each book no playlist still offers.
+
+        Returns:
+            The book ids ``release`` was called with. Empty when some user
+            has not reported a playlist yet, and empty when every cached
+            book is still listed.
+        """
+        async with self._lock:
+            self._wanted[user] = set(book_ids)
+            if any(wanted is None for wanted in self._wanted.values()):
+                return []
+            kept: set[str] = set()
+            for wanted in self._wanted.values():
+                if wanted:
+                    kept.update(wanted)
+            stale = [book_id for book_id in cached if book_id not in kept]
+            for book_id in stale:
+                await release(book_id)
+            return stale
+
+
+@dataclass
 class PlaylistWatcher:
-    """Keep one user's cache aligned with one playlist in their Audiobookshelf.
+    """Keep the shared cache aligned with one playlist in one user's Audiobookshelf.
 
     Attributes:
         abs_client: That user's Audiobookshelf client.
-        cache: That user's segment cache.
-        preparer: That user's preparer.
+        cache: The shared segment cache.
+        preparer: The shared preparer.
         config: Process configuration. The poll interval comes from here.
         playlist: The playlist's name, not its id.
+        user: Whose list this watcher reports. Several watchers share one
+            ``holdings`` and each supplies its own name.
+        holdings: Book ids every playlist still offers. Shared by all watchers.
     """
 
     abs_client: AbsClient
@@ -56,22 +132,30 @@ class PlaylistWatcher:
     preparer: Preparer
     config: Config
     playlist: str
+    user: str = ""
+    holdings: Holdings = field(default_factory=Holdings)
 
     _last: PlaylistResult = field(default_factory=PlaylistResult)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    def __post_init__(self) -> None:
+        if not self.user:
+            self.user = "sole"
+        self.holdings.add(self.user)
 
     @property
     def last(self) -> PlaylistResult:
         return self._last
 
     async def refresh(self) -> PlaylistResult:
-        """Bring the cache in line with this watcher's playlist.
+        """Bring the shared cache in line with this watcher's playlist.
 
-        Books newly on the playlist are prepared and pinned. A pinned book
-        that has left the playlist is released, so its files stay until the
-        TTL. When the server cannot be reached, the previous found flag and
-        book list are kept. When the name matches no playlist, found is false
-        and the cache is left as it is.
+        Books newly on the playlist are prepared and pinned. A cached book
+        is deleted only when every user has reported a playlist and none of
+        them still list it. When the server cannot be reached, this user's
+        previous list is kept, and so are the previous found flag and book
+        list. When the name matches no playlist, found is false and nothing
+        is released.
 
         Returns:
             The outcome of this pass.
@@ -100,11 +184,15 @@ class PlaylistWatcher:
 
             result.found = True
             result.total = len(playlist.books)
+            # Publish the candidates before preparing any of them, so a peer
+            # refreshing now does not delete a book this playlist still lists.
+            candidates = [book["id"] for book in playlist.books[:MAX_PLAYLIST_BOOKS]]
+            await self.holdings.remember(self.user, set(candidates))
             offered: list[dict] = []
             for book in playlist.books[:MAX_PLAYLIST_BOOKS]:
                 book_id = book["id"]
                 before = self.preparer.status(book_id).status
-                state = await self.preparer.admit(book_id)
+                state = await self.preparer.admit(book_id, self.abs_client)
                 if state.status is Status.WITHHELD:
                     continue
                 offered.append(book)
@@ -113,14 +201,16 @@ class PlaylistWatcher:
             result.books = offered
             desired = {book["id"] for book in offered}
 
-            for book_id in self.cache.books():
-                if book_id not in desired and self.cache.pinned(book_id):
-                    self.cache.release(book_id)
-                    result.released.append(book_id)
+            async def release(book_id: str) -> None:
+                await self.preparer.abandon(book_id)
+
+            result.released = await self.holdings.settle(
+                self.user, desired, self.cache.books(), release
+            )
 
             if result.prepared or result.released:
                 log.info(
-                    "Playlist '%s' updated: %d newly prepared, %d released",
+                    "Playlist '%s' updated: %d newly prepared, %d removed",
                     self.playlist,
                     len(result.prepared),
                     len(result.released),

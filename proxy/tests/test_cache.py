@@ -1,6 +1,6 @@
 import pytest
 
-from abconnect_proxy.cache import USERS_DIR, Budget, Cache, UnsafeBookId
+from abconnect_proxy.cache import Cache, UnsafeBookId
 
 
 @pytest.fixture
@@ -37,81 +37,6 @@ class TestManifest:
         cache.store_manifest("book", {"segments": []})
         cache.manifest_path("book").write_text("{broken", encoding="utf-8")
         assert cache.load_manifest("book") is None
-
-
-class TestSweep:
-    def test_sweep_drops_released_books_past_their_ttl(self, cache):
-        fill(cache, "old")
-        fill(cache, "fresh")
-        cache.release("old", now=0)
-        cache.release("fresh", now=100 * 86400)
-
-        removed = cache.sweep(ttl_days=30, now=100 * 86400)
-
-        assert removed == ["old"]
-        assert cache.is_ready("fresh")
-
-    def test_sweep_never_touches_pinned_books(self, cache):
-        fill(cache, "selected")
-        cache.release("selected", now=0)
-        cache.pin("selected", now=0)
-
-        assert cache.sweep(ttl_days=1, now=999 * 86400) == []
-        assert cache.is_ready("selected")
-
-    def test_pinning_after_release_clears_the_release_marker(self, cache):
-        fill(cache, "book")
-        cache.release("book", now=0)
-        cache.pin("book", now=1)
-        assert cache.pinned("book")
-        assert cache.sweep(ttl_days=0, now=999 * 86400) == []
-
-
-class TestBudget:
-    def test_deletes_least_recently_used_first(self, cache):
-        for name, access in (("a", 30.0), ("b", 10.0), ("c", 20.0)):
-            fill(cache, name, size=1000)
-            cache.touch(name, now=access)
-
-        removed = Budget(max_bytes=2200, caches={"alice": cache}).enforce()
-
-        assert removed == [("alice", "b")]  # 3000 -> 2000 bytes, oldest access first
-
-    def test_leaves_pinned_books_alone_even_when_over(self, cache):
-        fill(cache, "pinned", size=5000)
-        cache.pin("pinned")
-
-        assert Budget(max_bytes=10, caches={"alice": cache}).enforce() == []
-        assert cache.is_ready("pinned")
-
-    def test_counts_and_deletes_across_users(self, tmp_path):
-        """The disk is shared: one user's new book may push out another's old one."""
-        alice = Cache(root=tmp_path / USERS_DIR / "alice")
-        bob = Cache(root=tmp_path / USERS_DIR / "bob")
-        fill(alice, "a", size=1000)
-        alice.touch("a", now=20.0)
-        fill(bob, "b", size=1000)
-        bob.touch("b", now=10.0)
-        fill(bob, "p", size=1000)
-        bob.pin("p", now=0.0)  # oldest of all, but on bob's watch
-
-        budget = Budget(max_bytes=2300, caches={"alice": alice, "bob": bob})
-        assert budget.total_bytes() == alice.total_bytes() + bob.total_bytes()
-
-        assert budget.enforce() == [("bob", "b")]
-        assert alice.is_ready("a")
-        assert bob.is_ready("p")
-
-    def test_has_room_for_counts_every_user(self, tmp_path):
-        alice = Cache(root=tmp_path / USERS_DIR / "alice")
-        bob = Cache(root=tmp_path / USERS_DIR / "bob")
-        fill(alice, "a", size=3000)
-        fill(bob, "b", size=3000)
-
-        budget = Budget(max_bytes=10_000, caches={"alice": alice, "bob": bob})
-
-        assert budget.has_room_for(3000)
-        assert not budget.has_room_for(5000)
 
 
 def test_survives_a_restart(tmp_path):

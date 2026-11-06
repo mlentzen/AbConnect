@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from abconnect_proxy import config as config_module
 from abconnect_proxy.abs_client import AbsClient
 from abconnect_proxy.api import MAX_SEGMENTS_PAGE_BYTES, create_app
-from abconnect_proxy.cache import USERS_DIR, Cache
+from abconnect_proxy.cache import BOOKS_DIR, Cache
 from abconnect_proxy.watcher import MAX_PLAYLIST_BOOKS
 
 from .conftest import write_users
@@ -83,10 +83,32 @@ def abs_handler(progress_payload=None, on_patch=None, playlists=None):
     return handler
 
 
-def bob_handler(progress_payload=None, on_patch=None):
+def bob_handler(progress_payload=None, on_patch=None, playlists=None):
     return abs_handler(
-        progress_payload=progress_payload, on_patch=on_patch, playlists=BOB_PLAYLISTS
+        progress_payload=progress_payload,
+        on_patch=on_patch,
+        playlists=BOB_PLAYLISTS if playlists is None else playlists,
     )
+
+
+def with_book(book_id, playlist="Garmin"):
+    """The default playlists, plus one extra book that must stay cached."""
+    source = BOB_PLAYLISTS if playlist == "Bob" else PLAYLISTS
+    playlists = json.loads(json.dumps(source))
+    for entry in playlists["playlists"]:
+        if entry["name"] == playlist:
+            entry["items"].append(
+                {
+                    "libraryItemId": book_id,
+                    "libraryItem": {
+                        "media": {
+                            "duration": 3600,
+                            "metadata": {"title": book_id, "authorName": "Kafka"},
+                        }
+                    },
+                }
+            )
+    return playlists
 
 
 def load_config(tmp_path, alice_tokens=(TOKEN,)):
@@ -135,12 +157,13 @@ def build_client(config, handler=None, bob=None):
     return TestClient(create_app(config, abs_clients=clients))
 
 
-def user_cache(config, user="alice"):
-    return Cache(root=config.cache_dir / USERS_DIR / user)
+def user_cache(config):
+    """The shared book cache."""
+    return Cache(root=config.cache_dir / BOOKS_DIR)
 
 
-def prepared_book(config, book_id="li_a", user="alice"):
-    cache = user_cache(config, user)
+def prepared_book(config, book_id="li_a"):
+    cache = user_cache(config)
     cache.store_manifest(
         book_id,
         {
@@ -177,9 +200,9 @@ def prepared_book(config, book_id="li_a", user="alice"):
     return cache
 
 
-def prepared_book_with_many_segments(config, count, book_id="li_big", user="alice"):
+def prepared_book_with_many_segments(config, count, book_id="li_big"):
     """A chapter-heavy book, enough segments to force more than one page."""
-    cache = user_cache(config, user)
+    cache = user_cache(config)
     segments = [
         {
             "index": i,
@@ -361,7 +384,10 @@ class TestSegments:
             response = client.get("/v1/books/li_a/seg/0000.mp3", headers=HEAD)
         assert response.status_code == 200
         assert response.content == b"audio!!"
+        # The watch reads the length while it encrypts the file onto disk.
+        # Without it the body is buffered and a long chapter comes back -402.
         assert response.headers["content-type"].startswith("audio/mpeg")
+        assert response.headers["content-length"] == "7"
 
     def test_rejects_traversal_in_the_segment_name(self, config):
         prepared_book(config)
@@ -380,7 +406,7 @@ class TestSegments:
 
     def test_a_long_list_is_split_across_pages_within_the_byte_budget(self, config):
         prepared_book_with_many_segments(config, 200)
-        with build_client(config) as client:
+        with build_client(config, abs_handler(playlists=with_book("li_big"))) as client:
             pages = []
             after = None
             for _ in range(1000):  # a hard stop, not the expected page count
@@ -406,7 +432,8 @@ class TestSegments:
     def test_only_the_first_page_carries_the_resume_point(self, config):
         prepared_book_with_many_segments(config, 200)
         handler = abs_handler(
-            progress_payload={"currentTime": 1000.0, "lastUpdate": 1_700_000_000_000}
+            progress_payload={"currentTime": 1000.0, "lastUpdate": 1_700_000_000_000},
+            playlists=with_book("li_big"),
         )
         with build_client(config, handler) as client:
             first = client.get("/v1/books/li_big/segments", headers=HEAD).json()
@@ -624,9 +651,12 @@ class TestPlaylist:
         cache.pin("li_gone")
 
         with build_client(config) as client:
+            # Both playlists have to be read before a book neither lists
+            # can be dropped. One user's refresh is not the whole library.
             client.get("/v1/playlist", headers=HEAD)
+            client.get("/v1/playlist", headers=BOB_HEAD)
 
-        assert not cache.pinned("li_gone")
+        assert not cache.is_ready("li_gone")
         assert cache.pinned("li_a")
 
     def test_a_missing_playlist_answers_409_and_touches_nothing(self, config):
@@ -654,7 +684,11 @@ class TestPlaylist:
 
 
 class TestIsolation:
-    """Several people on one proxy: the token decides whose world a request sees."""
+    """The token picks the playlist and the Audiobookshelf.
+
+    Prepared books are shared. A book cached for one user is served to the
+    others, and it is deleted only once every playlist has dropped it.
+    """
 
     def test_each_token_gets_its_own_playlist(self, config):
         with build_client(config) as client:
@@ -666,26 +700,23 @@ class TestIsolation:
         )
         assert (bob["playlist"], [b["id"] for b in bob["books"]]) == ("Bob", ["li_x"])
 
-    def test_another_users_book_stays_out_of_reach(self, config):
-        prepared_book(config)  # alice's
+    def test_a_cached_book_is_served_to_every_user(self, config):
+        prepared_book(config)
         with build_client(config) as client:
-            assert (
-                client.get("/v1/books/li_a/segments", headers=BOB_HEAD).status_code
-                == 409
-            )
-            assert (
-                client.get("/v1/books/li_a/seg/0000.mp3", headers=BOB_HEAD).status_code
-                == 404
-            )
+            listed = client.get("/v1/books/li_a/segments", headers=BOB_HEAD)
+            audio = client.get("/v1/books/li_a/seg/0000.mp3", headers=BOB_HEAD)
+        assert listed.status_code == 200
+        assert listed.json()["title"] == "Amerika"
+        assert audio.status_code == 200
+        assert audio.content == b"audio!!"
 
     def test_progress_reaches_only_the_pushing_users_server(self, config):
         prepared_book(config)
-        prepared_book(config, user="bob")
         alice_sent, bob_sent = {}, {}
         with build_client(
             config,
             abs_handler(on_patch=alice_sent.update),
-            bob_handler(on_patch=bob_sent.update),
+            bob_handler(on_patch=bob_sent.update, playlists=with_book("li_a", "Bob")),
         ) as client:
             client.post(
                 "/v1/progress",
@@ -704,14 +735,9 @@ class TestIsolation:
         assert bob_sent["currentTime"] == 1200.0
         assert alice_sent == {}
 
-    def test_a_playlist_releases_only_its_owners_books(self, config):
-        alice = prepared_book(config)
-        bob = prepared_book(config, user="bob")
-        alice.pin("li_a")
-        bob.pin("li_a")
+    def test_a_book_stays_cached_while_any_playlist_keeps_it(self, config):
+        cache = prepared_book(config)
         with build_client(config) as client:
-            client.get(
-                "/v1/playlist", headers=BOB_HEAD
-            )  # li_a is not in Bob's playlist
-        assert alice.pinned("li_a")
-        assert not bob.pinned("li_a")
+            client.get("/v1/playlist", headers=BOB_HEAD)  # li_a is not on Bob's list
+            client.get("/v1/playlist", headers=HEAD)
+        assert cache.is_ready("li_a")

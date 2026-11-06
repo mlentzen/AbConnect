@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 from collections.abc import Sequence
 from pathlib import Path
@@ -8,6 +9,10 @@ from pathlib import Path
 
 class MediaError(Exception):
     """ffmpeg failed, or the file has nothing the watch can play."""
+
+
+#: Rate written into every segment. Other rates are not played.
+SAMPLE_RATE = 44100
 
 
 def ensure_available() -> None:
@@ -24,13 +29,53 @@ async def _run(command: Sequence[str]) -> bytes:
     process = await asyncio.create_subprocess_exec(
         *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
-    stdout, stderr = await process.communicate()
+    try:
+        stdout, stderr = await process.communicate()
+    except asyncio.CancelledError:
+        process.kill()
+        await process.wait()
+        raise
     if process.returncode != 0:
         detail = stderr.decode(errors="replace").strip().splitlines()
         raise MediaError(
             f"{command[0]} failed ({process.returncode}): {detail[-1] if detail else '?'}"
         )
     return stdout
+
+
+async def _channel_count(source: Path) -> int:
+    """Read how many channels the first audio stream has.
+
+    Args:
+        source: File to inspect.
+
+    Returns:
+        The channel count, at least 1.
+
+    Raises:
+        MediaError: ffprobe failed, or the stream reports no channels.
+    """
+    stdout = await _run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=channels",
+            "-of",
+            "json",
+            str(source),
+        ]
+    )
+    try:
+        count = int(json.loads(stdout)["streams"][0]["channels"])
+    except (json.JSONDecodeError, KeyError, IndexError, TypeError, ValueError):
+        raise MediaError(f"{source.name} has no audio channel count") from None
+    if count < 1:
+        raise MediaError(f"{source.name} has no audio channels")
+    return count
 
 
 async def cut(
@@ -48,7 +93,10 @@ async def cut(
     """Cut ``[start, start + duration)`` out of a source file.
 
     Without a bitrate this is a stream copy and therefore lossless. With one,
-    the segment is re-encoded to mp3 (an m4b chapter). An mp3 file is copied.
+    the segment is re-encoded to mp3 at ``SAMPLE_RATE``. That bitrate is per
+    channel: mono keeps it, stereo gets twice as much. mp3 holds at most two
+    channels, so a wider source is mixed down to stereo first. The watch path
+    always passes a bitrate.
 
     Args:
         source: File to cut from.
@@ -59,7 +107,8 @@ async def cut(
         artist: Artist tag. Empty writes none.
         album: Album tag. Empty writes none.
         track: Track number tag. Omit it to write none.
-        bitrate_kbps: mp3 bitrate in kbit/s. Omit it to stream-copy.
+        bitrate_kbps: mp3 bitrate in kbit/s for one channel. Omit it to
+            stream-copy.
 
     Returns:
         The size of the segment file, in bytes.
@@ -90,19 +139,25 @@ async def cut(
     if bitrate_kbps is None:
         command += ["-c", "copy"]
     else:
+        channels = await _channel_count(source)
+        # One channel keeps the given rate. Two or more share a stereo file,
+        # so the file bitrate is twice the per-channel rate.
+        file_bitrate = bitrate_kbps if channels == 1 else bitrate_kbps * 2
         # -write_xing keeps the duration readable without scanning the file.
         command += [
             "-c:a",
             "libmp3lame",
             "-b:a",
-            f"{bitrate_kbps}k",
+            f"{file_bitrate}k",
             "-ar",
-            "44100",  # a rate the watch plays
+            str(SAMPLE_RATE),
             "-id3v2_version",
             "3",
             "-write_xing",
             "1",
         ]
+        if channels > 2:
+            command += ["-ac", "2"]
     # Tags are not decoration: Garmin states that files without them may not be
     # shown by the watch at all. They have to survive the re-encode too.
     for key, value in (("title", title), ("artist", artist), ("album", album)):

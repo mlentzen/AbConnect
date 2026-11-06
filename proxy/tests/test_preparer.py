@@ -1,5 +1,4 @@
 import asyncio
-import dataclasses
 import logging
 import shutil
 from pathlib import Path
@@ -8,10 +7,11 @@ import pytest
 
 from abconnect_proxy import config as config_module
 from abconnect_proxy import media
-from abconnect_proxy.cache import Budget, Cache
+from abconnect_proxy.cache import Cache
 from abconnect_proxy.models import Chapter, SourceFile
-from abconnect_proxy.parsing import ItemUnusable, ParsedItem
+from abconnect_proxy.parsing import ItemUnusable, ParsedItem, Playlist
 from abconnect_proxy.preparer import Preparer, Status
+from abconnect_proxy.users import build_runtimes
 
 from .conftest import needs_ffmpeg, probe, write_users
 
@@ -46,16 +46,12 @@ class FakeAbs:
         return size
 
 
-def make_config(
-    tmp_path, *, cache_max_bytes: int | None = None
-) -> config_module.Config:
+def make_config(tmp_path) -> config_module.Config:
     """Load a real configuration for one test.
 
     Args:
         tmp_path: Per-test directory. The users file, cache and work
             directory are created under it.
-        cache_max_bytes: Override for the shared disk budget. Omit it to
-            keep the loaded value.
 
     Returns:
         The configuration the preparer tests run with.
@@ -77,18 +73,14 @@ def make_config(
             "WORK_DIR": str(tmp_path / "work"),
         }
     )
-    if cache_max_bytes is None:
-        return base
-    return dataclasses.replace(base, cache_max_bytes=cache_max_bytes)
+    return base
 
 
 def preparer_for(abs_client, cache, cfg) -> Preparer:
-    budget = Budget(max_bytes=cfg.cache_max_bytes, caches={"alice": cache})
     return Preparer(
         abs_client=abs_client,
         cache=cache,
         config=cfg,
-        budget=budget,
         work_dir=cfg.work_dir,
     )
 
@@ -128,8 +120,8 @@ def single_book(make_m4b):
     return item, source
 
 
-async def build(tmp_path, item, source, *, cache_max_bytes: int | None = None):
-    cfg = make_config(tmp_path, cache_max_bytes=cache_max_bytes)
+async def build(tmp_path, item, source):
+    cfg = make_config(tmp_path)
     cache = Cache(root=cfg.cache_dir)
     abs_client = FakeAbs(item, source)
     return preparer_for(abs_client, cache, cfg), cache, abs_client, cfg
@@ -260,6 +252,118 @@ class TestMultiFile:
             s["index"] for s in manifest["segments"]
         )
 
+    async def test_sources_with_the_same_filename_are_cut_from_their_own_files(
+        self, tmp_path
+    ):
+        """Downloads are addressed by ino. The name is not unique in an item.
+
+        Both downloads finish before either encode starts, so a shared scratch
+        file would be overwritten and both segments would be the same tone.
+        """
+        import array
+        import subprocess
+
+        def tone(name: str, frequency: int) -> Path:
+            target = tmp_path / name
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-nostdin",
+                    "-v",
+                    "error",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    f"sine=frequency={frequency}:duration=4",
+                    "-c:a",
+                    "libmp3lame",
+                    "-b:a",
+                    "64k",
+                    "-ar",
+                    "44100",
+                    "-ac",
+                    "1",
+                    str(target),
+                ],
+                check=True,
+            )
+            return target
+
+        def crossings(path: Path) -> int:
+            raw = subprocess.check_output(
+                [
+                    "ffmpeg",
+                    "-nostdin",
+                    "-v",
+                    "error",
+                    "-i",
+                    str(path),
+                    "-ac",
+                    "1",
+                    "-ar",
+                    "8000",
+                    "-f",
+                    "s16le",
+                    "-t",
+                    "1",
+                    "-",
+                ]
+            )
+            samples = array.array("h")
+            samples.frombytes(raw)
+            previous = samples[0]
+            count = 0
+            for sample in samples:
+                if (previous < 0) != (sample < 0):
+                    count += 1
+                previous = sample
+            return count
+
+        low = tone("low.mp3", 440)
+        high = tone("high.mp3", 1760)
+        item = parsed(
+            [
+                SourceFile(
+                    ino="1", filename="disc.mp3", duration=4, size=low.stat().st_size
+                ),
+                SourceFile(
+                    ino="2", filename="disc.mp3", duration=4, size=high.stat().st_size
+                ),
+            ],
+            [],
+        )
+        preparer, cache, abs_client, _ = await build(tmp_path, item, low)
+        preparer.encode_workers = 2
+        files = {"1": low, "2": high}
+        arrived = 0
+        gate = asyncio.Event()
+
+        async def download(_book_id, ino, destination, on_progress=None):
+            nonlocal arrived
+            abs_client.downloads.append(ino)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(files[ino], destination)
+            arrived += 1
+            if arrived == 2:
+                gate.set()
+            await asyncio.wait_for(gate.wait(), timeout=5)
+            size = destination.stat().st_size
+            if on_progress:
+                on_progress(size, size)
+            return size
+
+        abs_client.download_file = download
+
+        assert (await run(preparer)).status is Status.READY
+
+        segments = {
+            entry["index"]: cache.segment_path("li_1", entry["file"])
+            for entry in cache.load_manifest("li_1")["segments"]
+        }
+        assert crossings(segments[0]) < 1500
+        assert crossings(segments[1]) > 2500
+
 
 class TestFailures:
     async def test_a_failed_cut_leaves_no_source_file_and_no_half_book(
@@ -343,18 +447,6 @@ class TestFailures:
         assert state.status is Status.WITHHELD
         assert "eBook" in state.error
 
-    async def test_refuses_when_the_cache_budget_cannot_hold_the_book(
-        self, tmp_path, single_book
-    ):
-        item, source = single_book
-        preparer, _, _, _ = await build(tmp_path, item, source, cache_max_bytes=10)
-
-        state = await run(preparer)
-
-        assert state.status is Status.ERROR
-        assert "space" in state.error
-
-
 class TestLifecycle:
     async def test_a_second_request_does_not_download_again(
         self, tmp_path, single_book
@@ -382,8 +474,7 @@ class TestLifecycle:
     async def test_a_book_deleted_behind_its_back_is_pending_again(
         self, tmp_path, single_book
     ):
-        """The shared budget may delete a book on behalf of another user's job,
-        and nobody tells this preparer. The missing manifest has to be enough."""
+        """A missing manifest is enough. Nothing has to tell this preparer."""
         item, source = single_book
         preparer, cache, _, _ = await build(tmp_path, item, source)
         await run(preparer)
@@ -412,9 +503,12 @@ class TestLifecycle:
 
 
 class TestTranscoding:
-    """An mp3 file is copied whole. Chapters in the metadata are ignored."""
+    """An mp3 file stays one segment, and is encoded for the watch.
 
-    async def test_an_mp3_file_is_copied_whole(self, tmp_path, make_mp3):
+    Chapters in the metadata are ignored.
+    """
+
+    async def test_an_mp3_file_is_encoded_for_the_watch(self, tmp_path, make_mp3):
         source = make_mp3("kapitel", 20, sample_rate=22050, channels=1)
         item = parsed(
             [
@@ -433,13 +527,133 @@ class TestTranscoding:
 
         manifest = cache.load_manifest("li_1")
         assert manifest["chapter_source"] == "files"
+        assert manifest["bitrate_kbps"] == 64
+        assert manifest["sample_rate"] == 44100
         assert len(manifest["segments"]) == 1
         entry = manifest["segments"][0]
         assert entry["title"] == "Kapitel Eins"
-        assert entry["duration"] == pytest.approx(20, abs=0.05)
+        assert entry["duration"] == pytest.approx(20, abs=0.5)
         probed = probe(cache.segment_path("li_1", entry["file"]))
         assert probed.codec == "mp3"
-        assert probed.sample_rate == 22050
+        assert probed.sample_rate == 44100
+        assert probed.bit_rate == pytest.approx(64000, rel=0.15)
+
+
+class TestParallel:
+    """Encodes share the cores. A book of many files must not wait out each one."""
+
+    async def test_several_files_are_encoded_together(self, tmp_path, make_mp3, monkeypatch):
+        source = make_mp3("parallel", 1)
+        size = source.stat().st_size
+        item = parsed(
+            [
+                SourceFile(ino="1", filename="a.mp3", duration=1, size=size),
+                SourceFile(ino="2", filename="b.mp3", duration=1, size=size),
+            ],
+            [],
+        )
+        preparer, _, _, _ = await build(tmp_path, item, source)
+        preparer.encode_workers = 2
+        starts: list[float] = []
+
+        async def slow(source, destination, **kwargs):
+            starts.append(asyncio.get_running_loop().time())
+            await asyncio.sleep(0.3)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"x")
+            return 1
+
+        monkeypatch.setattr("abconnect_proxy.preparer.cut", slow)
+
+        assert (await run(preparer)).status is Status.READY
+        assert len(starts) == 2
+        assert abs(starts[1] - starts[0]) < 0.2
+
+    async def test_chapters_of_one_file_are_encoded_together(
+        self, tmp_path, single_book, monkeypatch
+    ):
+        preparer, _, _, _ = await build(tmp_path, *single_book)
+        preparer.encode_workers = 2
+        starts: list[float] = []
+
+        async def slow(source, destination, **kwargs):
+            starts.append(asyncio.get_running_loop().time())
+            await asyncio.sleep(0.3)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"x")
+            return 1
+
+        monkeypatch.setattr("abconnect_proxy.preparer.cut", slow)
+
+        assert (await run(preparer)).status is Status.READY
+        assert len(starts) == 2
+        assert abs(starts[1] - starts[0]) < 0.2
+
+
+class Library(FakeAbs):
+    def __init__(self, item, source, books):
+        super().__init__(item, source)
+        self.books = books
+
+    async def playlist(self, name):
+        item = self.item
+        return Playlist(
+            name=name,
+            books=[
+                {
+                    "id": book_id,
+                    "title": item.title,
+                    "author": item.author,
+                    "duration": item.duration,
+                }
+                for book_id in self.books
+            ],
+        )
+
+
+async def test_a_book_on_two_playlists_is_downloaded_once(tmp_path, single_book):
+    item, source = single_book
+    users = write_users(
+        tmp_path / "users.toml",
+        {
+            "alice": {
+                "tokens": ["a" * 20],
+                "abs_url": "https://abs.example",
+                "abs_api_key": "k" * 20,
+            },
+            "bob": {
+                "tokens": ["b" * 20],
+                "abs_url": "https://abs.example",
+                "abs_api_key": "b" * 20,
+            },
+        },
+    )
+    cfg = config_module.load(
+        {
+            "USERS_FILE": str(users),
+            "CACHE_DIR": str(tmp_path / "cache"),
+            "WORK_DIR": str(tmp_path / "work"),
+        }
+    )
+    libraries = {
+        name: Library(item, source, ["li_1"]) for name in ("alice", "bob")
+    }
+    runtimes = build_runtimes(cfg, asyncio.Semaphore(1), libraries)
+
+    await asyncio.gather(
+        *(runtime.watcher.refresh() for runtime in runtimes.values())
+    )
+    for _ in range(400):
+        if runtimes["alice"].preparer.status("li_1").status is Status.READY:
+            break
+        await asyncio.sleep(0.02)
+
+    assert runtimes["alice"].preparer.status("li_1").status is Status.READY
+    assert sum(len(library.downloads) for library in libraries.values()) == 1
+    assert (
+        runtimes["alice"].cache.book_dir("li_1")
+        == runtimes["bob"].cache.book_dir("li_1")
+    )
 
 
 class TestRecut:

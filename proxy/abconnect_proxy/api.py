@@ -3,8 +3,8 @@
 Responses stay deliberately small: Connect IQ aborts large JSON responses with
 -402 or -403, long before a full Audiobookshelf response would fit through.
 
-The bearer token decides who is asking. Every /v1 call runs against that
-user's own Audiobookshelf, cache and playlist.
+The bearer token decides who is asking. Every /v1 call uses that user's
+Audiobookshelf and playlist. Prepared books live in one shared cache.
 """
 
 from __future__ import annotations
@@ -28,7 +28,6 @@ from .watcher import MAX_PLAYLIST_BOOKS
 
 log = logging.getLogger(__name__)
 
-SWEEP_INTERVAL_SECONDS = 3600
 MAX_BODY_BYTES = 64 * 1024
 MAX_SEGMENTS_PAGE_BYTES = 4096
 
@@ -87,11 +86,10 @@ def create_app(
     async def lifespan(app: FastAPI):
         app.state.config = config
         # One semaphore for every user: a single prepare job at a time.
-        app.state.users, app.state.budget = build_runtimes(
+        app.state.users = build_runtimes(
             config, asyncio.Semaphore(1), injected
         )
         app.state.failures = auth.FailureTracker()
-        sweeper = asyncio.create_task(_sweep_forever(app), name="cache-sweeper")
         # Run in the background so a book newly added to a playlist is already
         # segmented and ready before that user's watch syncs the next time.
         watchers = [
@@ -103,12 +101,17 @@ def create_app(
         try:
             yield
         finally:
-            tasks = [sweeper, *watchers]
+            tasks = watchers
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+            stopped: set[int] = set()
             for name, user in app.state.users.items():
-                await user.preparer.shutdown()
+                # One preparer serves every user. Shutting it down twice
+                # would cancel jobs that have already been cleaned up.
+                if id(user.preparer) not in stopped:
+                    stopped.add(id(user.preparer))
+                    await user.preparer.shutdown()
                 if name not in injected:
                     await user.abs.aclose()
 
@@ -172,25 +175,6 @@ class BodyLimit:
             return message
 
         await self.app(scope, limited_receive, send)
-
-
-async def _sweep_forever(app: FastAPI) -> None:
-    while True:
-        try:
-            await asyncio.sleep(SWEEP_INTERVAL_SECONDS)
-            config: Config = app.state.config
-            users: dict[str, UserRuntime] = app.state.users
-            for user in users.values():
-                for book_id in user.cache.sweep(config.release_ttl_days):
-                    user.preparer.forget(book_id)
-            for owner, book_id in app.state.budget.enforce():
-                users[owner].preparer.forget(book_id)
-        except asyncio.CancelledError:
-            raise
-        except (
-            Exception
-        ):  # pragma: no cover - the sweeper must never take down the process
-            log.exception("Cache sweep failed")
 
 
 # --- Access control --------------------------------------------------------
@@ -282,7 +266,9 @@ def _register(app: FastAPI) -> None:
         """Check the caller's Audiobookshelf, playlist and ffmpeg.
 
         A misconfiguration would otherwise only surface on a watch's first
-        sync. The report is the caller's own state; no other user appears.
+        sync. The playlist and the server are the caller's. The cache is
+        shared, so the book count covers every prepared book. No other
+        user's name appears.
 
         Args:
             user: The caller, from their bearer token.
@@ -441,7 +427,7 @@ def _register(app: FastAPI) -> None:
     async def segment_file(
         book_id: str, filename: str, user: UserRuntime = Depends(current_user)
     ):
-        """Return the audio file for one segment from this user's cache.
+        """Return the audio file for one segment from the shared cache.
 
         Args:
             book_id: Audiobookshelf library-item id.

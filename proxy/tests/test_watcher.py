@@ -5,7 +5,7 @@ from abconnect_proxy.abs_client import AbsError
 from abconnect_proxy.cache import Cache
 from abconnect_proxy.parsing import Playlist
 from abconnect_proxy.preparer import BookState, Status
-from abconnect_proxy.watcher import PlaylistWatcher
+from abconnect_proxy.watcher import Holdings, PlaylistWatcher
 
 from .conftest import write_users
 
@@ -41,7 +41,7 @@ class FakePreparer:
         self.cache.pin(book_id)
         return self.states[book_id]
 
-    async def admit(self, book_id):
+    async def admit(self, book_id, client=None):
         state = self.status(book_id)
         if state.status is Status.WITHHELD:
             return state
@@ -51,6 +51,10 @@ class FakePreparer:
         if state.status is Status.PENDING:
             return self.request(book_id)
         return state
+
+    async def abandon(self, book_id):
+        self.states.pop(book_id, None)
+        self.cache.discard(book_id)
 
 
 def make(tmp_path, playlist, states=None, playlist_name="Garmin"):
@@ -97,8 +101,6 @@ def cached(cache, book_id, pinned=True):
     cache.store_manifest(book_id, {"book_id": book_id, "segments": []})
     if pinned:
         cache.pin(book_id)
-    else:
-        cache.release(book_id)
 
 
 async def test_asks_for_the_users_own_playlist(tmp_path):
@@ -182,16 +184,16 @@ class TestRemoving:
         result = await watcher.refresh()
 
         assert result.released == ["li_old"]
-        assert not cache.pinned("li_old")
-        assert cache.is_ready("li_old")  # stays around until the TTL
+        assert not cache.is_ready("li_old")
 
-    async def test_an_already_released_book_is_not_released_again(self, tmp_path):
+    async def test_a_book_already_off_the_playlist_is_deleted(self, tmp_path):
         watcher, cache, _, _ = make(tmp_path, playlist_of())
         cached(cache, "li_old", pinned=False)
 
         result = await watcher.refresh()
 
-        assert result.released == []
+        assert result.released == ["li_old"]
+        assert not cache.is_ready("li_old")
 
 
 class TestFailureIsNotEmptiness:
@@ -225,6 +227,122 @@ class TestFailureIsNotEmptiness:
 
         assert result.found  # the last known state, not "empty"
         assert [b["id"] for b in result.books] == ["li_a"]
+
+
+def couple(tmp_path, alice_playlist, bob_playlist):
+    """Two watches, one cache: a book stays while either playlist lists it."""
+    users = write_users(
+        tmp_path / "users.toml",
+        {
+            "alice": {
+                "tokens": ["a" * 20],
+                "abs_url": "https://abs.example",
+                "abs_api_key": "k" * 20,
+            },
+            "bob": {
+                "tokens": ["b" * 20],
+                "abs_url": "https://abs.example",
+                "abs_api_key": "b" * 20,
+            },
+        },
+    )
+    cfg = config_module.load(
+        {
+            "USERS_FILE": str(users),
+            "CACHE_DIR": str(tmp_path / "cache"),
+            "WORK_DIR": str(tmp_path / "work"),
+        }
+    )
+    cache = Cache(root=cfg.cache_dir)
+    preparer = FakePreparer(cache)
+    holdings = Holdings()
+    watchers = {}
+    for name, playlist in (("alice", alice_playlist), ("bob", bob_playlist)):
+        watchers[name] = PlaylistWatcher(
+            abs_client=FakeAbs(playlist),
+            cache=cache,
+            preparer=preparer,
+            config=cfg,
+            playlist="Garmin",
+            user=name,
+            holdings=holdings,
+        )
+    return watchers["alice"], watchers["bob"], cache
+
+
+async def test_a_book_another_user_still_has_is_kept(tmp_path):
+    alice, bob, cache = couple(tmp_path, playlist_of("li_a"), playlist_of("li_shared"))
+    cached(cache, "li_shared")
+
+    await alice.refresh()
+    await bob.refresh()
+    alice.abs_client.playlist_value = playlist_of()
+    result = await alice.refresh()
+
+    # li_a left with Alice. li_shared is still on Bob's playlist.
+    assert result.released == ["li_a"]
+    assert cache.books() == ["li_shared"]
+    assert cache.is_ready("li_shared")
+
+
+async def test_a_book_is_kept_until_every_playlist_has_been_read(tmp_path):
+    alice, _bob, cache = couple(tmp_path, playlist_of("li_a"), playlist_of("li_b"))
+    cached(cache, "li_b")
+
+    result = await alice.refresh()
+
+    assert result.released == []
+    assert cache.is_ready("li_b")
+
+
+async def test_a_book_no_playlist_lists_is_released_once_every_playlist_is_known(
+    tmp_path,
+):
+    alice, bob, cache = couple(tmp_path, playlist_of("li_a"), playlist_of())
+    cached(cache, "li_old")
+
+    await alice.refresh()
+    assert cache.is_ready("li_old")
+
+    result = await bob.refresh()
+
+    assert result.released == ["li_old"]
+    assert not cache.is_ready("li_old")
+
+
+async def test_a_book_is_released_when_the_last_playlist_drops_it(tmp_path):
+    alice, bob, cache = couple(
+        tmp_path, playlist_of("li_a", "li_shared"), playlist_of("li_shared")
+    )
+    cached(cache, "li_a")
+    cached(cache, "li_shared")
+    await alice.refresh()
+    await bob.refresh()
+
+    alice.abs_client.playlist_value = playlist_of("li_a")
+    await alice.refresh()
+    assert cache.is_ready("li_shared")
+
+    bob.abs_client.playlist_value = playlist_of()
+    result = await bob.refresh()
+
+    assert result.released == ["li_shared"]
+    assert not cache.is_ready("li_shared")
+    assert cache.is_ready("li_a")
+
+
+async def test_an_unreachable_server_does_not_forget_that_users_books(tmp_path):
+    alice, bob, cache = couple(tmp_path, playlist_of("li_a"), playlist_of("li_b"))
+    cached(cache, "li_a")
+    cached(cache, "li_b")
+    await alice.refresh()
+    await bob.refresh()
+
+    bob.abs_client.playlist_value = AbsError("connection lost")
+    await bob.refresh()
+    await alice.refresh()
+
+    assert cache.is_ready("li_b")
 
 
 async def test_only_the_first_fifty_books_belong_on_the_watch(tmp_path):

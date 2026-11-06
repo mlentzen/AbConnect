@@ -12,14 +12,12 @@ DEFAULTS = {
     "PLAYLIST_POLL_SECONDS": "600",
     "CACHE_DIR": "/var/cache/abconnect",
     "WORK_DIR": "/var/tmp/abconnect",
-    "CACHE_MAX_BYTES": str(200 * 1024**3),
-    "RELEASE_TTL_DAYS": "30",
     "TRANSCODE_BITRATE_KBPS": "64",
     "HTTP_TIMEOUT_SECONDS": "60",
     "LOG_LEVEL": "INFO",
 }
 
-# The name becomes a directory below the cache, so it must be a safe path segment.
+# The name is the log label, so it has to be a single safe token.
 USER_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 USER_KEYS = frozenset({"tokens", "abs_url", "abs_api_key", "playlist"})
 
@@ -48,7 +46,7 @@ class UserConfig:
     """One person: how their watch authenticates, and which Audiobookshelf is theirs.
 
     Attributes:
-        name: Also the cache directory, so it has to be a safe path segment.
+        name: Log label. Letters, digits, ``_`` and ``-`` only.
         tokens: Bearer tokens the watch may send. More than one is allowed
             so a new token can be installed before the old one is removed
             from the device.
@@ -76,10 +74,8 @@ class Config:
         playlist_poll_seconds: How often each playlist is re-read.
         cache_dir: Where the segments are stored.
         work_dir: Where a source file sits while it is being cut.
-        cache_max_bytes: Disk budget shared by every user.
-        release_ttl_days: How long a book stays on disk after it leaves its
-            playlist.
-        transcode_bitrate_kbps: Bitrate of an m4b chapter encoded to mp3.
+        transcode_bitrate_kbps: Bitrate per channel of every segment encoded
+            to mp3. A stereo segment uses twice this.
         http_timeout_seconds: Request timeout for Audiobookshelf calls.
         log_level: Logging level name, such as "INFO".
     """
@@ -88,8 +84,6 @@ class Config:
     playlist_poll_seconds: int
     cache_dir: Path
     work_dir: Path
-    cache_max_bytes: int
-    release_ttl_days: int
     transcode_bitrate_kbps: int
     http_timeout_seconds: float
     log_level: str
@@ -243,8 +237,6 @@ def load(env: dict[str, str] | None = None) -> Config:
         problems,
     )
 
-    cache_max = _int(env, "CACHE_MAX_BYTES", problems, minimum=1024**3)
-    release_ttl = _int(env, "RELEASE_TTL_DAYS", problems, minimum=0)
     poll = _int(env, "PLAYLIST_POLL_SECONDS", problems, minimum=60)
     timeout = _int(env, "HTTP_TIMEOUT_SECONDS", problems, minimum=5)
     bitrate = _int(env, "TRANSCODE_BITRATE_KBPS", problems, minimum=32)
@@ -257,8 +249,6 @@ def load(env: dict[str, str] | None = None) -> Config:
         playlist_poll_seconds=poll,
         cache_dir=Path(env.get("CACHE_DIR") or DEFAULTS["CACHE_DIR"]),
         work_dir=Path(env.get("WORK_DIR") or DEFAULTS["WORK_DIR"]),
-        cache_max_bytes=cache_max,
-        release_ttl_days=release_ttl,
         transcode_bitrate_kbps=bitrate,
         http_timeout_seconds=float(timeout),
         log_level=(env.get("LOG_LEVEL") or DEFAULTS["LOG_LEVEL"]).upper(),
