@@ -487,6 +487,9 @@ def _register(app: FastAPI) -> None:
             log.error("Re-encode of %s/%s failed: %s", book_id, filename, error)
             destination.unlink(missing_ok=True)
             raise HTTPException(500, "Segment could not be prepared") from None
+        except asyncio.CancelledError:
+            destination.unlink(missing_ok=True)
+            raise
         return FileResponse(
             destination,
             media_type="audio/mpeg",
