@@ -443,6 +443,14 @@ class TestSegments:
         assert response.headers["content-type"].startswith("audio/mpeg")
         assert response.headers["content-length"] == "7"
 
+    def test_stale_pull_files_are_removed_at_startup(self, config):
+        stale = config.work_dir / "pull" / "stale.mp3"
+        stale.parent.mkdir(parents=True, exist_ok=True)
+        stale.write_bytes(b"tmp")
+
+        with build_client(config):
+            assert not stale.exists()
+
     @needs_ffmpeg
     def test_a_mono_user_is_sent_a_one_channel_copy_of_the_shared_file(
         self, tmp_path

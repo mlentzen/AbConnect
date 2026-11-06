@@ -84,9 +84,20 @@ def create_app(
     """
     injected = abs_clients or {}
 
+    def _cleanup_stale_pull_files() -> None:
+        pull_dir = config.work_dir / "pull"
+        for path in pull_dir.rglob("*"):
+            if not path.is_file():
+                continue
+            try:
+                path.unlink()
+            except OSError as error:
+                log.warning("Could not remove stale pull file %s: %s", path, error)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.config = config
+        _cleanup_stale_pull_files()
         # One semaphore for every user: a single prepare job at a time.
         app.state.users = build_runtimes(
             config, asyncio.Semaphore(1), injected
