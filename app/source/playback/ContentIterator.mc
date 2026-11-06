@@ -441,12 +441,8 @@ module PlaybackProfile {
 
     function standard() as Media.PlaybackProfile {
         var profile = new Media.PlaybackProfile();
-        // The first entry may act as a hotkey, so skip forward goes first.
-        // PLAYBACK must stay, or no play/pause is rendered; first, it binds a
-        // second play button to the hotkey.
         profile.playbackControls = [
             Media.PLAYBACK_CONTROL_SKIP_FORWARD,
-            Media.PLAYBACK_CONTROL_PLAYBACK,
             Media.PLAYBACK_CONTROL_SKIP_BACKWARD,
             Media.PLAYBACK_CONTROL_PREVIOUS,
             Media.PLAYBACK_CONTROL_NEXT
