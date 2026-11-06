@@ -19,7 +19,9 @@ DEFAULTS = {
 
 # The name is the log label, so it has to be a single safe token.
 USER_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-USER_KEYS = frozenset({"tokens", "abs_url", "abs_api_key", "playlist"})
+USER_KEYS = frozenset(
+    {"tokens", "abs_url", "abs_api_key", "playlist", "mono", "bitrate_kbps"}
+)
 
 
 class ConfigError(Exception):
@@ -53,6 +55,11 @@ class UserConfig:
         abs_url: That person's Audiobookshelf server.
         abs_api_key: How the proxy calls that server.
         playlist: Playlist name whose books are prepared for their watch.
+        mono: When true, a pull of a segment is mixed down to one channel
+            into a temporary file. The shared cache stays stereo.
+        bitrate_kbps: File bitrate of a pull, in kbit/s. Omit it and the
+            cached file is sent as stored, unless ``mono`` is set, in which
+            case the process-wide rate is used. Channels stay as they are.
     """
 
     name: str
@@ -60,6 +67,8 @@ class UserConfig:
     abs_url: str
     abs_api_key: str = field(repr=False)
     playlist: str
+    mono: bool = False
+    bitrate_kbps: int | None = None
 
 
 @dataclass(frozen=True)
@@ -185,7 +194,38 @@ def _users(
         if not playlist:
             problems.append(f"{where}: playlist must not be empty")
 
-        users.append(UserConfig(name, tokens, abs_url, abs_api_key, playlist))
+        mono = entry.get("mono", False)
+        if not isinstance(mono, bool):
+            problems.append(f"{where}: mono must be true or false")
+            mono = False
+
+        # Same floor as TRANSCODE_BITRATE_KBPS. bool is an int, so it is rejected
+        # before the range check.
+        bitrate_kbps = entry.get("bitrate_kbps")
+        if bitrate_kbps is None:
+            parsed_bitrate = None
+        elif isinstance(bitrate_kbps, bool) or not isinstance(bitrate_kbps, int):
+            problems.append(f"{where}: bitrate_kbps must be an integer")
+            parsed_bitrate = None
+        elif bitrate_kbps < 32:
+            problems.append(
+                f"{where}: bitrate_kbps {bitrate_kbps} is below the minimum 32"
+            )
+            parsed_bitrate = None
+        else:
+            parsed_bitrate = bitrate_kbps
+
+        users.append(
+            UserConfig(
+                name,
+                tokens,
+                abs_url,
+                abs_api_key,
+                playlist,
+                mono=mono,
+                bitrate_kbps=parsed_bitrate,
+            )
+        )
     return tuple(users)
 
 

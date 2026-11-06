@@ -1,4 +1,5 @@
 import json
+import subprocess
 import time
 
 import httpx
@@ -11,7 +12,7 @@ from abconnect_proxy.api import MAX_SEGMENTS_PAGE_BYTES, create_app
 from abconnect_proxy.cache import BOOKS_DIR, Cache
 from abconnect_proxy.watcher import MAX_PLAYLIST_BOOKS
 
-from .conftest import write_users
+from .conftest import needs_ffmpeg, probe, write_users
 
 TOKEN = "watch-token-abcdef"
 HEAD = {"Authorization": f"Bearer {TOKEN}"}
@@ -109,6 +110,59 @@ def with_book(book_id, playlist="Garmin"):
                 }
             )
     return playlists
+
+
+def _encode_mp3(path, *, channels: int, bitrate_kbps: int) -> None:
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-nostdin",
+            "-v",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=2",
+            "-c:a",
+            "libmp3lame",
+            "-b:a",
+            f"{bitrate_kbps}k",
+            "-ac",
+            str(channels),
+            "-ar",
+            "44100",
+            str(path),
+        ],
+        check=True,
+    )
+
+
+def _config_with_alice(tmp_path, **alice):
+    users = write_users(
+        tmp_path / "users.toml",
+        {
+            "alice": {
+                "tokens": [TOKEN],
+                "abs_url": "https://abs.alice.example",
+                "abs_api_key": "k" * 20,
+                **alice,
+            },
+            "bob": {
+                "tokens": [BOB_TOKEN],
+                "abs_url": "https://abs.bob.example",
+                "abs_api_key": "b" * 20,
+                "playlist": "Bob",
+            },
+        },
+    )
+    return config_module.load(
+        {
+            "USERS_FILE": str(users),
+            "CACHE_DIR": str(tmp_path / "cache"),
+            "WORK_DIR": str(tmp_path / "work"),
+        }
+    )
 
 
 def load_config(tmp_path, alice_tokens=(TOKEN,)):
@@ -388,6 +442,178 @@ class TestSegments:
         # Without it the body is buffered and a long chapter comes back -402.
         assert response.headers["content-type"].startswith("audio/mpeg")
         assert response.headers["content-length"] == "7"
+
+    def test_stale_pull_files_are_removed_at_startup(self, config):
+        stale = config.work_dir / "pull" / "stale.mp3"
+        stale.parent.mkdir(parents=True, exist_ok=True)
+        stale.write_bytes(b"tmp")
+
+        with build_client(config):
+            assert not stale.exists()
+
+    @needs_ffmpeg
+    def test_a_mono_user_is_sent_a_one_channel_copy_of_the_shared_file(
+        self, tmp_path
+    ):
+        users = write_users(
+            tmp_path / "users.toml",
+            {
+                "alice": {
+                    "tokens": [TOKEN],
+                    "abs_url": "https://abs.alice.example",
+                    "abs_api_key": "k" * 20,
+                    "mono": True,
+                },
+                "bob": {
+                    "tokens": [BOB_TOKEN],
+                    "abs_url": "https://abs.bob.example",
+                    "abs_api_key": "b" * 20,
+                    "playlist": "Bob",
+                },
+            },
+        )
+        config = config_module.load(
+            {
+                "USERS_FILE": str(users),
+                "CACHE_DIR": str(tmp_path / "cache"),
+                "WORK_DIR": str(tmp_path / "work"),
+            }
+        )
+        prepared_book(config)
+        cached = user_cache(config).segment_path("li_a", "0000.mp3")
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-nostdin",
+                "-v",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=2",
+                "-c:a",
+                "libmp3lame",
+                "-b:a",
+                "128k",
+                "-ac",
+                "2",
+                "-ar",
+                "44100",
+                str(cached),
+            ],
+            check=True,
+        )
+        original = cached.read_bytes()
+
+        with build_client(config) as client:
+            mixed = client.get("/v1/books/li_a/seg/0000.mp3", headers=HEAD)
+            plain = client.get("/v1/books/li_a/seg/0000.mp3", headers=BOB_HEAD)
+
+        assert plain.status_code == 200
+        assert plain.content == original
+        assert cached.read_bytes() == original
+        assert mixed.status_code == 200
+        assert mixed.headers["content-type"].startswith("audio/mpeg")
+        assert mixed.headers["content-length"] == str(len(mixed.content))
+        received = tmp_path / "received.mp3"
+        received.write_bytes(mixed.content)
+        assert probe(received).channels == 1
+        assert probe(received).bit_rate == pytest.approx(64000, rel=0.15)
+        # The mix exists only while the watch is downloading it.
+        assert list(config.work_dir.rglob("*.mp3")) == []
+
+    @needs_ffmpeg
+    def test_a_mono_mix_that_fails_answers_500_and_leaves_no_temporary_file(
+        self, tmp_path
+    ):
+        users = write_users(
+            tmp_path / "users.toml",
+            {
+                "alice": {
+                    "tokens": [TOKEN],
+                    "abs_url": "https://abs.alice.example",
+                    "abs_api_key": "k" * 20,
+                    "mono": True,
+                },
+                "bob": {
+                    "tokens": [BOB_TOKEN],
+                    "abs_url": "https://abs.bob.example",
+                    "abs_api_key": "b" * 20,
+                    "playlist": "Bob",
+                },
+            },
+        )
+        config = config_module.load(
+            {
+                "USERS_FILE": str(users),
+                "CACHE_DIR": str(tmp_path / "cache"),
+                "WORK_DIR": str(tmp_path / "work"),
+            }
+        )
+        prepared_book(config)
+        cached = user_cache(config).segment_path("li_a", "0000.mp3")
+
+        with build_client(config) as client:
+            response = client.get("/v1/books/li_a/seg/0000.mp3", headers=HEAD)
+
+        assert response.status_code == 500
+        assert cached.read_bytes() == b"audio!!"
+        assert [path for path in config.work_dir.rglob("*") if path.is_file()] == []
+
+    @needs_ffmpeg
+    def test_a_mono_user_bitrate_replaces_the_shared_cache_rate(self, tmp_path):
+        config = _config_with_alice(tmp_path, mono=True, bitrate_kbps=32)
+        prepared_book(config)
+        cached = user_cache(config).segment_path("li_a", "0000.mp3")
+        _encode_mp3(cached, channels=2, bitrate_kbps=128)
+
+        with build_client(config) as client:
+            response = client.get("/v1/books/li_a/seg/0000.mp3", headers=HEAD)
+
+        received = tmp_path / "received.mp3"
+        received.write_bytes(response.content)
+        probed = probe(received)
+        assert probed.channels == 1
+        assert probed.bit_rate == pytest.approx(32000, rel=0.15)
+
+    @needs_ffmpeg
+    def test_bitrate_without_mono_keeps_stereo(self, tmp_path):
+        config = _config_with_alice(tmp_path, bitrate_kbps=32)
+        prepared_book(config)
+        cached = user_cache(config).segment_path("li_a", "0000.mp3")
+        _encode_mp3(cached, channels=2, bitrate_kbps=128)
+        original = cached.read_bytes()
+
+        with build_client(config) as client:
+            response = client.get("/v1/books/li_a/seg/0000.mp3", headers=HEAD)
+
+        assert response.status_code == 200
+        assert cached.read_bytes() == original
+        received = tmp_path / "received.mp3"
+        received.write_bytes(response.content)
+        probed = probe(received)
+        assert probed.channels == 2
+        assert probed.bit_rate == pytest.approx(32000, rel=0.15)
+        assert list(config.work_dir.rglob("*.mp3")) == []
+
+    @needs_ffmpeg
+    def test_a_segment_already_mono_at_the_user_rate_is_sent_unchanged(
+        self, tmp_path
+    ):
+        config = _config_with_alice(tmp_path, mono=True, bitrate_kbps=64)
+        prepared_book(config)
+        cached = user_cache(config).segment_path("li_a", "0000.mp3")
+        _encode_mp3(cached, channels=1, bitrate_kbps=64)
+        original = cached.read_bytes()
+
+        with build_client(config) as client:
+            response = client.get("/v1/books/li_a/seg/0000.mp3", headers=HEAD)
+
+        assert response.status_code == 200
+        assert response.content == original
+        assert cached.read_bytes() == original
+        assert list(config.work_dir.rglob("*.mp3")) == []
 
     def test_rejects_traversal_in_the_segment_name(self, config):
         prepared_book(config)

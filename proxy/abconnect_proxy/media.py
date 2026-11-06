@@ -14,6 +14,10 @@ class MediaError(Exception):
 #: Rate written into every segment. Other rates are not played.
 SAMPLE_RATE = 44100
 
+#: How far a probed bitrate may sit from the requested one and still count
+#: as that rate. 32 and 64 stay apart; a constant-bitrate file is not exact.
+_BITRATE_TOLERANCE = 0.1
+
 
 def ensure_available() -> None:
     """Check that ffmpeg is on PATH.
@@ -76,6 +80,52 @@ async def _channel_count(source: Path) -> int:
     if count < 1:
         raise MediaError(f"{source.name} has no audio channels")
     return count
+
+
+async def needs_reencode(source: Path, bitrate_kbps: int, *, mono: bool) -> bool:
+    """Decide whether ``source`` still has to be encoded for this pull.
+
+    ``bitrate_kbps`` is the file rate, whatever the channel count. A stereo
+    file at that rate is sent as it is. It is mixed to one channel only when
+    ``mono`` is set and the file still has more than one.
+
+    Args:
+        source: Cached segment.
+        bitrate_kbps: Rate the watch should receive, in kbit/s.
+        mono: When true, one channel is required as well as the rate.
+
+    Returns:
+        True when a new encode is required.
+
+    Raises:
+        MediaError: The file has no readable audio stream.
+    """
+    stdout = await _run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=channels,bit_rate:format=bit_rate",
+            "-of",
+            "json",
+            str(source),
+        ]
+    )
+    try:
+        probed = json.loads(stdout)
+        stream = probed["streams"][0]
+        channels = int(stream["channels"])
+        raw_rate = stream.get("bit_rate") or probed.get("format", {}).get("bit_rate")
+        bit_rate = int(float(raw_rate))
+    except (json.JSONDecodeError, KeyError, IndexError, TypeError, ValueError):
+        raise MediaError(f"{source.name} has no readable audio stream") from None
+    if bit_rate < 1 or (mono and channels != 1):
+        return True
+    target = bitrate_kbps * 1000
+    return abs(bit_rate - target) > target * _BITRATE_TOLERANCE
 
 
 async def cut(
@@ -168,6 +218,66 @@ async def cut(
     command.append(str(destination))
 
     await _run(command)
+    if not destination.exists() or destination.stat().st_size == 0:
+        raise MediaError(f"Segment {destination.name} stayed empty")
+    return destination.stat().st_size
+
+
+async def reencode(
+    source: Path, destination: Path, *, bitrate_kbps: int, mono: bool = True
+) -> int:
+    """Re-encode ``source`` at ``bitrate_kbps``.
+
+    With ``mono``, the result has one channel. Without it, the channel count
+    is kept, except that more than two channels are mixed to stereo because
+    that is all mp3 can hold. The source file is left as it is. Tags already
+    on it are kept, because Garmin may hide a file that has none. The caller
+    deletes ``destination`` after the watch has finished downloading it.
+
+    Args:
+        source: Cached segment. Not modified.
+        destination: Where the temporary file is written.
+        bitrate_kbps: mp3 bitrate of the file, in kbit/s.
+        mono: Mix down to one channel.
+
+    Returns:
+        The size of the temporary file, in bytes.
+
+    Raises:
+        MediaError: ffmpeg failed, or the temporary file is missing or empty.
+    """
+    channels = 1 if mono else min(await _channel_count(source), 2)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    await _run(
+        [
+            "ffmpeg",
+            "-nostdin",
+            "-v",
+            "error",
+            "-y",
+            "-i",
+            str(source),
+            "-map",
+            "0:a:0",
+            "-map_metadata",
+            "0",
+            "-map_chapters",
+            "-1",
+            "-c:a",
+            "libmp3lame",
+            "-b:a",
+            f"{bitrate_kbps}k",
+            "-ac",
+            str(channels),
+            "-ar",
+            str(SAMPLE_RATE),
+            "-id3v2_version",
+            "3",
+            "-write_xing",
+            "1",
+            str(destination),
+        ]
+    )
     if not destination.exists() or destination.stat().st_size == 0:
         raise MediaError(f"Segment {destination.name} stayed empty")
     return destination.stat().st_size

@@ -65,6 +65,19 @@ class TestUsers:
         config = load(env({"alice": ALICE, "bob": bob}, {"ABS_PLAYLIST": "Uhr"}))
         assert [u.playlist for u in config.users] == ["Uhr", "Bob"]
 
+    def test_mono_is_off_unless_the_user_asks_for_it(self, env):
+        # A missing flag must keep serving the shared stereo cache. Turning it
+        # on is per person, so the other watches are left alone.
+        bob = {**ALICE, "tokens": ["b" * 20], "mono": True}
+        config = load(env({"alice": ALICE, "bob": bob}))
+        assert [user.mono for user in config.users] == [False, True]
+
+    def test_bitrate_kbps_is_optional_and_per_user(self, env):
+        # Omitted means the shared-cache rate. Set, it is only that person's pull.
+        bob = {**ALICE, "tokens": ["b" * 20], "bitrate_kbps": 32}
+        config = load(env({"alice": ALICE, "bob": bob}))
+        assert [user.bitrate_kbps for user in config.users] == [None, 32]
+
     def test_secrets_stay_out_of_the_repr(self, env):
         text = repr(load(env()).users[0])
         assert TOKEN not in text
@@ -106,6 +119,9 @@ class TestUserProblems:
             ({"tokens": []}, "tokens missing"),
             ({"playlst": "Garmin"}, "unknown keys playlst"),
             ({"playlist": ""}, "playlist must not be empty"),
+            ({"mono": "yes"}, "mono must be true or false"),
+            ({"bitrate_kbps": "fast"}, "bitrate_kbps must be an integer"),
+            ({"bitrate_kbps": 8}, "below the minimum 32"),
         ],
     )
     def test_rejects_implausible_user_entries(self, env, entry, expected):

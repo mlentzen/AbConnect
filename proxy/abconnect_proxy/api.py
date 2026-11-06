@@ -13,10 +13,12 @@ import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
+from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 
 from . import auth, media, progress
 from .abs_client import AbsClient, AbsError
@@ -82,9 +84,20 @@ def create_app(
     """
     injected = abs_clients or {}
 
+    def _cleanup_stale_pull_files() -> None:
+        pull_dir = config.work_dir / "pull"
+        for path in pull_dir.rglob("*"):
+            if not path.is_file():
+                continue
+            try:
+                path.unlink()
+            except OSError as error:
+                log.warning("Could not remove stale pull file %s: %s", path, error)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.config = config
+        _cleanup_stale_pull_files()
         # One semaphore for every user: a single prepare job at a time.
         app.state.users = build_runtimes(
             config, asyncio.Semaphore(1), injected
@@ -425,20 +438,33 @@ def _register(app: FastAPI) -> None:
 
     @app.get("/v1/books/{book_id}/seg/{filename}")
     async def segment_file(
-        book_id: str, filename: str, user: UserRuntime = Depends(current_user)
+        book_id: str,
+        filename: str,
+        request: Request,
+        user: UserRuntime = Depends(current_user),
     ):
         """Return the audio file for one segment from the shared cache.
+
+        ``bitrate_kbps`` re-encodes the chapter to that file rate and keeps
+        its channels. ``mono`` also mixes it to one channel. Either one is
+        enough to take this path; with only ``mono``, the rate is the
+        process-wide one. A file that already matches is sent unchanged.
+        Otherwise the copy is written under the work directory and removed
+        after the response. The cached file stays as prepared.
 
         Args:
             book_id: Audiobookshelf library-item id.
             filename: Segment file name, as listed by the segments endpoint.
+            request: The incoming request. The work directory comes from the
+                app config.
             user: The caller, from their bearer token.
 
         Returns:
-            The segment file.
+            The segment file, or a temporary re-encode of it.
 
         Raises:
-            HTTPException: The name is unsafe, or the file is not in the cache.
+            HTTPException: The name is unsafe, the file is not in the cache,
+                or the mono mix could not be written.
         """
         book_id = _book_id(book_id)
         try:
@@ -448,7 +474,38 @@ def _register(app: FastAPI) -> None:
         if not path.exists():
             raise HTTPException(404, "Segment not found")
         user.cache.touch(book_id)
-        return FileResponse(path, media_type="audio/mpeg")
+        if not user.config.mono and user.config.bitrate_kbps is None:
+            return FileResponse(path, media_type="audio/mpeg")
+
+        config: Config = request.app.state.config
+        bitrate = user.config.bitrate_kbps
+        if bitrate is None:
+            bitrate = config.transcode_bitrate_kbps
+        try:
+            reencode = await media.needs_reencode(path, bitrate, mono=user.config.mono)
+        except media.MediaError as error:
+            log.error("Re-encode of %s/%s failed: %s", book_id, filename, error)
+            raise HTTPException(500, "Segment could not be prepared") from None
+        if not reencode:
+            return FileResponse(path, media_type="audio/mpeg")
+
+        destination = config.work_dir / "pull" / f"{uuid4().hex}.mp3"
+        try:
+            await media.reencode(
+                path, destination, bitrate_kbps=bitrate, mono=user.config.mono
+            )
+        except media.MediaError as error:
+            log.error("Re-encode of %s/%s failed: %s", book_id, filename, error)
+            destination.unlink(missing_ok=True)
+            raise HTTPException(500, "Segment could not be prepared") from None
+        except asyncio.CancelledError:
+            destination.unlink(missing_ok=True)
+            raise
+        return FileResponse(
+            destination,
+            media_type="audio/mpeg",
+            background=BackgroundTask(destination.unlink, missing_ok=True),
+        )
 
     # --- Progress ---------------------------------------------------------
 
