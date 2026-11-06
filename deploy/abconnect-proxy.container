@@ -26,7 +26,7 @@ Secret=abconnect-users,type=mount,target=/run/secrets/users.toml,uid=10001,mode=
 
 # Disk space is available: a generous budget so released books stay around and
 # re-selecting one does not require a second download.
-Environment=CACHE_MAX_BYTES=214748364800
+Environment=CACHE_MAX_BYTES=21474836480
 Environment=RELEASE_TTL_DAYS=30
 Environment=LOG_LEVEL=INFO
 
