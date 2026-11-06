@@ -25,6 +25,7 @@ abs_api_key = "<API key of anna's ABS account>"
 * A token is at least 16 characters and unique across all users. `openssl rand -hex 24`. It goes into that user's watch app settings.
 * The name (`alex`) is the log label: letters, digits, `_` and `-`. Books are prepared once for everyone, not into a directory per person.
 * `bitrate_kbps` re-encodes each chapter to that file rate when that person's watch downloads it, then deletes the temporary file. The channel count stays as stored. `mono = true` also mixes it down to one channel; without `bitrate_kbps` that mix uses `TRANSCODE_BITRATE_KBPS`. A chapter that already matches is sent as stored. The shared cache stays as prepared. Chapters already stored on the watch stay until that watch asks for them again.
+* _Configuration advice:_ For small storage devices like a Vivoactive 5 mono and 32kbps seem to work well, while default settings are fine for devices like a Fenix 7 Pro.
 
 ```sh
 podman secret create abconnect-users users.toml
