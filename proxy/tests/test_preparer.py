@@ -9,8 +9,9 @@ from abconnect_proxy import config as config_module
 from abconnect_proxy import media
 from abconnect_proxy.cache import Cache
 from abconnect_proxy.models import Chapter, SourceFile
-from abconnect_proxy.parsing import ItemUnusable, ParsedItem
+from abconnect_proxy.parsing import ItemUnusable, ParsedItem, Playlist
 from abconnect_proxy.preparer import Preparer, Status
+from abconnect_proxy.users import build_runtimes
 
 from .conftest import needs_ffmpeg, probe, write_users
 
@@ -587,6 +588,72 @@ class TestParallel:
         assert (await run(preparer)).status is Status.READY
         assert len(starts) == 2
         assert abs(starts[1] - starts[0]) < 0.2
+
+
+class Library(FakeAbs):
+    def __init__(self, item, source, books):
+        super().__init__(item, source)
+        self.books = books
+
+    async def playlist(self, name):
+        item = self.item
+        return Playlist(
+            name=name,
+            books=[
+                {
+                    "id": book_id,
+                    "title": item.title,
+                    "author": item.author,
+                    "duration": item.duration,
+                }
+                for book_id in self.books
+            ],
+        )
+
+
+async def test_a_book_on_two_playlists_is_downloaded_once(tmp_path, single_book):
+    item, source = single_book
+    users = write_users(
+        tmp_path / "users.toml",
+        {
+            "alice": {
+                "tokens": ["a" * 20],
+                "abs_url": "https://abs.example",
+                "abs_api_key": "k" * 20,
+            },
+            "bob": {
+                "tokens": ["b" * 20],
+                "abs_url": "https://abs.example",
+                "abs_api_key": "b" * 20,
+            },
+        },
+    )
+    cfg = config_module.load(
+        {
+            "USERS_FILE": str(users),
+            "CACHE_DIR": str(tmp_path / "cache"),
+            "WORK_DIR": str(tmp_path / "work"),
+        }
+    )
+    libraries = {
+        name: Library(item, source, ["li_1"]) for name in ("alice", "bob")
+    }
+    runtimes = build_runtimes(cfg, asyncio.Semaphore(1), libraries)
+
+    await asyncio.gather(
+        *(runtime.watcher.refresh() for runtime in runtimes.values())
+    )
+    for _ in range(400):
+        if runtimes["alice"].preparer.status("li_1").status is Status.READY:
+            break
+        await asyncio.sleep(0.02)
+
+    assert runtimes["alice"].preparer.status("li_1").status is Status.READY
+    assert sum(len(library.downloads) for library in libraries.values()) == 1
+    assert (
+        runtimes["alice"].cache.book_dir("li_1")
+        == runtimes["bob"].cache.book_dir("li_1")
+    )
 
 
 class TestRecut:

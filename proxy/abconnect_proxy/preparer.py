@@ -77,16 +77,17 @@ class BookState:
 
 @dataclass
 class Preparer:
-    """Downloads one user's books and cuts them into segments.
+    """Downloads books and cuts them into segments, once per book.
 
     Attributes:
-        abs_client: That user's Audiobookshelf client.
-        cache: That user's segment cache.
+        abs_client: Client used when a caller does not pass its own. A job
+            started for a user downloads with that user's client instead.
+        cache: The shared segment cache.
         config: Process configuration. The mp3 bitrate comes from here.
-        work_dir: This user's scratch directory. The downloaded source file
-            is deleted as soon as it has been cut.
-        slot: Semaphore every preparer waits on, so only one book is
-            prepared at a time across the whole process.
+        work_dir: Scratch directory. The downloaded source file is deleted
+            as soon as it has been cut.
+        slot: Semaphore the preparer waits on, so only one book is prepared
+            at a time.
         retry_after: Seconds before an errored book is tried again.
         encode_workers: How many segments to encode at once. None uses the
             cores this process can run on.
@@ -95,8 +96,6 @@ class Preparer:
     abs_client: AbsClient
     cache: Cache
     config: Config
-    # The user's own subdirectory, so two users preparing the same book ID
-    # never share a source file.
     work_dir: Path
     slot: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(1))
     retry_after: float = ERROR_RETRY_SECONDS
@@ -106,6 +105,10 @@ class Preparer:
     _tasks: dict[str, asyncio.Task] = field(default_factory=dict)
     # Item already fetched by admit(), so the job does not fetch it again.
     _staged: dict[str, ParsedItem] = field(default_factory=dict)
+    # Account that can read the book. Set by the admit() that starts the job.
+    _clients: dict[str, AbsClient] = field(default_factory=dict)
+    # One decision at a time, so two users listing the same book start one job.
+    _admit: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     # --- State -------------------------------------------------------------
 
@@ -163,50 +166,58 @@ class Preparer:
         log.warning("%s (%s): not offered to the watch: %s", title, book_id, error)
         self._set(book_id, status=Status.WITHHELD, error=str(error), percent=0)
 
-    async def admit(self, book_id: str) -> BookState:
+    async def admit(self, book_id: str, client: AbsClient | None = None) -> BookState:
         """Decide whether the watch may see this book, and start preparation.
 
         A chapter-less m4b, or a book that is neither mp3 files nor an m4b,
         is withheld: the caller leaves it out of the playlist. A ready book
         is pinned. An errored book is left alone until ``retry_after`` has
-        passed, then it is tried again.
+        passed, then it is tried again. A book another user already has in
+        progress is not started a second time.
 
         Args:
             book_id: Audiobookshelf library-item id.
+            client: Audiobookshelf account that can read the book. Omit it
+                to use this preparer's own client.
 
         Returns:
             The state after the decision. Withheld means the watch must not
             be told about the book.
         """
-        running = book_id in self._tasks and not self._tasks[book_id].done()
-        state = self.status(book_id)
-        if state.status is Status.READY or running:
-            if state.status is Status.READY:
-                self.cache.pin(book_id)
-            return state
-        if state.status is Status.ERROR:
-            if time.monotonic() - state.failed_at < self.retry_after:
+        chosen = client or self.abs_client
+        async with self._admit:
+            running = book_id in self._tasks and not self._tasks[book_id].done()
+            state = self.status(book_id)
+            if state.status is Status.READY or running:
+                if state.status is Status.READY:
+                    self.cache.pin(book_id)
                 return state
-            log.info("Retrying %s after the earlier failure: %s", book_id, state.error)
+            if state.status is Status.ERROR:
+                if time.monotonic() - state.failed_at < self.retry_after:
+                    return state
+                log.info(
+                    "Retrying %s after the earlier failure: %s", book_id, state.error
+                )
 
-        try:
-            item = await self.abs_client.get_item(book_id)
-        except ItemUnusable as error:
-            self._withhold(book_id, book_id, error)
-            return self.status(book_id)
-        except AbsError as error:
-            log.warning("Preparation of %s failed: %s", book_id, error)
-            self._set(book_id, status=Status.ERROR, error=str(error), percent=0)
-            return self.status(book_id)
+            try:
+                item = await chosen.get_item(book_id)
+            except ItemUnusable as error:
+                self._withhold(book_id, book_id, error)
+                return self.status(book_id)
+            except AbsError as error:
+                log.warning("Preparation of %s failed: %s", book_id, error)
+                self._set(book_id, status=Status.ERROR, error=str(error), percent=0)
+                return self.status(book_id)
 
-        try:
-            plan_segments(item.files, item.chapters)
-        except NotForWatch as error:
-            self._withhold(book_id, item.title, error)
-            return self.status(book_id)
+            try:
+                plan_segments(item.files, item.chapters)
+            except NotForWatch as error:
+                self._withhold(book_id, item.title, error)
+                return self.status(book_id)
 
-        self._staged[book_id] = item
-        return self.request(book_id)
+            self._clients[book_id] = chosen
+            self._staged[book_id] = item
+            return self.request(book_id)
 
     def request(self, book_id: str) -> BookState:
         """Ask for the book to be prepared.
@@ -304,6 +315,7 @@ class Preparer:
         author: str,
         total_bytes: int,
         sources: list[tuple[SourceFile, list[Segment]]],
+        client: AbsClient,
     ) -> list[dict]:
         """Download each source and encode its segments, several at a time.
 
@@ -317,6 +329,7 @@ class Preparer:
             author: Artist tag.
             total_bytes: Size of every source file together, for the percent.
             sources: Each source file with the segments cut from it.
+            client: Audiobookshelf account the source files are downloaded with.
 
         Returns:
             One manifest entry per segment, in no particular order.
@@ -391,7 +404,7 @@ class Preparer:
                         inflight[source.ino] = written
                         note_download()
 
-                    written = await self.abs_client.download_file(
+                    written = await client.download_file(
                         book_id, source.ino, work_file, on_progress=report
                     )
                     inflight.pop(source.ino, None)
@@ -436,10 +449,11 @@ class Preparer:
         return [entry for group in groups for entry in group]
 
     async def _prepare(self, book_id: str) -> None:
+        client = self._clients.pop(book_id, self.abs_client)
         item = self._staged.pop(book_id, None)
         if item is None:
             try:
-                item = await self.abs_client.get_item(book_id)
+                item = await client.get_item(book_id)
             except ItemUnusable as error:
                 self._withhold(book_id, book_id, error)
                 return
@@ -471,6 +485,7 @@ class Preparer:
                 for source in item.files
                 if source.ino in by_file
             ],
+            client,
         )
         manifest_segments.sort(key=lambda s: s["index"])
         self.cache.store_manifest(

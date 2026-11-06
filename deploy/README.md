@@ -23,7 +23,7 @@ abs_api_key = "<API key of anna's ABS account>"
 
 * The API key is created in Audiobookshelf under *Settings → Users → API Keys*. The proxy acts as that user.
 * A token is at least 16 characters and unique across all users. `openssl rand -hex 24`. It goes into that user's watch app settings.
-* The name (`alex`) is the cache directory and the log label: letters, digits, `_` and `-`.
+* The name (`alex`) is the log label: letters, digits, `_` and `-`. Books are prepared once for everyone, not into a directory per person.
 
 ```sh
 podman secret create abconnect-users users.toml

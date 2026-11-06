@@ -3,8 +3,8 @@
 Responses stay deliberately small: Connect IQ aborts large JSON responses with
 -402 or -403, long before a full Audiobookshelf response would fit through.
 
-The bearer token decides who is asking. Every /v1 call runs against that
-user's own Audiobookshelf, cache and playlist.
+The bearer token decides who is asking. Every /v1 call uses that user's
+Audiobookshelf and playlist. Prepared books live in one shared cache.
 """
 
 from __future__ import annotations
@@ -105,8 +105,13 @@ def create_app(
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+            stopped: set[int] = set()
             for name, user in app.state.users.items():
-                await user.preparer.shutdown()
+                # One preparer serves every user. Shutting it down twice
+                # would cancel jobs that have already been cleaned up.
+                if id(user.preparer) not in stopped:
+                    stopped.add(id(user.preparer))
+                    await user.preparer.shutdown()
                 if name not in injected:
                     await user.abs.aclose()
 
@@ -261,7 +266,9 @@ def _register(app: FastAPI) -> None:
         """Check the caller's Audiobookshelf, playlist and ffmpeg.
 
         A misconfiguration would otherwise only surface on a watch's first
-        sync. The report is the caller's own state; no other user appears.
+        sync. The playlist and the server are the caller's. The cache is
+        shared, so the book count covers every prepared book. No other
+        user's name appears.
 
         Args:
             user: The caller, from their bearer token.
@@ -420,7 +427,7 @@ def _register(app: FastAPI) -> None:
     async def segment_file(
         book_id: str, filename: str, user: UserRuntime = Depends(current_user)
     ):
-        """Return the audio file for one segment from this user's cache.
+        """Return the audio file for one segment from the shared cache.
 
         Args:
             book_id: Audiobookshelf library-item id.

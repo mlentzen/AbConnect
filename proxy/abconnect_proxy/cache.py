@@ -14,6 +14,7 @@ SAFE_ID = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 MANIFEST = "manifest.json"
 STATE = "state.json"
 SEGMENTS = "seg"
+BOOKS_DIR = "books"
 USERS_DIR = "users"
 
 

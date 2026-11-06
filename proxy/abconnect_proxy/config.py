@@ -17,7 +17,7 @@ DEFAULTS = {
     "LOG_LEVEL": "INFO",
 }
 
-# The name becomes a directory below the cache, so it must be a safe path segment.
+# The name is the log label, so it has to be a single safe token.
 USER_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 USER_KEYS = frozenset({"tokens", "abs_url", "abs_api_key", "playlist"})
 
@@ -46,7 +46,7 @@ class UserConfig:
     """One person: how their watch authenticates, and which Audiobookshelf is theirs.
 
     Attributes:
-        name: Also the cache directory, so it has to be a safe path segment.
+        name: Log label. Letters, digits, ``_`` and ``-`` only.
         tokens: Bearer tokens the watch may send. More than one is allowed
             so a new token can be installed before the old one is removed
             from the device.
