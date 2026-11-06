@@ -1,5 +1,4 @@
 import asyncio
-import dataclasses
 import logging
 import shutil
 from pathlib import Path
@@ -8,7 +7,7 @@ import pytest
 
 from abconnect_proxy import config as config_module
 from abconnect_proxy import media
-from abconnect_proxy.cache import Budget, Cache
+from abconnect_proxy.cache import Cache
 from abconnect_proxy.models import Chapter, SourceFile
 from abconnect_proxy.parsing import ItemUnusable, ParsedItem
 from abconnect_proxy.preparer import Preparer, Status
@@ -46,16 +45,12 @@ class FakeAbs:
         return size
 
 
-def make_config(
-    tmp_path, *, cache_max_bytes: int | None = None
-) -> config_module.Config:
+def make_config(tmp_path) -> config_module.Config:
     """Load a real configuration for one test.
 
     Args:
         tmp_path: Per-test directory. The users file, cache and work
             directory are created under it.
-        cache_max_bytes: Override for the shared disk budget. Omit it to
-            keep the loaded value.
 
     Returns:
         The configuration the preparer tests run with.
@@ -77,18 +72,14 @@ def make_config(
             "WORK_DIR": str(tmp_path / "work"),
         }
     )
-    if cache_max_bytes is None:
-        return base
-    return dataclasses.replace(base, cache_max_bytes=cache_max_bytes)
+    return base
 
 
 def preparer_for(abs_client, cache, cfg) -> Preparer:
-    budget = Budget(max_bytes=cfg.cache_max_bytes, caches={"alice": cache})
     return Preparer(
         abs_client=abs_client,
         cache=cache,
         config=cfg,
-        budget=budget,
         work_dir=cfg.work_dir,
     )
 
@@ -128,8 +119,8 @@ def single_book(make_m4b):
     return item, source
 
 
-async def build(tmp_path, item, source, *, cache_max_bytes: int | None = None):
-    cfg = make_config(tmp_path, cache_max_bytes=cache_max_bytes)
+async def build(tmp_path, item, source):
+    cfg = make_config(tmp_path)
     cache = Cache(root=cfg.cache_dir)
     abs_client = FakeAbs(item, source)
     return preparer_for(abs_client, cache, cfg), cache, abs_client, cfg
@@ -455,18 +446,6 @@ class TestFailures:
         assert state.status is Status.WITHHELD
         assert "eBook" in state.error
 
-    async def test_refuses_when_the_cache_budget_cannot_hold_the_book(
-        self, tmp_path, single_book
-    ):
-        item, source = single_book
-        preparer, _, _, _ = await build(tmp_path, item, source, cache_max_bytes=10)
-
-        state = await run(preparer)
-
-        assert state.status is Status.ERROR
-        assert "space" in state.error
-
-
 class TestLifecycle:
     async def test_a_second_request_does_not_download_again(
         self, tmp_path, single_book
@@ -494,8 +473,7 @@ class TestLifecycle:
     async def test_a_book_deleted_behind_its_back_is_pending_again(
         self, tmp_path, single_book
     ):
-        """The shared budget may delete a book on behalf of another user's job,
-        and nobody tells this preparer. The missing manifest has to be enough."""
+        """A missing manifest is enough. Nothing has to tell this preparer."""
         item, source = single_book
         preparer, cache, _, _ = await build(tmp_path, item, source)
         await run(preparer)

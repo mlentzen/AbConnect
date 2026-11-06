@@ -111,11 +111,11 @@ class Cache:
     def _state(self, book_id: str) -> dict:
         path = self.book_dir(book_id) / STATE
         if not path.exists():
-            return {"pinned": False, "released_at": None, "last_access": 0.0}
+            return {"pinned": False, "last_access": 0.0}
         try:
             return json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
-            return {"pinned": False, "released_at": None, "last_access": 0.0}
+            return {"pinned": False, "last_access": 0.0}
 
     def _write_state(self, book_id: str, state: dict) -> None:
         directory = self.book_dir(book_id)
@@ -123,7 +123,7 @@ class Cache:
         (directory / STATE).write_text(json.dumps(state), encoding="utf-8")
 
     def pin(self, book_id: str, now: float | None = None) -> None:
-        """Mark the book as selected so the budget leaves it in place.
+        """Mark the book as selected for this user's watch.
 
         Args:
             book_id: Audiobookshelf library-item id.
@@ -133,30 +133,12 @@ class Cache:
         state = self._state(book_id)
         state.update(
             pinned=True,
-            released_at=None,
             last_access=time.time() if now is None else now,
         )
         self._write_state(book_id, state)
 
-    def release(self, book_id: str, now: float | None = None) -> None:
-        """Mark the book as no longer needed.
-
-        The files stay until the release TTL expires, so selecting it again
-        does not require another download.
-
-        Args:
-            book_id: Audiobookshelf library-item id.
-            now: Timestamp stored as the release time. Omit it to use the
-                current time.
-        """
-        state = self._state(book_id)
-        state.update(pinned=False, released_at=time.time() if now is None else now)
-        self._write_state(book_id, state)
-
     def touch(self, book_id: str, now: float | None = None) -> None:
         """Record that the book was just used.
-
-        The budget deletes the least recently used unpinned books first.
 
         Args:
             book_id: Audiobookshelf library-item id.
@@ -171,12 +153,6 @@ class Cache:
 
     # --- Space ---------------------------------------------------------------
 
-    def book_bytes(self, book_id: str) -> int:
-        directory = self.book_dir(book_id)
-        if not directory.exists():
-            return 0
-        return sum(f.stat().st_size for f in directory.rglob("*") if f.is_file())
-
     def total_bytes(self) -> int:
         return sum(f.stat().st_size for f in self.root.rglob("*") if f.is_file())
 
@@ -190,97 +166,3 @@ class Cache:
             book_id: Audiobookshelf library-item id.
         """
         shutil.rmtree(self.book_dir(book_id), ignore_errors=True)
-
-    def sweep(self, ttl_days: int, now: float | None = None) -> list[str]:
-        """Delete released books whose TTL has expired.
-
-        Args:
-            ttl_days: How long a released book may stay. Zero or less deletes
-                nothing.
-            now: Clock the ages are compared against. Omit it to use the
-                current time.
-
-        Returns:
-            The book ids that were deleted.
-        """
-        if ttl_days <= 0:
-            return []
-        now = time.time() if now is None else now
-        deadline = ttl_days * 86400
-        removed = []
-        for book_id in self.books():
-            state = self._state(book_id)
-            released = state.get("released_at")
-            if state.get("pinned") or released is None:
-                continue
-            if now - released > deadline:
-                self.discard(book_id)
-                removed.append(book_id)
-        return removed
-
-    def removable(self) -> list[tuple[float, str]]:
-        """List the books the budget is allowed to delete.
-
-        Returns:
-            Pairs of last-access time and book id, for books that are not
-            pinned.
-        """
-        candidates = []
-        for book_id in self.books():
-            state = self._state(book_id)
-            if not state.get("pinned"):
-                candidates.append((state.get("last_access") or 0.0, book_id))
-        return candidates
-
-
-@dataclass
-class Budget:
-    """One disk budget across every user's cache.
-
-    A book prepared for one user can push out another user's released books,
-    least recently used first. Pinned books, on someone's watch right now,
-    are left in place.
-
-    Attributes:
-        max_bytes: CACHE_MAX_BYTES. This is the disk, not a per-person quota.
-        caches: User name mapped to that user's cache.
-    """
-
-    max_bytes: int
-    caches: dict[str, Cache]
-
-    def total_bytes(self) -> int:
-        return sum(cache.total_bytes() for cache in self.caches.values())
-
-    def has_room_for(self, needed_bytes: int) -> bool:
-        return self.total_bytes() + needed_bytes <= self.max_bytes
-
-    def enforce(self) -> list[tuple[str, str]]:
-        """Delete unpinned books until the cache is within its budget.
-
-        Returns:
-            Pairs of user name and book id for everything deleted. Empty when
-            the cache was already within budget.
-        """
-        total = self.total_bytes()
-        if total <= self.max_bytes:
-            return []
-
-        candidates = sorted(
-            (access, owner, book_id)
-            for owner, cache in self.caches.items()
-            for access, book_id in cache.removable()
-        )
-
-        removed = []
-        for _, owner, book_id in candidates:
-            if total <= self.max_bytes:
-                break
-            cache = self.caches[owner]
-            total -= cache.book_bytes(book_id)
-            cache.discard(book_id)
-            removed.append((owner, book_id))
-            log.info("Cache over budget: %s of %s deleted", book_id, owner)
-        if total > self.max_bytes:
-            log.warning("Cache still over budget. All remaining books are pinned")
-        return removed

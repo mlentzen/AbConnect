@@ -2,7 +2,7 @@
 
 Each user gets their own Audiobookshelf client, cache directory and playlist
 watcher, so nobody reaches a book through the proxy that their own Audiobookshelf account
-cannot see. Only two things are shared: the disk budget, and the prepare slot.
+cannot see. The prepare slot is the one thing they share.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import logging
 from dataclasses import dataclass
 
 from .abs_client import AbsClient
-from .cache import USERS_DIR, Budget, Cache
+from .cache import USERS_DIR, Cache
 from .config import Config, UserConfig
 from .preparer import Preparer
 from .watcher import PlaylistWatcher
@@ -43,8 +43,8 @@ def build_runtimes(
     config: Config,
     slot: asyncio.Semaphore,
     abs_clients: dict[str, AbsClient] | None = None,
-) -> tuple[dict[str, UserRuntime], Budget]:
-    """Build one runtime per configured user, plus the disk budget they share.
+) -> dict[str, UserRuntime]:
+    """Build one runtime per configured user.
 
     Args:
         config: The loaded process configuration.
@@ -57,16 +57,13 @@ def build_runtimes(
             to close. Omit it in production.
 
     Returns:
-        The runtimes keyed by user name, and the disk budget over all of
-        their caches.
+        The runtimes keyed by user name.
     """
     abs_clients = abs_clients or {}
     caches = {
         user.name: Cache(root=config.cache_dir / USERS_DIR / user.name)
         for user in config.users
     }
-    budget = Budget(max_bytes=config.cache_max_bytes, caches=caches)
-
     runtimes: dict[str, UserRuntime] = {}
     for user in config.users:
         cache = caches[user.name]
@@ -77,7 +74,6 @@ def build_runtimes(
             abs_client=client,
             cache=cache,
             config=config,
-            budget=budget,
             work_dir=config.work_dir / USERS_DIR / user.name,
             slot=slot,
         )
@@ -98,4 +94,4 @@ def build_runtimes(
                 "Cache directory %s belongs to no configured user; delete it if obsolete",
                 directory,
             )
-    return runtimes, budget
+    return runtimes

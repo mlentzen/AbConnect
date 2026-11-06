@@ -26,7 +26,7 @@ class PlaylistResult:
             At most ``MAX_PLAYLIST_BOOKS``, in playlist order.
         total: How many books the playlist holds, including those past the cap.
         prepared: Book ids this pass started preparing.
-        released: Book ids this pass let go of.
+        released: Book ids whose cached files were deleted on this pass.
         error: Set when the server could not be asked, or the playlist name
             does not exist. Empty on success.
     """
@@ -67,11 +67,11 @@ class PlaylistWatcher:
     async def refresh(self) -> PlaylistResult:
         """Bring the cache in line with this watcher's playlist.
 
-        Books newly on the playlist are prepared and pinned. A pinned book
-        that has left the playlist is released, so its files stay until the
-        TTL. When the server cannot be reached, the previous found flag and
-        book list are kept. When the name matches no playlist, found is false
-        and the cache is left as it is.
+        Books newly on the playlist are prepared and pinned. A cached book
+        that has left the playlist is deleted. When the server cannot be
+        reached, the previous found flag and book list are kept. When the
+        name matches no playlist, found is false and the cache is left as it
+        is.
 
         Returns:
             The outcome of this pass.
@@ -114,13 +114,13 @@ class PlaylistWatcher:
             desired = {book["id"] for book in offered}
 
             for book_id in self.cache.books():
-                if book_id not in desired and self.cache.pinned(book_id):
-                    self.cache.release(book_id)
+                if book_id not in desired:
+                    await self.preparer.abandon(book_id)
                     result.released.append(book_id)
 
             if result.prepared or result.released:
                 log.info(
-                    "Playlist '%s' updated: %d newly prepared, %d released",
+                    "Playlist '%s' updated: %d newly prepared, %d removed",
                     self.playlist,
                     len(result.prepared),
                     len(result.released),

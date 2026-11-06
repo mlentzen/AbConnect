@@ -52,6 +52,10 @@ class FakePreparer:
             return self.request(book_id)
         return state
 
+    async def abandon(self, book_id):
+        self.states.pop(book_id, None)
+        self.cache.discard(book_id)
+
 
 def make(tmp_path, playlist, states=None, playlist_name="Garmin"):
     users = write_users(
@@ -97,8 +101,6 @@ def cached(cache, book_id, pinned=True):
     cache.store_manifest(book_id, {"book_id": book_id, "segments": []})
     if pinned:
         cache.pin(book_id)
-    else:
-        cache.release(book_id)
 
 
 async def test_asks_for_the_users_own_playlist(tmp_path):
@@ -182,16 +184,16 @@ class TestRemoving:
         result = await watcher.refresh()
 
         assert result.released == ["li_old"]
-        assert not cache.pinned("li_old")
-        assert cache.is_ready("li_old")  # stays around until the TTL
+        assert not cache.is_ready("li_old")
 
-    async def test_an_already_released_book_is_not_released_again(self, tmp_path):
+    async def test_a_book_already_off_the_playlist_is_deleted(self, tmp_path):
         watcher, cache, _, _ = make(tmp_path, playlist_of())
         cached(cache, "li_old", pinned=False)
 
         result = await watcher.refresh()
 
-        assert result.released == []
+        assert result.released == ["li_old"]
+        assert not cache.is_ready("li_old")
 
 
 class TestFailureIsNotEmptiness:

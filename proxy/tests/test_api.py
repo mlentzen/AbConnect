@@ -83,10 +83,32 @@ def abs_handler(progress_payload=None, on_patch=None, playlists=None):
     return handler
 
 
-def bob_handler(progress_payload=None, on_patch=None):
+def bob_handler(progress_payload=None, on_patch=None, playlists=None):
     return abs_handler(
-        progress_payload=progress_payload, on_patch=on_patch, playlists=BOB_PLAYLISTS
+        progress_payload=progress_payload,
+        on_patch=on_patch,
+        playlists=BOB_PLAYLISTS if playlists is None else playlists,
     )
+
+
+def with_book(book_id, playlist="Garmin"):
+    """The default playlists, plus one extra book that must stay cached."""
+    source = BOB_PLAYLISTS if playlist == "Bob" else PLAYLISTS
+    playlists = json.loads(json.dumps(source))
+    for entry in playlists["playlists"]:
+        if entry["name"] == playlist:
+            entry["items"].append(
+                {
+                    "libraryItemId": book_id,
+                    "libraryItem": {
+                        "media": {
+                            "duration": 3600,
+                            "metadata": {"title": book_id, "authorName": "Kafka"},
+                        }
+                    },
+                }
+            )
+    return playlists
 
 
 def load_config(tmp_path, alice_tokens=(TOKEN,)):
@@ -383,7 +405,7 @@ class TestSegments:
 
     def test_a_long_list_is_split_across_pages_within_the_byte_budget(self, config):
         prepared_book_with_many_segments(config, 200)
-        with build_client(config) as client:
+        with build_client(config, abs_handler(playlists=with_book("li_big"))) as client:
             pages = []
             after = None
             for _ in range(1000):  # a hard stop, not the expected page count
@@ -409,7 +431,8 @@ class TestSegments:
     def test_only_the_first_page_carries_the_resume_point(self, config):
         prepared_book_with_many_segments(config, 200)
         handler = abs_handler(
-            progress_payload={"currentTime": 1000.0, "lastUpdate": 1_700_000_000_000}
+            progress_payload={"currentTime": 1000.0, "lastUpdate": 1_700_000_000_000},
+            playlists=with_book("li_big"),
         )
         with build_client(config, handler) as client:
             first = client.get("/v1/books/li_big/segments", headers=HEAD).json()
@@ -629,7 +652,7 @@ class TestPlaylist:
         with build_client(config) as client:
             client.get("/v1/playlist", headers=HEAD)
 
-        assert not cache.pinned("li_gone")
+        assert not cache.is_ready("li_gone")
         assert cache.pinned("li_a")
 
     def test_a_missing_playlist_answers_409_and_touches_nothing(self, config):
@@ -688,7 +711,7 @@ class TestIsolation:
         with build_client(
             config,
             abs_handler(on_patch=alice_sent.update),
-            bob_handler(on_patch=bob_sent.update),
+            bob_handler(on_patch=bob_sent.update, playlists=with_book("li_a", "Bob")),
         ) as client:
             client.post(
                 "/v1/progress",
@@ -716,5 +739,5 @@ class TestIsolation:
             client.get(
                 "/v1/playlist", headers=BOB_HEAD
             )  # li_a is not in Bob's playlist
-        assert alice.pinned("li_a")
-        assert not bob.pinned("li_a")
+        assert alice.is_ready("li_a")
+        assert not bob.is_ready("li_a")

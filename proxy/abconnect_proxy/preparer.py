@@ -19,7 +19,7 @@ from enum import Enum
 from pathlib import Path
 
 from .abs_client import AbsClient, AbsError
-from .cache import Budget, Cache
+from .cache import Cache
 from .config import Config
 from .media import SAMPLE_RATE, MediaError, cut
 from .models import Segment, SourceFile
@@ -83,7 +83,6 @@ class Preparer:
         abs_client: That user's Audiobookshelf client.
         cache: That user's segment cache.
         config: Process configuration. The mp3 bitrate comes from here.
-        budget: Disk limit shared by every user.
         work_dir: This user's scratch directory. The downloaded source file
             is deleted as soon as it has been cut.
         slot: Semaphore every preparer waits on, so only one book is
@@ -96,8 +95,6 @@ class Preparer:
     abs_client: AbsClient
     cache: Cache
     config: Config
-    # Shared by every user: CACHE_MAX_BYTES describes the disk, not a person.
-    budget: Budget
     # The user's own subdirectory, so two users preparing the same book ID
     # never share a source file.
     work_dir: Path
@@ -134,9 +131,8 @@ class Preparer:
             )
         state = self._states.get(book_id, BookState())
         if state.status is Status.READY:
-            # The manifest is gone, so the book was deleted, possibly by the
-            # budget on behalf of another user's job, which never tells this
-            # preparer. READY would promise segments that no longer exist.
+            # The manifest is gone, so the book was deleted out from under
+            # this preparer. READY would promise segments that no longer exist.
             return BookState()
         return state
 
@@ -165,8 +161,6 @@ class Preparer:
 
     def _withhold(self, book_id: str, title: str, error: BaseException) -> None:
         log.warning("%s (%s): not offered to the watch: %s", title, book_id, error)
-        if self.cache.pinned(book_id):
-            self.cache.release(book_id)
         self._set(book_id, status=Status.WITHHELD, error=str(error), percent=0)
 
     async def admit(self, book_id: str) -> BookState:
@@ -239,15 +233,22 @@ class Preparer:
         task.add_done_callback(lambda t: self._tasks.pop(book_id, None))
         return self.status(book_id)
 
-    def forget(self, book_id: str) -> None:
-        """Drop the in-memory status.
+    async def abandon(self, book_id: str) -> None:
+        """Stop preparing this book and delete its cached files.
 
-        The files, if any remain, belong to the cache.
+        A running encode is cancelled first, so it cannot write the files
+        back after they are deleted.
 
         Args:
             book_id: Audiobookshelf library-item id.
         """
+        self._staged.pop(book_id, None)
+        task = self._tasks.get(book_id)
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         self._states.pop(book_id, None)
+        self.cache.discard(book_id)
 
     async def shutdown(self) -> None:
         """Cancel running jobs and put those books back to pending.
@@ -454,16 +455,6 @@ class Preparer:
             len(plan.segments),
             self.config.transcode_bitrate_kbps,
         )
-
-        largest = max(f.size for f in item.files) if item.files else 0
-        needed = item.total_bytes + largest
-        if not self.budget.has_room_for(needed):
-            self.budget.enforce()
-        if not self.budget.has_room_for(needed):
-            raise MediaError(
-                f"Not enough space in the cache for '{item.title}' "
-                f"({needed / 1024**2:.0f} MB needed)"
-            )
 
         by_file: dict[str, list[Segment]] = {}
         for segment in plan.segments:
