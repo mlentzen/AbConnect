@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 from collections.abc import Sequence
 from pathlib import Path
@@ -64,13 +65,13 @@ async def _channel_count(source: Path) -> int:
             "-show_entries",
             "stream=channels",
             "-of",
-            "csv=p=0",
+            "json",
             str(source),
         ]
     )
     try:
-        count = int(stdout.decode().strip())
-    except ValueError:
+        count = int(json.loads(stdout)["streams"][0]["channels"])
+    except (json.JSONDecodeError, KeyError, IndexError, TypeError, ValueError):
         raise MediaError(f"{source.name} has no audio channel count") from None
     if count < 1:
         raise MediaError(f"{source.name} has no audio channels")

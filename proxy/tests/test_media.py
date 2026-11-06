@@ -63,6 +63,46 @@ class TestReencode:
         assert probed.channels == 2
         assert probed.bit_rate == pytest.approx(128000, rel=0.15)
 
+    async def test_replaygain_side_data_still_reports_the_channel_count(
+        self, tmp_path
+    ):
+        """A LAME ReplayGain tag is stream side data. ffprobe's csv writer then
+        appends a comma, so the channel line is ``2,`` rather than ``2``.
+        """
+        source = tmp_path / "rg.mp3"
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-nostdin",
+                "-v",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=2",
+                "-c:a",
+                "libmp3lame",
+                "-b:a",
+                "64k",
+                "-ac",
+                "2",
+                "-metadata",
+                "REPLAYGAIN_TRACK_GAIN=-6.00 dB",
+                "-metadata",
+                "REPLAYGAIN_TRACK_PEAK=0.900000",
+                str(source),
+            ],
+            check=True,
+        )
+        segment = tmp_path / "0000.mp3"
+
+        await media.cut(source, segment, start=0, duration=1, bitrate_kbps=64)
+
+        probed = probe(segment)
+        assert probed.channels == 2
+        assert probed.bit_rate == pytest.approx(128000, rel=0.15)
+
     async def test_more_than_two_channels_is_mixed_down_to_stereo(
         self, make_m4b, tmp_path
     ):
