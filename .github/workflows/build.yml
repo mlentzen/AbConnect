@@ -95,24 +95,6 @@ jobs:
             echo "::warning::Store export skipped. Set CIQ_DEVELOPER_KEY on the store environment (4096-bit PKCS#8 DER, base64)."
             exit 0
           fi
-          key="$RUNNER_TEMP/developer_key"
-          umask 077
-          trap 'rm -f "$key"' EXIT
-          printf '%s' "$CIQ_DEVELOPER_KEY" | base64 -d > "$key"
-          openssl pkey -inform DER -in "$key" -noout
-          # pipefail is off so awk closing the pipe is not a failed step.
-          # The public text stays in the pipeline; only the size is kept.
-          set +o pipefail
-          bits=$(openssl pkey -inform DER -in "$key" -pubout -outform DER \
-            | openssl pkey -pubin -inform DER -noout -text \
-            | awk -F'[()]' '/Public-Key/ {gsub(/ /,"",$2); print $2; exit}')
-          set -o pipefail
-          if [ "$bits" != "4096bit" ]; then
-            echo "CIQ_DEVELOPER_KEY is not a 4096-bit RSA key in PKCS#8 DER form." >&2
-            exit 1
-          fi
-          trap - EXIT
-          echo "CIQ_KEY=$key" >> "$GITHUB_ENV"
           echo "present=true" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-java@v4
@@ -171,6 +153,7 @@ jobs:
       - name: Export the store package
         if: steps.key.outputs.present == 'true'
         env:
+          CIQ_DEVELOPER_KEY: ${{ secrets.CIQ_DEVELOPER_KEY }}
           PROXY_URL: https://abconnect.example.com
           PROXY_TOKEN: replace-me
           LOG_LEVEL: "0"
@@ -178,8 +161,23 @@ jobs:
           OUTPUT: ${{ steps.name.outputs.iq }}
         run: |
           set -euo pipefail
-          trap 'rm -f "$CIQ_KEY"' EXIT
-          ./app/build.sh
+          key="$RUNNER_TEMP/developer_key"
+          umask 077
+          trap 'rm -f "$key"' EXIT
+          printf '%s' "$CIQ_DEVELOPER_KEY" | base64 -d > "$key"
+          openssl pkey -inform DER -in "$key" -noout
+          # pipefail is off so awk closing the pipe is not a failed step.
+          # The public text stays in the pipeline; only the size is kept.
+          set +o pipefail
+          bits=$(openssl pkey -inform DER -in "$key" -pubout -outform DER \
+            | openssl pkey -pubin -inform DER -noout -text \
+            | awk -F'[()]' '/Public-Key/ {gsub(/ /,"",$2); print $2; exit}')
+          set -o pipefail
+          if [ "$bits" != "4096bit" ]; then
+            echo "CIQ_DEVELOPER_KEY is not a 4096-bit RSA key in PKCS#8 DER form." >&2
+            exit 1
+          fi
+          CIQ_KEY="$key" ./app/build.sh
 
       - uses: actions/upload-artifact@v4
         if: steps.key.outputs.present == 'true'
