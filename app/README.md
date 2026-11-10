@@ -38,6 +38,12 @@ Build the `.prg` yourself.
 CIQ_HOME=/path/to/sdk ./build.sh
 ```
 
+Build a store `.iq` package:
+
+```sh
+EXPORT=1 CIQ_HOME=/path/to/sdk ./build.sh
+```
+
 You need the Connect IQ SDK, a developer key (`CIQ_KEY`, default
 `~/.ciq/developer_key`) and a device profile for the watch you are building.
 `DEVICE` selects it and defaults to `fenix7xpro`.
@@ -56,12 +62,18 @@ token contains it. **Do not share a `.prg` built with your token.**
 | `PROXY_TOKEN` | - | `replace-me` | this watch's token from the proxy's `users.toml` |
 | `LOG_LEVEL` | - | `0` | 0 errors, 1 warnings, 2 course of events, 3 everything |
 | `DEVICE` | - | `fenix7xpro` | device id passed to the compiler |
+| `EXPORT` | - | `0` | `0` builds one `.prg` for `DEVICE`; `1` exports a store `.iq` for every manifest product (`monkeyc -e -r`) |
 | `JUNGLES` | - | `monkey.jungle` | `monkeyc -f` jungles; CI sets `monkey-ci.jungle` (fenix7xpro stub, no device overlays) |
 
 Device profiles come from the SDK Manager after a Garmin login. Without that
 login, `python3 ../tools/stub_device.py` writes a substitute profile that
 compiles and type-checks. That build says nothing about memory, layout, or
 behavior on a watch.
+
+`EXPORT=1` needs the real device profiles and placeholder proxy values
+(`https://abconnect.example.com` and `replace-me`). The export is public, so
+real proxy settings must be entered on the watch instead of baked into the
+package.
 
 `source/Version.mc` holds `APP_VERSION`, bumped by hand. The build adds the
 build date. Both are on the Info screen.
