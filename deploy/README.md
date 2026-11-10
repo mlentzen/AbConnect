@@ -2,11 +2,11 @@
 
 [![ghcr.io/mlentzen/abconnect-proxy](https://img.shields.io/badge/ghcr.io-mlentzen%2Fabconnect--proxy-0969da)](https://github.com/mlentzen/AbConnect/pkgs/container/abconnect-proxy)
 
-Setup is described for Podman Quadlet. The image also runs under Docker Compose, but no compose file is provided.
+Setup is described for Podman Quadlet. The image also runs under Docker Compose, but no compose file is provided yet.
 
 ## Users
 
-One proxy serves any number of people. Each entry is one Audiobookshelf account, its API key, the playlist the watch mirrors, and the token the watch sends. The token is the only thing the watch knows.
+One proxy can serve any number of people. Each entry is one Audiobookshelf account, its API key, the playlist the watch mirrors, and the token the watch sends. The token is the only thing the watch knows.
 
 ```toml
 [users.alex]

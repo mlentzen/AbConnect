@@ -6,14 +6,11 @@ App of type `audio-content-provider-app`. It downloads audiobook segments from
 [abconnect-proxy](../proxy/README.md), plays them through the system media
 player and remembers the listening progress.
 
-> Claude Code was used to write this Garmin app and it has only been tested on a Fenix7XPro. Other
-> devices are configured in the manifest file, but layout issues might come up.
+> This is my first Garmin Connect IQ application and it has only been tested on a Fenix 7X Pro.
+> I expect that there will be certain issues on other devices. Please open an issue if you experience
+> any problems.
 
 ## Structure
-
-Connect IQ starts the app in four separate modes, each its own start, with no
-shared runtime state. Anything that has to outlive a mode lives in the Object
-Store, kept flat because each value there is limited to 8 KB.
 
 | File | Mode |
 |---|---|
@@ -64,19 +61,6 @@ token contains it. **Do not share a `.prg` built with your token.**
 | `DEVICE` | - | `fenix7xpro` | device id passed to the compiler |
 | `EXPORT` | - | `0` | `0` builds one `.prg` for `DEVICE`; `1` exports a store `.iq` for every manifest product (`monkeyc -e -r`) |
 | `JUNGLES` | - | `monkey.jungle` | `monkeyc -f` jungles; CI sets `monkey-ci.jungle` (fenix7xpro stub, no device overlays) |
-
-Device profiles come from the SDK Manager after a Garmin login. Without that
-login, `python3 ../tools/stub_device.py` writes a substitute profile that
-compiles and type-checks. That build says nothing about memory, layout, or
-behavior on a watch.
-
-`EXPORT=1` needs the real device profiles and placeholder proxy values
-(`https://abconnect.example.com` and `replace-me`). The export is public, so
-real proxy settings must be entered on the watch instead of baked into the
-package.
-
-`source/Version.mc` holds `APP_VERSION`, bumped by hand. The build adds the
-build date. Both are on the Info screen.
 
 ## On the watch
 
