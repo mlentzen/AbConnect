@@ -1,9 +1,9 @@
 name: build
-
 on:
   push:
     branches: ["**"]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   app:
@@ -39,3 +39,165 @@ jobs:
 
       - name: Build
         run: CIQ_HOME="$HOME/ciq" JUNGLES=monkey-ci.jungle ./app/build.sh
+
+  export:
+    name: store package
+    needs: app
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    concurrency:
+      group: store-package
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: store
+    permissions:
+      contents: write
+      actions: write
+    env:
+      SDK_VERSION: ${{ vars.CIQ_SDK_VERSION || '9.2.0' }}
+      SDK_MANAGER_VERSION: v0.8.4
+    steps:
+      - uses: actions/checkout@v4
+
+      # A missing tag is an unpublished version. The tag is created only after
+      # the .iq exists, so a failed export is retried on the next main run.
+      - name: Package name
+        id: name
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/.*const APP_VERSION = "\([^"]*\)".*/\1/p' app/source/Version.mc)
+          test -n "$version"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "APP_VERSION must be X.Y.Z, got: ${version}" >&2
+            exit 1
+          fi
+          tag="app/v${version}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "iq=export/abconnect-${version}.iq" >> "$GITHUB_OUTPUT"
+          remote=$(git ls-remote --tags origin "refs/tags/${tag}")
+          if printf '%s\n' "$remote" | awk -v tag="refs/tags/${tag}" '$2 == tag { found=1 } END { exit !found }'; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "Tag ${tag} already exists; store export skipped."
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Developer key
+        id: key
+        if: steps.name.outputs.release == 'true'
+        env:
+          CIQ_DEVELOPER_KEY: ${{ secrets.CIQ_DEVELOPER_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CIQ_DEVELOPER_KEY:-}" ]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Store export skipped. Set CIQ_DEVELOPER_KEY on the store environment (4096-bit PKCS#8 DER, base64)."
+            exit 0
+          fi
+          key="$RUNNER_TEMP/developer_key"
+          umask 077
+          trap 'rm -f "$key"' EXIT
+          printf '%s' "$CIQ_DEVELOPER_KEY" | base64 -d > "$key"
+          openssl pkey -inform DER -in "$key" -noout
+          # pipefail is off so awk closing the pipe is not a failed step.
+          # The public text stays in the pipeline; only the size is kept.
+          set +o pipefail
+          bits=$(openssl pkey -inform DER -in "$key" -pubout -outform DER \
+            | openssl pkey -pubin -inform DER -noout -text \
+            | awk -F'[()]' '/Public-Key/ {gsub(/ /,"",$2); print $2; exit}')
+          set -o pipefail
+          if [ "$bits" != "4096bit" ]; then
+            echo "CIQ_DEVELOPER_KEY is not a 4096-bit RSA key in PKCS#8 DER form." >&2
+            exit 1
+          fi
+          trap - EXIT
+          echo "CIQ_KEY=$key" >> "$GITHUB_ENV"
+          echo "present=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-java@v4
+        if: steps.key.outputs.present == 'true'
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: actions/cache@v4
+        if: steps.key.outputs.present == 'true'
+        with:
+          path: |
+            /home/runner/.Garmin/ConnectIQ/Sdks
+            /home/runner/.Garmin/ConnectIQ/Devices
+          key: connectiq-${{ env.SDK_VERSION }}-${{ hashFiles('app/manifest.xml') }}
+          restore-keys: |
+            connectiq-${{ env.SDK_VERSION }}-
+
+      - name: Install the SDK manager
+        if: steps.key.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          curl -sSfL "https://raw.githubusercontent.com/lindell/connect-iq-sdk-manager-cli/${SDK_MANAGER_VERSION}/install.sh" \
+            | sh -s -- -b "$HOME/.local/bin" "$SDK_MANAGER_VERSION"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch the SDK and device profiles
+        if: steps.key.outputs.present == 'true'
+        env:
+          GARMIN_USERNAME: ${{ secrets.GARMIN_USERNAME }}
+          GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
+          CIQ_AGREEMENT_HASH: ${{ vars.CIQ_AGREEMENT_HASH }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GARMIN_USERNAME:-}" ] || [ -z "${GARMIN_PASSWORD:-}" ]; then
+            echo "GARMIN_USERNAME and GARMIN_PASSWORD must be secrets on the store environment." >&2
+            echo "The SDK manager only downloads device profiles for a logged-in Garmin account." >&2
+            exit 1
+          fi
+          if [ -z "${CIQ_AGREEMENT_HASH:-}" ]; then
+            echo "Repository variable CIQ_AGREEMENT_HASH is empty." >&2
+            echo "On your machine, after installing connect-iq-sdk-manager:" >&2
+            echo "  connect-iq-sdk-manager agreement view" >&2
+            echo "Set the variable to the hash that command prints." >&2
+            exit 1
+          fi
+          connect-iq-sdk-manager agreement accept --agreement-hash "$CIQ_AGREEMENT_HASH"
+          connect-iq-sdk-manager login
+          connect-iq-sdk-manager sdk set "$SDK_VERSION"
+          connect-iq-sdk-manager device download --manifest app/manifest.xml
+          sdk_bin="$(connect-iq-sdk-manager sdk current-path --bin --log-level error | tail -n 1)"
+          test -x "$sdk_bin/monkeyc"
+          echo "CIQ_HOME=$(dirname "$sdk_bin")" >> "$GITHUB_ENV"
+
+      - name: Export the store package
+        if: steps.key.outputs.present == 'true'
+        env:
+          PROXY_URL: https://abconnect.example.com
+          PROXY_TOKEN: replace-me
+          LOG_LEVEL: "0"
+          EXPORT: "1"
+          OUTPUT: ${{ steps.name.outputs.iq }}
+        run: |
+          set -euo pipefail
+          trap 'rm -f "$CIQ_KEY"' EXIT
+          ./app/build.sh
+
+      - uses: actions/upload-artifact@v4
+        if: steps.key.outputs.present == 'true'
+        with:
+          name: abconnect-${{ steps.name.outputs.version }}
+          path: app/${{ steps.name.outputs.iq }}
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+      - name: Publish the release
+        if: steps.key.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "${{ steps.name.outputs.tag }}" \
+            "app/${{ steps.name.outputs.iq }}" \
+            --target "$GITHUB_SHA" \
+            --title "AbConnect ${{ steps.name.outputs.version }}" \
+            --notes "Store package for AbConnect ${{ steps.name.outputs.version }}."

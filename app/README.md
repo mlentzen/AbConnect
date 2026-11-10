@@ -64,8 +64,7 @@ compiles and type-checks. That build says nothing about memory, layout, or
 behavior on a watch.
 
 `source/Version.mc` holds `APP_VERSION`, bumped by hand. The build adds the
-short commit hash, with a `+` when the tree is dirty, and the build date. All
-three are on the Info screen.
+build date. Both are on the Info screen.
 
 ## On the watch
 
@@ -81,7 +80,7 @@ AbConnect
 ├─ Download books        Wi-Fi: report progress, read the playlist, mirror it
 ├─ Chosen on the server  the playlist and the state of each book
 ├─ Settings              proxy URL, token, and Reset everything
-└─ Info                  version, commit, build date, and what is on the watch
+└─ Info                  version, build date, and what is on the watch
 ```
 
 A sync runs only when you ask for it, from **Download books** or from the

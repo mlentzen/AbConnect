@@ -48,7 +48,7 @@ systemctl --user restart abconnect-proxy
 ./deploy/install.sh
 ```
 
-The script installs the quadlet and starts `ghcr.io/mlentzen/abconnect-proxy:latest`, published when `proxy/` changes on `main`. A failed publish leaves the running image in place.
+The script installs the quadlet and starts `ghcr.io/mlentzen/abconnect-proxy:latest`, published when the proxy version changes on `main`. A failed publish leaves the running image in place.
 
 The proxy listens on `127.0.0.1:18543`.
 
