@@ -14,14 +14,11 @@ to the server.
 ## Structure
 
 **[`proxy/`](proxy/README.md)**. Container next to Audiobookshelf, run as a
-Podman quadlet from the image GitHub publishes on the default branch.
+container.
 Downloads an audiobook via the Audiobookshelf API and encodes every segment
-to mp3 at a fixed bitrate per channel and 44.1 kHz, which is what the watch
-will store. A stereo segment uses twice that bitrate.
-An m4b becomes one file per chapter. An mp3 book stays one file per source
-file. An m4b without chapters, or any other container, is not offered. The
+to mp3 according to the configuration. The
 source file is deleted again right away and the Audiobookshelf API key stays
-server-side.
+server-side. The watch only downloads the prepared segments.
 
 **[`app/`](app/README.md)**. Connect IQ app of type
 `audio-content-provider-app` that downloads segments from the proxy, plays them and buffers
