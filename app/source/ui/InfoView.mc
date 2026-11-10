@@ -39,7 +39,7 @@ class InfoView extends WatchUi.View {
         dc.drawText(
             centre, y,
             Graphics.FONT_XTINY,
-            build(),
+            BuildDefaults.BUILT,
             Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER
         );
 
@@ -71,13 +71,6 @@ class InfoView extends WatchUi.View {
             right, y, Graphics.FONT_XTINY, value,
             Graphics.TEXT_JUSTIFY_RIGHT | Graphics.TEXT_JUSTIFY_VCENTER
         );
-    }
-
-    private static function build() as String {
-        if (BuildDefaults.COMMIT.length() == 0) {
-            return BuildDefaults.BUILT;
-        }
-        return BuildDefaults.COMMIT + " · " + BuildDefaults.BUILT;
     }
 
     private static function lastCheck() as String {

@@ -35,6 +35,12 @@ Build the `.prg` yourself.
 CIQ_HOME=/path/to/sdk ./build.sh
 ```
 
+Build a store `.iq` package:
+
+```sh
+EXPORT=1 CIQ_HOME=/path/to/sdk ./build.sh
+```
+
 You need the Connect IQ SDK, a developer key (`CIQ_KEY`, default
 `~/.ciq/developer_key`) and a device profile for the watch you are building.
 `DEVICE` selects it and defaults to `fenix7xpro`.
@@ -53,6 +59,7 @@ token contains it. **Do not share a `.prg` built with your token.**
 | `PROXY_TOKEN` | - | `replace-me` | this watch's token from the proxy's `users.toml` |
 | `LOG_LEVEL` | - | `0` | 0 errors, 1 warnings, 2 course of events, 3 everything |
 | `DEVICE` | - | `fenix7xpro` | device id passed to the compiler |
+| `EXPORT` | - | `0` | `0` builds one `.prg` for `DEVICE`; `1` exports a store `.iq` for every manifest product (`monkeyc -e -r`) |
 | `JUNGLES` | - | `monkey.jungle` | `monkeyc -f` jungles; CI sets `monkey-ci.jungle` (fenix7xpro stub, no device overlays) |
 
 ## On the watch
@@ -69,7 +76,7 @@ AbConnect
 ├─ Download books        Wi-Fi: report progress, read the playlist, mirror it
 ├─ Chosen on the server  the playlist and the state of each book
 ├─ Settings              proxy URL, token, and Reset everything
-└─ Info                  version, commit, build date, and what is on the watch
+└─ Info                  version, build date, and what is on the watch
 ```
 
 A sync runs only when you ask for it, from **Download books** or from the
