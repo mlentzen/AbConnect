@@ -29,6 +29,10 @@ What ends up on the watch is decided by the Audiobookshelf playlist
 progress goes back to the server on pause over Bluetooth and on sync over
 Wi-Fi.
 
+## Inspiration
+
+AbConnect is inspired by "Audiobooks Green (for audiobookshelf)". I started it to avoid depending on someone else's server, before I learned that Audiobooks Green's code is available and its [proxy](https://github.com/fabrikant/AudiobooksGreenProxy) can run on its own as well. AbConnect is a separate implementation, meant only for people who run their own proxy. It takes a different approach to getting the audio onto the watch: the proxy prepares segmented mp3 files, and m4b files are split by chapter. For watches with little storage, lower bitrates and mono audio are available.
+
 ## Getting started
 
 ```sh
@@ -51,6 +55,6 @@ CIQ_HOME=/path/to/sdk ./app/build.sh
 
 ## Contributing
 
-The app is a personal project, and it has only been tested on one watch, a fēnix 7X Pro.
+The app is a personal project, and it has only been tested on two watches, the fēnix 7X Pro and the vivoactive 5.
 
 If you find a use for it, I welcome feedback and will extend the scope from there. [Issues](https://github.com/mlentzen/AbConnect/issues) are the place for that.
