@@ -24,7 +24,7 @@ from .config import Config
 from .media import SAMPLE_RATE, MediaError, cut
 from .models import Segment, SourceFile
 from .parsing import ItemUnusable, ParsedItem
-from .segmenter import NotForWatch, plan_segments
+from .segmenter import TOLERANCE, NotForWatch, plan_segments
 
 log = logging.getLogger(__name__)
 
@@ -162,6 +162,31 @@ class Preparer:
 
     # --- Control -----------------------------------------------------------
 
+    def _cached_segment_exceeds_limit(self, book_id: str) -> bool:
+        """Report whether a cached segment is longer than the configured limit.
+
+        A sliver within the cutter's tolerance does not count. The cutter
+        keeps that sliver on the previous piece, and deleting it would
+        prepare the same segment again on every pull.
+
+        Args:
+            book_id: Audiobookshelf library-item id.
+
+        Returns:
+            True when the manifest lists a segment past the limit.
+        """
+        manifest = self.cache.load_manifest(book_id) or {}
+        limit = self.config.max_file_duration_seconds + TOLERANCE
+        for segment in manifest.get("segments") or []:
+            if not isinstance(segment, dict):
+                continue
+            duration = segment.get("duration")
+            if isinstance(duration, bool) or not isinstance(duration, (int, float)):
+                continue
+            if duration > limit:
+                return True
+        return False
+
     def _withhold(self, book_id: str, title: str, error: BaseException) -> None:
         log.warning("%s (%s): not offered to the watch: %s", title, book_id, error)
         self._set(book_id, status=Status.WITHHELD, error=str(error), percent=0)
@@ -171,9 +196,11 @@ class Preparer:
 
         A chapter-less m4b, or a book that is neither mp3 files nor an m4b,
         is withheld: the caller leaves it out of the playlist. A ready book
-        is pinned. An errored book is left alone until ``retry_after`` has
-        passed, then it is tried again. A book another user already has in
-        progress is not started a second time.
+        is pinned. A ready book whose cached segments run longer than the
+        configured limit is deleted and prepared again. An errored book is
+        left alone until ``retry_after`` has passed, then it is tried again.
+        A book another user already has in progress is not started a second
+        time.
 
         Args:
             book_id: Audiobookshelf library-item id.
@@ -188,6 +215,19 @@ class Preparer:
         async with self._admit:
             running = book_id in self._tasks and not self._tasks[book_id].done()
             state = self.status(book_id)
+            if (
+                state.status is Status.READY
+                and not running
+                and self._cached_segment_exceeds_limit(book_id)
+            ):
+                log.info(
+                    "%s has a segment longer than %ds; deleting the cache so it is prepared again",
+                    book_id,
+                    self.config.max_file_duration_seconds,
+                )
+                self.cache.discard(book_id)
+                self._states.pop(book_id, None)
+                state = self.status(book_id)
             if state.status is Status.READY or running:
                 if state.status is Status.READY:
                     self.cache.pin(book_id)
@@ -210,7 +250,11 @@ class Preparer:
                 return self.status(book_id)
 
             try:
-                plan_segments(item.files, item.chapters)
+                plan_segments(
+                    item.files,
+                    item.chapters,
+                    self.config.max_file_duration_seconds,
+                )
             except NotForWatch as error:
                 self._withhold(book_id, item.title, error)
                 return self.status(book_id)
@@ -458,7 +502,11 @@ class Preparer:
                 self._withhold(book_id, book_id, error)
                 return
         try:
-            plan = plan_segments(item.files, item.chapters)
+            plan = plan_segments(
+                item.files,
+                item.chapters,
+                self.config.max_file_duration_seconds,
+            )
         except NotForWatch as error:
             self._withhold(book_id, item.title, error)
             return

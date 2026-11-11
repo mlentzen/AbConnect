@@ -161,3 +161,11 @@ def test_m4b_chapters_are_encoded_at_64_kbps_unless_told_otherwise(env):
     assert (
         load(env(extra={"TRANSCODE_BITRATE_KBPS": "96"})).transcode_bitrate_kbps == 96
     )
+
+
+def test_a_long_mp3_is_split_after_one_hour_unless_told_otherwise(env):
+    assert load(env()).max_file_duration_seconds == 3600
+    assert (
+        load(env(extra={"MAX_FILE_DURATION_SECONDS": "1800"})).max_file_duration_seconds
+        == 1800
+    )

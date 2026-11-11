@@ -222,6 +222,25 @@ module Store {
         return writeChunk(bookId, open, tracks);
     }
 
+    //! Drop one segment from the store. The caller deletes the cached audio.
+    //!
+    //! An emptied chunk is kept, so a later chunk does not disappear behind
+    //! the gap. The next download reuses the free slot.
+    function dropLocalTrack(bookId as String, refId as Object) as Void {
+        for (var chunk = 0; chunk < MAX_TRACK_CHUNKS; ++chunk) {
+            var stored = readChunk(bookId, chunk);
+            if (stored == null) {
+                break;
+            }
+            if (stored[refId] == null) {
+                continue;
+            }
+            stored.remove(refId);
+            writeChunk(bookId, chunk, stored);
+            return;
+        }
+    }
+
     //! [segIdx, duration, title] of a local track, or null.
     function trackInfo(bookId as String, refId as Object) as Array<String>? {
         for (var chunk = 0; chunk < MAX_TRACK_CHUNKS; ++chunk) {

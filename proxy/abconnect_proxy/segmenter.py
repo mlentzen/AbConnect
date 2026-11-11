@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
 
+from .config import DEFAULTS
 from .models import Chapter, Segment, SegmentPlan, SourceFile
 
 TOLERANCE = 0.5
@@ -157,34 +159,130 @@ def _suffixes(files: list[SourceFile]) -> set[str]:
     return {Path(source.filename).suffix.lower() for source in files}
 
 
-def _plan_mp3(files: list[SourceFile]) -> SegmentPlan:
-    """One segment per file, covering that file from start to end."""
+def _duration_limit(max_duration: float | None) -> float:
+    """Resolve the longest piece, in seconds.
+
+    Args:
+        max_duration: Caller override. ``None`` reads the configuration.
+
+    Returns:
+        The limit.
+
+    Raises:
+        ValueError: The limit is not positive.
+    """
+    limit = float(
+        DEFAULTS["MAX_FILE_DURATION_SECONDS"] if max_duration is None else max_duration
+    )
+    if limit <= 0:
+        raise ValueError("max duration must be positive")
+    return limit
+
+
+def _spans(duration: float, limit: float) -> list[tuple[float, float]]:
+    """Pieces of one file, each at most ``limit`` seconds.
+
+    A tail shorter than the cut tolerance stays on the previous piece, so a
+    file is not given a sliver and no audio is dropped.
+
+    Args:
+        duration: Length of the file, in seconds.
+        limit: Longest piece, in seconds. Must be positive.
+
+    Returns:
+        ``(start, end)`` pairs inside the file, in order.
+    """
+    if duration <= limit:
+        return [(0.0, duration)]
+
+    spans: list[tuple[float, float]] = []
+    start = 0.0
+    while start < duration:
+        end = min(start + limit, duration)
+        if 0 < duration - end <= TOLERANCE:
+            end = duration
+        spans.append((start, end))
+        start = end
+    return spans
+
+
+def _plan_mp3(files: list[SourceFile], max_duration: float) -> SegmentPlan:
+    """One segment per file, cut again when a file is longer than ``max_duration``."""
     segments: list[Segment] = []
     cursor = 0.0
-    for index, source in enumerate(files):
-        title = Path(source.filename).stem or f"Track {index + 1}"
-        segments.append(
-            Segment(
-                index=index,
-                title=title,
-                source_ino=source.ino,
-                source_start=0.0,
-                source_end=round(source.duration, 3),
-                book_start=round(cursor, 3),
+    for file_index, source in enumerate(files):
+        stem = Path(source.filename).stem or f"Track {file_index + 1}"
+        spans = _spans(source.duration, max_duration)
+        for part, (start, end) in enumerate(spans):
+            title = stem if len(spans) == 1 else f"{stem}-{part:02d}.mp3"
+            segments.append(
+                Segment(
+                    index=len(segments),
+                    title=title,
+                    source_ino=source.ino,
+                    source_start=round(start, 3),
+                    source_end=round(end, 3),
+                    book_start=round(cursor + start, 3),
+                )
             )
-        )
         cursor += source.duration
     return SegmentPlan(segments=segments, chapter_source="files", total_duration=cursor)
 
 
-def _plan_m4b(files: list[SourceFile], chapters: list[Chapter]) -> SegmentPlan:
-    """One segment per chapter, cut again where a chapter crosses two files."""
+def _equal_parts(piece: _Piece, limit: float) -> list[_Piece]:
+    """Split one in-file slice into equal parts of at most ``limit`` seconds.
+
+    A slice that already fits is returned unchanged. The last part ends
+    where the slice ends, so the parts cover it exactly.
+
+    Args:
+        piece: One chapter slice inside a single source file.
+        limit: Longest part, in seconds.
+
+    Returns:
+        The original slice, or the equal parts in order.
+    """
+    duration = piece.duration
+    if duration <= limit:
+        return [piece]
+
+    count = math.ceil(duration / limit)
+    part = duration / count
+    parts: list[_Piece] = []
+    for index in range(count):
+        start = index * part
+        end = duration if index == count - 1 else (index + 1) * part
+        parts.append(
+            _Piece(
+                file_index=piece.file_index,
+                source_start=piece.source_start + start,
+                source_end=piece.source_start + end,
+                book_start=piece.book_start + start,
+                title=piece.title,
+                chapter_index=piece.chapter_index,
+            )
+        )
+    return parts
+
+
+def _plan_m4b(
+    files: list[SourceFile], chapters: list[Chapter], max_duration: float
+) -> SegmentPlan:
+    """One segment per chapter.
+
+    A chapter is cut where it crosses two files, and a piece longer than
+    ``max_duration`` is then split into equal parts.
+    """
     total_duration = sum(source.duration for source in files)
     reason = validate_chapters(chapters, total_duration)
     if reason:
         raise NotForWatch(reason)
 
-    pieces = _split_at_file_boundaries(_snap(chapters, total_duration), files)
+    pieces = [
+        part
+        for piece in _split_at_file_boundaries(_snap(chapters, total_duration), files)
+        for part in _equal_parts(piece, max_duration)
+    ]
     if not pieces:
         raise NotForWatch("chapters do not overlap the audio")
     _number_titles(pieces)
@@ -205,24 +303,33 @@ def _plan_m4b(files: list[SourceFile], chapters: list[Chapter]) -> SegmentPlan:
     )
 
 
-def plan_segments(files: list[SourceFile], chapters: list[Chapter]) -> SegmentPlan:
+def plan_segments(
+    files: list[SourceFile],
+    chapters: list[Chapter],
+    max_duration: float | None = None,
+) -> SegmentPlan:
     """Build the segments the watch will play, in playback order.
 
-    A book of mp3 files is kept as those files: one segment each, nothing
-    cut out of a file. An m4b is cut on its chapter markers. Anything else
-    is refused.
+    A book of mp3 files keeps each file. A file longer than ``max_duration``
+    is cut into pieces of at most that length. An m4b is cut on its chapter
+    markers, and a chapter piece longer than ``max_duration`` is split into
+    equal parts. Anything else is refused.
 
     One segment never crosses two source files.
 
     Args:
         files: Source audio files in playback order.
         chapters: Chapter markers. Used for an m4b, ignored for mp3 files.
+        max_duration: Longest mp3 file or m4b chapter piece, in seconds.
+            Omit it and ``MAX_FILE_DURATION_SECONDS`` from the configuration
+            is used.
 
     Returns:
         The cut list.
 
     Raises:
-        ValueError: The item has no audio files.
+        ValueError: The item has no audio files, or ``max_duration`` is not
+            positive.
         NotForWatch: The book is not mp3 files or an m4b with chapters.
     """
     if not files:
@@ -230,9 +337,9 @@ def plan_segments(files: list[SourceFile], chapters: list[Chapter]) -> SegmentPl
 
     suffixes = _suffixes(files)
     if suffixes == {".mp3"}:
-        return _plan_mp3(files)
+        return _plan_mp3(files, _duration_limit(max_duration))
     if suffixes == {".m4b"}:
-        return _plan_m4b(files, chapters)
+        return _plan_m4b(files, chapters, _duration_limit(max_duration))
 
     found = ", ".join(sorted(suffixes)) or "none"
     raise NotForWatch(f"only mp3 and m4b books are offered, found {found}")

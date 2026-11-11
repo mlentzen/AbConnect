@@ -15,8 +15,8 @@ DEFAULTS = {
     "TRANSCODE_BITRATE_KBPS": "64",
     "HTTP_TIMEOUT_SECONDS": "60",
     "LOG_LEVEL": "INFO",
+    "MAX_FILE_DURATION_SECONDS": "3600",
 }
-
 # The name is the log label, so it has to be a single safe token.
 USER_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 USER_KEYS = frozenset(
@@ -85,6 +85,9 @@ class Config:
         work_dir: Where a source file sits while it is being cut.
         transcode_bitrate_kbps: Bitrate per channel of every segment encoded
             to mp3. A stereo segment uses twice this.
+        max_file_duration_seconds: Longest piece cut from one mp3 file, in
+            seconds. A file longer than this is split. An m4b is still cut
+            on its chapters.
         http_timeout_seconds: Request timeout for Audiobookshelf calls.
         log_level: Logging level name, such as "INFO".
     """
@@ -94,6 +97,7 @@ class Config:
     cache_dir: Path
     work_dir: Path
     transcode_bitrate_kbps: int
+    max_file_duration_seconds: int
     http_timeout_seconds: float
     log_level: str
 
@@ -280,6 +284,7 @@ def load(env: dict[str, str] | None = None) -> Config:
     poll = _int(env, "PLAYLIST_POLL_SECONDS", problems, minimum=60)
     timeout = _int(env, "HTTP_TIMEOUT_SECONDS", problems, minimum=5)
     bitrate = _int(env, "TRANSCODE_BITRATE_KBPS", problems, minimum=32)
+    max_file_duration = _int(env, "MAX_FILE_DURATION_SECONDS", problems, minimum=1)
 
     if problems:
         raise ConfigError(problems)
@@ -290,6 +295,7 @@ def load(env: dict[str, str] | None = None) -> Config:
         cache_dir=Path(env.get("CACHE_DIR") or DEFAULTS["CACHE_DIR"]),
         work_dir=Path(env.get("WORK_DIR") or DEFAULTS["WORK_DIR"]),
         transcode_bitrate_kbps=bitrate,
+        max_file_duration_seconds=max_file_duration,
         http_timeout_seconds=float(timeout),
         log_level=(env.get("LOG_LEVEL") or DEFAULTS["LOG_LEVEL"]).upper(),
     )

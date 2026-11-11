@@ -140,6 +140,62 @@ async def run(preparer, book_id="li_1"):
     return preparer.status(book_id)
 
 
+def ready_manifest(cache, book_id: str, duration: float) -> None:
+    cache.store_manifest(
+        book_id,
+        {
+            "book_id": book_id,
+            "segments": [
+                {
+                    "index": 0,
+                    "title": "Whole",
+                    "duration": duration,
+                    "book_start": 0,
+                    "bytes": 1,
+                    "file": "0000.mp3",
+                }
+            ],
+        },
+    )
+
+
+class TestOversizedCache:
+    async def test_a_segment_over_the_limit_is_deleted_and_prepared_again(
+        self, tmp_path, single_book
+    ):
+        item, source = single_book
+        preparer, cache, _, cfg = await build(tmp_path, item, source)
+        ready_manifest(cache, "li_1", cfg.max_file_duration_seconds + 1)
+
+        state = await preparer.admit("li_1")
+
+        assert state.status is Status.PREPARING
+        await preparer.shutdown()
+
+    async def test_a_segment_at_the_limit_stays_ready(self, tmp_path, single_book):
+        item, source = single_book
+        preparer, cache, _, cfg = await build(tmp_path, item, source)
+        ready_manifest(cache, "li_1", cfg.max_file_duration_seconds)
+
+        state = await preparer.admit("li_1")
+
+        assert state.status is Status.READY
+        assert cache.load_manifest("li_1")["segments"][0]["duration"] == (
+            cfg.max_file_duration_seconds
+        )
+
+    async def test_a_segment_within_the_cut_tolerance_stays_ready(
+        self, tmp_path, single_book
+    ):
+        item, source = single_book
+        preparer, cache, _, cfg = await build(tmp_path, item, source)
+        ready_manifest(cache, "li_1", cfg.max_file_duration_seconds + 0.4)
+
+        state = await preparer.admit("li_1")
+
+        assert state.status is Status.READY
+
+
 class TestHappyPath:
     async def test_prepares_a_book_into_playable_segments(self, tmp_path, single_book):
         item, source = single_book

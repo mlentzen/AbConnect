@@ -600,6 +600,10 @@ class AbSyncDelegate extends Communications.SyncDelegate {
             segments.size()
         );
 
+        // A re-cut keeps the old index and changes the length. The file on
+        // the watch is the previous cut, so it has to go before the download
+        // below treats that index as already present.
+        dropStaleSegments(bookId, segments);
         var known = knownSegments(bookId);
         _downloads = [] as Array<Dictionary>;
         // segments is Array<Dictionary>: only Dictionaries were accumulated above.
@@ -616,6 +620,65 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         Log.code("Sync: of those to download", _downloadsTotal);
         enterPhase(PHASE_SEGMENTS);
         downloadNext();
+    }
+
+    //! Remove local segments the server no longer serves in this form.
+    //!
+    //! Gone means the index is absent, or the duration in whole seconds
+    //! differs. That is the same rounding the store used when it saved the
+    //! track, so an unchanged segment compares equal and stays.
+    private function dropStaleSegments(bookId as String, segments as Array<Dictionary>) as Void {
+        var durations = serverDurations(segments);
+        var refIds = Store.localTracks(bookId).keys();
+        var dropped = 0;
+        for (var i = 0; i < refIds.size(); ++i) {
+            var parts = Store.trackInfo(bookId, refIds[i]);
+            if (parts == null) {
+                continue;
+            }
+            var index = Store.toNumber(parts[0]);
+            var duration = Store.toNumber(parts[1]);
+            if (sameSegment(durations, index, duration)) {
+                continue;
+            }
+            Media.deleteCachedItem(new Media.ContentRef(refIds[i], Media.CONTENT_TYPE_AUDIO));
+            Store.dropLocalTrack(bookId, refIds[i]);
+            dropped += 1;
+        }
+        if (dropped > 0) {
+            Log.code("Sync: stale segments removed", dropped);
+        }
+    }
+
+    //! True when this index is on the server at the same whole-second duration.
+    private function sameSegment(durations as Array, index as Number, duration as Number) as Boolean {
+        if (index < 0 || index >= durations.size()) {
+            return false;
+        }
+        var serverDuration = durations[index];
+        return serverDuration instanceof Number && serverDuration == duration;
+    }
+
+    //! Whole-second duration for each server segment index. A hole stays null.
+    private function serverDurations(segments as Array<Dictionary>) as Array {
+        var highest = -1;
+        for (var i = 0; i < segments.size(); ++i) {
+            var index = segments[i]["index"];
+            if (index instanceof Number && index > highest) {
+                highest = index;
+            }
+        }
+        if (highest < 0) {
+            return [] as Array;
+        }
+        var durations = new [highest + 1];
+        for (var i = 0; i < segments.size(); ++i) {
+            var index = segments[i]["index"];
+            if (index instanceof Number && index >= 0) {
+                durations[index] = numberOf(segments[i]["duration"]);
+            }
+        }
+        return durations;
     }
 
     private function knownSegments(bookId as String) as Array<Number> {

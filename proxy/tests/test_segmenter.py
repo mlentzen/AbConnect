@@ -55,10 +55,31 @@ class TestM4b:
         assert [s.duration for s in plan.segments] == [60, 1140]
         assert [s.title for s in plan.segments] == ["Chapter 1", "Chapter 2"]
 
-    def test_does_not_split_a_long_chapter(self):
+    def test_a_chapter_at_the_limit_stays_whole(self):
         plan = plan_segments([m4b(7200)], chapters((0, 3600), (3600, 7200)))
         assert [s.duration for s in plan.segments] == [3600, 3600]
         assert [s.title for s in plan.segments] == ["Chapter 1", "Chapter 2"]
+
+    def test_splits_a_long_chapter_into_equal_parts(self):
+        plan = plan_segments([m4b(7200)], chapters((0, 1800), (1800, 7200)))
+        assert [
+            (s.title, s.source_start, s.duration, s.book_start) for s in plan.segments
+        ] == [
+            ("Chapter 1", 0.0, 1800, 0.0),
+            ("Chapter 2 (1/2)", 1800.0, 2700, 1800.0),
+            ("Chapter 2 (2/2)", 4500.0, 2700, 4500.0),
+        ]
+
+    def test_equal_parts_stay_inside_one_file(self):
+        files = [m4b(150, "a"), m4b(50, "b")]
+        plan = plan_segments(files, chapters((0, 200)), 80)
+        assert [
+            (s.title, s.source_ino, s.source_start, s.duration) for s in plan.segments
+        ] == [
+            ("Chapter 1 (1/3)", "a", 0.0, 75),
+            ("Chapter 1 (2/3)", "a", 75.0, 75),
+            ("Chapter 1 (3/3)", "b", 0.0, 50),
+        ]
 
     def test_one_chapter_is_one_segment(self):
         plan = plan_segments([m4b(1200)], chapters((0, 1200)))
@@ -105,11 +126,50 @@ class TestMp3:
         ]
         assert plan.segments[0].filename == "0000.mp3"
 
-    def test_a_single_file_is_not_split(self):
-        plan = plan_segments([mp3(7200, filename="whole.mp3")], [])
+    def test_a_file_within_the_limit_stays_whole(self):
+        plan = plan_segments([mp3(3600, filename="whole.mp3")], [])
         assert len(plan.segments) == 1
-        assert plan.segments[0].duration == 7200
+        assert plan.segments[0].duration == 3600
         assert plan.segments[0].title == "whole"
+
+    def test_split_of_large_files(self):
+        """Split large files into smaller more manageable chunks. This defaults to anything over 1 hour."""
+        plan = plan_segments([mp3(7200, filename="whole.mp3")], [])
+        assert [
+            (s.title, s.source_start, s.duration, s.book_start) for s in plan.segments
+        ] == [
+            ("whole-00.mp3", 0.0, 3600, 0.0),
+            ("whole-01.mp3", 3600, 3600, 3600),
+        ]
+
+    def test_split_multiple_large_files(self):
+        """Split multiple large files into smaller more manageable chunks. This defaults to anything over 1 hour."""
+        files = [
+            mp3(7200, "a", "whole1.mp3"),
+            mp3(7200, "b", "whole2.mp3"),
+            mp3(360, "c", "short.mp3"),
+        ]
+        plan = plan_segments(files, [])
+        assert [
+            (s.title, s.duration, s.book_start, s.source_ino) for s in plan.segments
+        ] == [
+            ("whole1-00.mp3", 3600, 0.0, "a"),
+            ("whole1-01.mp3", 3600, 3600, "a"),
+            ("whole2-00.mp3", 3600, 7200, "b"),
+            ("whole2-01.mp3", 3600, 10800, "b"),
+            ("short", 360, 14400, "c"),
+        ]
+
+    def test_splits_only_past_the_given_limit(self):
+        whole = plan_segments([mp3(100, filename="fit.mp3")], [], 100)
+        assert [(s.title, s.duration) for s in whole.segments] == [("fit", 100)]
+
+        plan = plan_segments([mp3(100, filename="whole.mp3")], [], 40)
+        assert [(s.title, s.source_start, s.duration) for s in plan.segments] == [
+            ("whole-00.mp3", 0.0, 40),
+            ("whole-01.mp3", 40.0, 40),
+            ("whole-02.mp3", 80.0, 20),
+        ]
 
 
 class TestRefused:
