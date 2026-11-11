@@ -27,3 +27,6 @@ addopts = "-q"
 select = ["E4", "E7", "E9", "F", "B", "I", "RUF"]
 # FastAPI's Depends() in argument defaults is the framework's idiom.
 ignore = ["B008"]
+
+[tool.uv]
+exclude-newer = "3 days"
