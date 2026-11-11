@@ -210,7 +210,11 @@ class Preparer:
                 return self.status(book_id)
 
             try:
-                plan_segments(item.files, item.chapters)
+                plan_segments(
+                    item.files,
+                    item.chapters,
+                    self.config.max_file_duration_seconds,
+                )
             except NotForWatch as error:
                 self._withhold(book_id, item.title, error)
                 return self.status(book_id)
@@ -458,7 +462,11 @@ class Preparer:
                 self._withhold(book_id, book_id, error)
                 return
         try:
-            plan = plan_segments(item.files, item.chapters)
+            plan = plan_segments(
+                item.files,
+                item.chapters,
+                self.config.max_file_duration_seconds,
+            )
         except NotForWatch as error:
             self._withhold(book_id, item.title, error)
             return

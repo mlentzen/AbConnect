@@ -80,7 +80,8 @@ class SegmentPlan:
     Attributes:
         segments: Segments in playback order.
         chapter_source: "chapters" when an m4b was cut on its markers,
-            "files" when each mp3 file was kept whole.
+            "files" when the book is mp3 files. A long mp3 file or m4b
+            chapter is cut into pieces.
         total_duration: Sum of the source files, in seconds.
     """
 
