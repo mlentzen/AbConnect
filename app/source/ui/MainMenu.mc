@@ -5,10 +5,10 @@ import Toybox.Media;
 import Toybox.System;
 import Toybox.WatchUi;
 
-// Symbols, so they never collide with book IDs (always strings).
 const CONTINUE_ITEM = :continuePlayback;
 const CHAPTERS_ITEM = :chapters;
 const BOOKS_ITEM = :books;
+const PROGRESS_ITEM = :sendProgress;
 const SERVER_ITEM = :onServer;
 const SYNC_ITEM = :syncNow;
 const INFO_ITEM = :info;
@@ -24,40 +24,31 @@ class MainMenu extends WatchUi.Menu2 {
         build();
     }
 
-    // Rebuilt only when the store changed: a rebuild moves the cursor to the top.
     function onShow() as Void {
         Menu2.onShow();
-        if (state().equals(_state)) {
+        if (state(Store.playlistCounts()).equals(_state)) {
             return;
         }
         Log.info("Menu: the store changed, rebuilding");
-        var removed = deleteItem(0);
-        while (removed == true) {
-            removed = deleteItem(0);
+        while (deleteItem(0) == true) {
         }
         build();
         setFocus(0);
     }
 
-    private static function state() as String {
-        return stateWith(Store.playlistCounts());
-    }
-
-    //! The chapter the current book stands at, so the Chapters row follows it.
-    private static function chapterKey(bookId as String?) as String {
-        if (bookId == null) {
-            return "";
-        }
-        var position = Store.position(bookId);
-        return (position == null) ? "" : position[0].toString();
-    }
-
-    private static function stateWith(counts as Array<Number>) as String {
+    private static function state(counts as Array<Number>) as String {
         var resumable = Store.resumableBook();
+        var chapter = "";
+        if (resumable != null) {
+            var position = Store.position(resumable);
+            if (position != null) {
+                chapter = position[0].toString();
+            }
+        }
         return ((resumable == null) ? "" : resumable)
             + "|" + counts[0].toString()
             + "|" + counts[1].toString()
-            + "|" + chapterKey(resumable)
+            + "|" + chapter
             + "|" + ProgressPush.pending().toString()
             + "|" + (Media.getCacheStatistics().size / 1048576).toString()
             + "|" + syncLine();
@@ -65,91 +56,54 @@ class MainMenu extends WatchUi.Menu2 {
 
     private function build() as Void {
         var counts = Store.playlistCounts();
-        _state = stateWith(counts);
+        _state = state(counts);
 
         var resumable = Store.resumableBook();
         if (resumable != null) {
             addItem(row(
-                Rez.Strings.menuContinue,
-                MenuText.sublabel(Store.bookInfo(resumable)[0]),
+                Rez.Strings.menuContinue, MenuText.sublabel(Store.bookInfo(resumable)[0]),
                 $.CONTINUE_ITEM, Rez.Drawables.IconContinue
             ));
-        }
-
-        if (resumable != null) {
             var chapter = ChapterMenu.currentTitle(resumable);
             addItem(row(
-                Rez.Strings.menuChapters,
-                (chapter == null) ? null : MenuText.sublabel(chapter),
+                Rez.Strings.menuChapters, (chapter == null) ? null : MenuText.sublabel(chapter),
                 $.CHAPTERS_ITEM, Rez.Drawables.IconBooks
             ));
         }
 
         var books = Store.localBooks();
         Log.debugCode("Menu: playable", books.size());
-        addItem(row(
-            Rez.Strings.menuBooks, localSubtitle(books.size()),
-            $.BOOKS_ITEM, Rez.Drawables.IconBooks
-        ));
-
-        addItem(row(
-            Rez.Strings.sendProgress, ProgressPush.rowSubtitle(),
-            $.PROGRESS_ITEM, Rez.Drawables.IconSync
-        ));
-
-        addItem(row(
-            Rez.Strings.menuSync, (syncLine().length() > 0) ? syncLine() : null,
-            $.SYNC_ITEM, Rez.Drawables.IconSync
-        ));
-
-        addItem(row(
-            Rez.Strings.syncFromServer, serverSubtitle(counts),
-            $.SERVER_ITEM, Rez.Drawables.IconSync
-        ));
-
-        addItem(row(
-            Rez.Strings.menuSettings, null,
-            $.SETTINGS_ITEM, Rez.Drawables.IconSettings
-        ));
-
-        addItem(row(
-            Rez.Strings.menuInfo, null,
-            $.INFO_ITEM, Rez.Drawables.IconInfo
-        ));
+        addItem(row(Rez.Strings.menuBooks, localSubtitle(books.size()), $.BOOKS_ITEM, Rez.Drawables.IconBooks));
+        addItem(row(Rez.Strings.sendProgress, ProgressPush.rowSubtitle(), $.PROGRESS_ITEM, Rez.Drawables.IconSync));
+        addItem(row(Rez.Strings.menuSync, MenuText.sublabel(syncLine()), $.SYNC_ITEM, Rez.Drawables.IconSync));
+        addItem(row(Rez.Strings.syncFromServer, serverSubtitle(counts), $.SERVER_ITEM, Rez.Drawables.IconSync));
+        addItem(row(Rez.Strings.menuSettings, null, $.SETTINGS_ITEM, Rez.Drawables.IconSettings));
+        addItem(row(Rez.Strings.menuInfo, null, $.INFO_ITEM, Rez.Drawables.IconInfo));
     }
 
     private static function row(
         label as Lang.ResourceId, subLabel as String?, id as Symbol, icon as Lang.ResourceId
     ) as WatchUi.IconMenuItem {
-        return new WatchUi.IconMenuItem(
-            WatchUi.loadResource(label) as String,
-            subLabel,
-            id,
-            new MenuIcon(icon),
-            null
-        );
+        return new WatchUi.IconMenuItem(Util.text(label), subLabel, id, new MenuIcon(icon), null);
     }
 
-    //! How the last sync that ran to its end went, or null before the first.
     private static function syncLine() as String {
         var result = Store.lastSyncResult();
         if (result == null) {
             return "";
         }
-        // The sub-line is cut off on the right. The time comes first and alone
-        // when all went well; only a failure adds a word after it.
         var ago = Ago.since(result[0] as Number);
         if (result[1] == null) {
             return ago;
         }
-        return Lang.format(WatchUi.loadResource(Rez.Strings.syncFailedAgo) as String, [ago]);
+        return Lang.format(Util.text(Rez.Strings.syncFailedAgo), [ago]);
     }
 
     private static function localSubtitle(count as Number) as String {
         if (count == 0) {
-            return WatchUi.loadResource(Rez.Strings.nothingOnWatch) as String;
+            return Util.text(Rez.Strings.nothingOnWatch);
         }
-        return count.toString() + " " + (WatchUi.loadResource(Rez.Strings.booksCount) as String);
+        return count.toString() + " " + Util.text(Rez.Strings.booksCount);
     }
 
     private static function serverSubtitle(counts as Array<Number>) as String? {
@@ -157,14 +111,12 @@ class MainMenu extends WatchUi.Menu2 {
             return null;
         }
         if (counts[1] > 0) {
-            return counts[1].toString() + " " + (WatchUi.loadResource(Rez.Strings.progressPending) as String);
+            return counts[1].toString() + " " + Util.text(Rez.Strings.progressPending);
         }
-        return counts[0].toString() + " " + (WatchUi.loadResource(Rez.Strings.booksCount) as String);
+        return counts[0].toString() + " " + Util.text(Rez.Strings.booksCount);
     }
 }
 
-//! IconMenuItem needs a Drawable: a plain BitmapResource crashed the fēnix
-//! with "Symbol Not Found".
 class MenuIcon extends WatchUi.Drawable {
 
     private var _bitmap as WatchUi.BitmapResource;
@@ -185,7 +137,6 @@ class MenuIcon extends WatchUi.Drawable {
 
 class MainMenuDelegate extends WatchUi.Menu2InputDelegate {
 
-    // Held as a field so it is not collected while its response is in flight.
     private var _push as ProgressPush;
     private var _catalog as ProxyClient?;
 
@@ -197,99 +148,87 @@ class MainMenuDelegate extends WatchUi.Menu2InputDelegate {
 
     function onSelect(item as WatchUi.MenuItem) as Void {
         var id = item.getId();
-
         if (id == $.CONTINUE_ITEM) {
-            var bookId = Store.resumableBook();
-            if (bookId == null) {
-                Log.error("Menu: nothing to continue after all");
-                return;
-            }
-            Log.info("Menu: continuing " + bookId);
-            _push.syncThenPlay(bookId);
-            return;
-        }
-
-        if (id == $.BOOKS_ITEM) {
-            // An empty Menu2 has undefined behavior on the device.
-            if (Store.localBooks().size() == 0) {
-                Log.info("Menu: books, but there are none");
-                WatchUi.pushView(
-                    new MessageView(WatchUi.loadResource(Rez.Strings.nothingOnWatch) as String),
-                    new BackDelegate(),
-                    WatchUi.SLIDE_IMMEDIATE
-                );
-                return;
-            }
-            Log.info("Menu: books");
-            WatchUi.pushView(new BookMenu(), new BookMenuDelegate(), WatchUi.SLIDE_IMMEDIATE);
-            return;
-        }
-
-        if (id == $.CHAPTERS_ITEM) {
-            var current = Store.resumableBook();
-            if (current != null) {
-                Log.info("Menu: chapters of " + current);
-                WatchUi.pushView(new ChapterMenu(current), new ChapterMenuDelegate(current), WatchUi.SLIDE_IMMEDIATE);
-            }
-            return;
-        }
-
-        if (id == $.SERVER_ITEM) {
-            // The page whose subtitle is "Chosen on the server". Sync
-            // configuration shows it; the watch never opens that mode.
-            Log.info("Menu: playlist on the server");
-            if (Store.playlistRows().size() > 0) {
-                SyncConfigView.openStored();
-                refreshCatalog();
-                return;
-            }
-            WatchUi.pushView(new PlaylistFetchView(), new BackDelegate(), WatchUi.SLIDE_IMMEDIATE);
-            return;
-        }
-
-        if (id == $.PROGRESS_ITEM) {
+            continueBook();
+        } else if (id == $.BOOKS_ITEM) {
+            openBooks();
+        } else if (id == $.CHAPTERS_ITEM) {
+            openChapters();
+        } else if (id == $.SERVER_ITEM) {
+            openServerPlaylist();
+        } else if (id == $.PROGRESS_ITEM) {
             Log.info("Menu: syncing progress over the phone");
             _push.start();
-            return;
-        }
-
-        if (id == $.SETTINGS_ITEM) {
+        } else if (id == $.SETTINGS_ITEM) {
             Log.info("Menu: settings");
             var menu = new SettingsMenu();
             WatchUi.pushView(menu, new SettingsMenuDelegate(menu), WatchUi.SLIDE_IMMEDIATE);
-            return;
-        }
-
-        if (id == $.INFO_ITEM) {
+        } else if (id == $.INFO_ITEM) {
             Log.info("Menu: info");
             WatchUi.pushView(new InfoView(), new BackDelegate(), WatchUi.SLIDE_IMMEDIATE);
-            return;
+        } else if (id == $.SYNC_ITEM) {
+            startSync();
         }
-
-        // The ticket must come first: the app restarts in sync mode and
-        // isSyncNeeded() only sees the stamp. startSync2 is used because it
-        // shows a message on the sync screen.
-        Log.info("Menu: startSync2");
-        Store.requestSync();
-        Communications.startSync2({
-            :message => WatchUi.loadResource(Rez.Strings.AppName) as String
-        });
     }
 
     function onBack() as Void {
         WatchUi.popView(WatchUi.SLIDE_IMMEDIATE);
     }
 
-    //! Updates the stored playlist while the page already on screen stays put.
-    private function refreshCatalog() as Void {
-        if (_catalog == null) {
-            _catalog = new ProxyClient();
-        }
-        var catalog = _catalog;
-        if (catalog == null || !catalog.isConfigured()) {
+    private function continueBook() as Void {
+        var bookId = Store.resumableBook();
+        if (bookId == null) {
+            Log.error("Menu: nothing to continue after all");
             return;
         }
-        catalog.playlist(method(:onCatalog));
+        Log.info("Menu: continuing " + bookId);
+        _push.syncThenPlay(bookId);
+    }
+
+    private function openBooks() as Void {
+        if (Store.localBooks().size() == 0) {
+            Log.info("Menu: books, but there are none");
+            WatchUi.pushView(
+                new MessageView(Util.text(Rez.Strings.nothingOnWatch)), new BackDelegate(), WatchUi.SLIDE_IMMEDIATE
+            );
+            return;
+        }
+        Log.info("Menu: books");
+        WatchUi.pushView(new BookMenu(), new BookMenuDelegate(), WatchUi.SLIDE_IMMEDIATE);
+    }
+
+    private function openChapters() as Void {
+        var bookId = Store.resumableBook();
+        if (bookId != null) {
+            Log.info("Menu: chapters of " + bookId);
+            WatchUi.pushView(new ChapterMenu(bookId), new ChapterMenuDelegate(bookId), WatchUi.SLIDE_IMMEDIATE);
+        }
+    }
+
+    private function openServerPlaylist() as Void {
+        Log.info("Menu: playlist on the server");
+        if (SyncConfigView.openStored(null)) {
+            refreshCatalog();
+            return;
+        }
+        WatchUi.pushView(new PlaylistFetchView(), new BackDelegate(), WatchUi.SLIDE_IMMEDIATE);
+    }
+
+    private function startSync() as Void {
+        Log.info("Menu: startSync2");
+        Store.requestSync();
+        Communications.startSync2({ :message => Util.text(Rez.Strings.AppName) });
+    }
+
+    private function refreshCatalog() as Void {
+        var catalog = _catalog;
+        if (catalog == null) {
+            catalog = new ProxyClient();
+            _catalog = catalog;
+        }
+        if (catalog.isConfigured()) {
+            catalog.playlist(method(:onCatalog));
+        }
     }
 
     function onCatalog(code as Number, data as Dictionary or String or Null) as Void {
@@ -297,10 +236,9 @@ class MainMenuDelegate extends WatchUi.Menu2InputDelegate {
             return;
         }
         var books = data["books"];
-        if (!(books instanceof Array) || books.size() == 0) {
-            return;
+        if (books instanceof Array && books.size() > 0) {
+            Store.rememberPlaylist(books as Array);
         }
-        Store.rememberPlaylist(books as Array);
     }
 }
 

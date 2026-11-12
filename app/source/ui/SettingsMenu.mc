@@ -8,66 +8,56 @@ const TOKEN_ITEM = :proxyTokenSetting;
 const RESET_ITEM = :resetAll;
 const PLUGGED_IN_ITEM = :syncOnPluggedInSetting;
 
-//! URL, token and the plugged-in sync switch. A side-loaded app has no
-//! settings page in Garmin Connect, so they are edited here and stored as
-//! application properties.
 class SettingsMenu extends WatchUi.Menu2 {
 
     function initialize() {
         Menu2.initialize({ :title => Rez.Strings.menuSettings });
-        addItem(item($.URL_ITEM, Rez.Strings.settingProxyUrlTitle, urlValue()));
-        addItem(item($.TOKEN_ITEM, Rez.Strings.settingProxyTokenTitle, tokenValue()));
+        addItem(textItem($.URL_ITEM));
+        addItem(textItem($.TOKEN_ITEM));
         addItem(new WatchUi.ToggleMenuItem(
-            WatchUi.loadResource(Rez.Strings.settingSyncOnPluggedInTitle) as String,
+            Util.text(Rez.Strings.settingSyncOnPluggedInTitle),
             {
-                :enabled => WatchUi.loadResource(Rez.Strings.settingOn) as String,
-                :disabled => WatchUi.loadResource(Rez.Strings.settingOff) as String
+                :enabled => Util.text(Rez.Strings.settingOn),
+                :disabled => Util.text(Rez.Strings.settingOff)
             },
             $.PLUGGED_IN_ITEM,
             Settings.syncOnPluggedIn(),
             null
         ));
-        var stats = Media.getCacheStatistics();
         addItem(new WatchUi.MenuItem(
-            WatchUi.loadResource(Rez.Strings.resetAll) as String,
-            (stats.size / 1048576).toString() + " MB",
+            Util.text(Rez.Strings.resetAll),
+            (Media.getCacheStatistics().size / 1048576).toString() + " MB",
             $.RESET_ITEM,
             null
         ));
     }
 
-    function refresh(index as Number) as Void {
-        if (index == 0) {
-            updateItem(item($.URL_ITEM, Rez.Strings.settingProxyUrlTitle, urlValue()), index);
-        } else {
-            updateItem(item($.TOKEN_ITEM, Rez.Strings.settingProxyTokenTitle, tokenValue()), index);
-        }
+    function refresh(id as Symbol) as Void {
+        updateItem(textItem(id), findItemById(id));
     }
 
-    private function item(id as Symbol, label as Lang.ResourceId, value as String) as WatchUi.MenuItem {
-        var subtitle = value;
-        if (subtitle.length() == 0) {
-            subtitle = WatchUi.loadResource(Rez.Strings.settingNotSet) as String;
-        }
-        return new WatchUi.MenuItem(
-            WatchUi.loadResource(label) as String,
-            subtitle,
-            id,
-            null
-        );
+    static function settingKey(id as Symbol) as String {
+        return (id == $.TOKEN_ITEM) ? Settings.PROXY_TOKEN : Settings.PROXY_URL;
     }
 
-    private function urlValue() as String {
+    static function settingValue(id as Symbol) as String {
+        if (id == $.TOKEN_ITEM) {
+            return ProxyClient.readSetting(Settings.PROXY_TOKEN, BuildDefaults.PROXY_TOKEN);
+        }
         return ProxyClient.readSetting(Settings.PROXY_URL, BuildDefaults.PROXY_URL);
     }
 
-    //! The token is never shown in the list. The picker still opens the real value.
-    private function tokenValue() as String {
-        var token = ProxyClient.readSetting(Settings.PROXY_TOKEN, BuildDefaults.PROXY_TOKEN);
-        if (token.length() == 0) {
-            return "";
+    private function textItem(id as Symbol) as WatchUi.MenuItem {
+        var isToken = id == $.TOKEN_ITEM;
+        var value = settingValue(id);
+        var subtitle = value;
+        if (value.length() == 0) {
+            subtitle = Util.text(Rez.Strings.settingNotSet);
+        } else if (isToken) {
+            subtitle = "••••";
         }
-        return "••••";
+        var label = isToken ? Rez.Strings.settingProxyTokenTitle : Rez.Strings.settingProxyUrlTitle;
+        return new WatchUi.MenuItem(Util.text(label), subtitle, id, null);
     }
 }
 
@@ -83,36 +73,24 @@ class SettingsMenuDelegate extends WatchUi.Menu2InputDelegate {
     function onSelect(item as WatchUi.MenuItem) as Void {
         var id = item.getId();
         if (id == $.PLUGGED_IN_ITEM && item instanceof WatchUi.ToggleMenuItem) {
-            // The menu has already flipped the switch; store what it now shows.
             Application.Properties.setValue(Settings.SYNC_ON_PLUGGED_IN, item.isEnabled());
             Log.info("Settings: sync on plugged in " + item.isEnabled().toString());
-            return;
-        }
-        if (id == $.RESET_ITEM) {
+        } else if (id == $.RESET_ITEM) {
             Log.info("Settings: asking about reset");
             WatchUi.pushView(
-                new WatchUi.Confirmation(WatchUi.loadResource(Rez.Strings.resetConfirm) as String),
+                new WatchUi.Confirmation(Util.text(Rez.Strings.resetConfirm)),
                 new ResetConfirmationDelegate(),
                 WatchUi.SLIDE_IMMEDIATE
             );
-            return;
+        } else if (id == $.URL_ITEM || id == $.TOKEN_ITEM) {
+            id = id as Symbol;
+            Log.info("Settings: edit " + SettingsMenu.settingKey(id));
+            WatchUi.pushView(
+                new WatchUi.TextPicker(SettingsMenu.settingValue(id)),
+                new SettingEditDelegate(_menu, id),
+                WatchUi.SLIDE_IMMEDIATE
+            );
         }
-        var key = Settings.PROXY_URL;
-        var current = ProxyClient.readSetting(key, BuildDefaults.PROXY_URL);
-        var index = 0;
-        if (id == $.TOKEN_ITEM) {
-            key = Settings.PROXY_TOKEN;
-            current = ProxyClient.readSetting(key, BuildDefaults.PROXY_TOKEN);
-            index = 1;
-        } else if (id != $.URL_ITEM) {
-            return;
-        }
-        Log.info("Settings: edit " + key);
-        WatchUi.pushView(
-            new WatchUi.TextPicker(current),
-            new SettingEditDelegate(_menu, index, key),
-            WatchUi.SLIDE_IMMEDIATE
-        );
     }
 
     function onBack() as Void {
@@ -122,15 +100,15 @@ class SettingsMenuDelegate extends WatchUi.Menu2InputDelegate {
 
 class SettingEditDelegate extends WatchUi.TextPickerDelegate {
 
-    private var _menu as SettingsMenu;
-    private var _index as Number;
-    private var _key as String;
+    private const MAX_LENGTH = 120;
 
-    function initialize(menu as SettingsMenu, index as Number, key as String) {
+    private var _menu as SettingsMenu;
+    private var _id as Symbol;
+
+    function initialize(menu as SettingsMenu, id as Symbol) {
         TextPickerDelegate.initialize();
         _menu = menu;
-        _index = index;
-        _key = key;
+        _id = id;
     }
 
     function onTextEntered(text as String, changed as Boolean) as Boolean {
@@ -138,15 +116,16 @@ class SettingEditDelegate extends WatchUi.TextPickerDelegate {
             return true;
         }
         var value = text;
-        if (value.length() > 120) {
-            var cut = value.substring(0, 120);
+        if (value.length() > MAX_LENGTH) {
+            var cut = value.substring(0, MAX_LENGTH);
             if (cut != null) {
                 value = cut;
             }
         }
-        Application.Properties.setValue(_key, value);
-        Log.info("Settings: saved " + _key);
-        _menu.refresh(_index);
+        var key = SettingsMenu.settingKey(_id);
+        Application.Properties.setValue(key, value);
+        Log.info("Settings: saved " + key);
+        _menu.refresh(_id);
         return true;
     }
 

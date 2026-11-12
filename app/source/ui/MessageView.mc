@@ -50,20 +50,26 @@ class MessageView extends WatchUi.View {
     }
 
     function onUpdate(dc as Graphics.Dc) as Void {
+        drawCentered(dc, _text);
+    }
+
+    static function drawCentered(dc as Graphics.Dc, text as String) as Void {
         dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_BLACK);
         dc.clear();
         dc.drawText(
             dc.getWidth() / 2,
             dc.getHeight() / 2,
             Graphics.FONT_SMALL,
-            _text,
+            text,
             Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER
         );
     }
+
+    static function show(text as String) as Void {
+        WatchUi.switchToView(new MessageView(text), null, WatchUi.SLIDE_IMMEDIATE);
+    }
 }
 
-//! Menu2 on the fēnix draws the IQ screen if a label or subtitle is "".
-//! null is a missing subtitle; "" is not.
 module MenuText {
 
     function label(text as String, fallback as String) as String {
@@ -77,10 +83,7 @@ module MenuText {
     }
 
     function sublabel(text as String) as String? {
-        if (text.length() == 0) {
-            return null;
-        }
-        return text;
+        return (text.length() == 0) ? null : text;
     }
 }
 

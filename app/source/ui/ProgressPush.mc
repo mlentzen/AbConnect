@@ -5,15 +5,6 @@ import Toybox.System;
 import Toybox.Timer;
 import Toybox.WatchUi;
 
-// A symbol, so it never collides with book IDs (always strings).
-const PROGRESS_ITEM = :sendProgress;
-
-//! Syncs positions both ways over the phone connection, without a full sync.
-//!
-//! The player holds the phone connection, so it is stopped first. The
-//! connection flags are not consulted: they read false in the player context.
-//! All pauses and watchdogs share one Timer, since exceeding the device's
-//! active timer limit is a fatal error.
 class ProgressPush {
 
     private const SETTLE_MS = 3000;
@@ -28,11 +19,9 @@ class ProgressPush {
     private var _attempts as Number;
     private var _awaiting as Boolean;
     private var _lastCode as Number;
-
     private var _resumeAfter as String?;
     private var _announce as Boolean;
     private var _ask as Array<String>;
-    // Frozen before stopPlayback() can touch the store; every attempt resends it.
     private var _entries as Array?;
     private var _loading as MessageView?;
     private var _startedMs as Number;
@@ -51,6 +40,18 @@ class ProgressPush {
         _loading = null;
         _startedMs = 0;
         _requestMs = 0;
+    }
+
+    static function pending() as Number {
+        return Store.pendingEntries().size();
+    }
+
+    static function rowSubtitle() as String? {
+        var count = pending();
+        if (count == 0) {
+            return null;
+        }
+        return count.toString() + " " + Util.text(Rez.Strings.progressPending);
     }
 
     function start() as Void {
@@ -77,7 +78,6 @@ class ProgressPush {
         }
         _startedMs = System.getTimer();
         _awaiting = false;
-        // Before stopPlayback(): its STOP event overwrites the stored position.
         var entries = Store.syncEntries(_ask);
         if (entries.size() == 0) {
             finish(Rez.Strings.syncNothingToDo);
@@ -89,14 +89,14 @@ class ProgressPush {
         Media.stopPlayback();
         _attempts = 0;
         showLoading();
-        arm(method(:onAttempt), SETTLE_MS);
+        schedule(method(:onAttempt), SETTLE_MS);
     }
 
     function onAttempt() as Void {
         _attempts += 1;
         Log.code("Push: attempt", _attempts);
         Log.debugCode("Push: ms since start", System.getTimer() - _startedMs);
-        logConnection(Log.DEBUG);
+        logConnection(false);
         var entries = _entries;
         if (entries == null) {
             finish(Rez.Strings.syncNothingToDo);
@@ -104,7 +104,7 @@ class ProgressPush {
         }
         _requestMs = System.getTimer();
         _awaiting = true;
-        arm(method(:onAttemptTimeout), ATTEMPT_TIMEOUT_MS);
+        schedule(method(:onAttemptTimeout), ATTEMPT_TIMEOUT_MS);
         _client.pushProgress(entries, method(:onPushed));
     }
 
@@ -135,66 +135,47 @@ class ProgressPush {
                 Progress.settle(sent, data);
             }
             finish(Rez.Strings.progressSent);
-            return;
-        }
-        if (retryable(code)) {
+        } else if (code <= 0 || code >= 500) {
             retryOrGiveUp();
-            return;
+        } else {
+            Log.errorCode("Push: refused for good", code);
+            finishWith(Errors.fromCode(code));
         }
-        Log.errorCode("Push: refused for good", code);
-        finishWith(Errors.fromCode(code));
-    }
-
-    private static function retryable(code as Number) as Boolean {
-        return code <= 0 || code >= 500;
     }
 
     private function retryOrGiveUp() as Void {
-        if (_attempts >= MAX_ATTEMPTS) {
-            Log.errorCode("Push: giving up after attempts", _attempts);
-            logConnection(Log.ERROR);
-            finish(verdict());
-            return;
-        }
-        if (elapsedMs() + RETRY_MS + ATTEMPT_TIMEOUT_MS > DEADLINE_MS) {
-            Log.errorCode("Push: out of time after attempts", _attempts);
-            logConnection(Log.ERROR);
-            finish(verdict());
+        var outOfAttempts = _attempts >= MAX_ATTEMPTS;
+        var outOfTime = elapsedMs() + RETRY_MS + ATTEMPT_TIMEOUT_MS > DEADLINE_MS;
+        if (outOfAttempts || outOfTime) {
+            var reason = outOfAttempts ? "Push: giving up after attempts" : "Push: out of time after attempts";
+            Log.errorCode(reason, _attempts);
+            logConnection(true);
+            var noPhone = _lastCode == Communications.BLE_CONNECTION_UNAVAILABLE;
+            finish(noPhone ? Rez.Strings.noPhone : Rez.Strings.progressNotSent);
             return;
         }
         Log.info("Push: trying again");
-        arm(method(:onAttempt), RETRY_MS);
+        schedule(method(:onAttempt), RETRY_MS);
     }
 
-    // Stopping first replaces the pending callback instead of adding a timer.
-    private function arm(callback as Method() as Void, ms as Number) as Void {
+    private function schedule(callback as Method() as Void, ms as Number) as Void {
         _timer.stop();
         _timer.start(callback, ms, false);
     }
 
-    private function verdict() as Lang.ResourceId {
-        if (_lastCode == Communications.BLE_CONNECTION_UNAVAILABLE) {
-            return Rez.Strings.noPhone;
-        }
-        return Rez.Strings.progressNotSent;
-    }
-
-    // A difference, because System.getTimer() wraps.
     private function elapsedMs() as Number {
         var elapsed = System.getTimer() - _startedMs;
         return (elapsed < 0) ? 0 : elapsed;
     }
 
     private function finish(resource as Lang.ResourceId) as Void {
-        if (!_announce) {
+        if (_announce) {
+            finishWith(Util.text(resource));
+        } else {
             done();
-            return;
         }
-        finishWith(WatchUi.loadResource(resource) as String);
     }
 
-    // Replaces the wait view only while it is on top; after BACK that would
-    // replace the menu.
     private function finishWith(text as String) as Void {
         if (_announce) {
             var result = new MessageView(withAttempts(text));
@@ -213,57 +194,38 @@ class ProgressPush {
         _awaiting = false;
         _loading = null;
         _timer.stop();
-        resume();
+        var bookId = _resumeAfter;
+        if (bookId != null) {
+            Current.set(bookId);
+            Log.info("Push: startPlayback " + bookId);
+            Media.startPlayback(bookId);
+        }
     }
 
     private function withAttempts(text as String) as String {
         if (_attempts <= 1) {
             return text;
         }
-        return text + " (" + _attempts.toString()
-            + " " + (WatchUi.loadResource(Rez.Strings.tries) as String) + ")";
+        return text + " (" + _attempts.toString() + " " + Util.text(Rez.Strings.tries) + ")";
     }
 
-    private function resume() as Void {
-        var bookId = _resumeAfter;
-        if (bookId == null) {
-            Log.debug("Push: nothing to start");
-            return;
-        }
-        Current.set(bookId);
-        Log.info("Push: startPlayback " + bookId);
-        Media.startPlayback(bookId);
+    private function showLoading() as Void {
+        var view = new MessageView(Util.text(Rez.Strings.loading));
+        _loading = view;
+        WatchUi.pushView(view, new BackDelegate(), WatchUi.SLIDE_IMMEDIATE);
     }
 
-    private static function logConnection(level as Number) as Void {
-        if (Log.LEVEL < level) {
+    private static function logConnection(isError as Boolean) as Void {
+        if (Log.LEVEL < (isError ? Log.ERROR : Log.DEBUG)) {
             return;
         }
         var settings = System.getDeviceSettings();
         var line = "Push: connection available " + settings.connectionAvailable.toString()
             + ", phone " + settings.phoneConnected.toString();
-        if (level <= Log.ERROR) {
+        if (isError) {
             Log.error(line);
         } else {
             Log.debug(line);
         }
-    }
-
-    private function showLoading() as Void {
-        var view = new MessageView(WatchUi.loadResource(Rez.Strings.loading) as String);
-        _loading = view;
-        WatchUi.pushView(view, new BackDelegate(), WatchUi.SLIDE_IMMEDIATE);
-    }
-
-    static function pending() as Number {
-        return Store.pendingEntries().size();
-    }
-
-    static function rowSubtitle() as String? {
-        var count = pending();
-        if (count == 0) {
-            return null;
-        }
-        return count.toString() + " " + (WatchUi.loadResource(Rez.Strings.progressPending) as String);
     }
 }

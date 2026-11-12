@@ -5,15 +5,10 @@ class BookMenu extends WatchUi.Menu2 {
 
     function initialize() {
         Menu2.initialize({ :title => Rez.Strings.menuBooks });
-
         var books = Store.localBooks();
         Log.debugCode("Books: playable", books.size());
         for (var i = 0; i < books.size(); ++i) {
-            // Listed as soon as one segment is on the watch, so the title line
-            // can still be missing and the author can be blank.
             var info = Store.bookInfo(books[i]);
-            // How far along the listener is, once they have started; the
-            // author until then.
             var progress = BookProgress.line(books[i]);
             addItem(new WatchUi.MenuItem(
                 MenuText.label(info[0], books[i]),
@@ -37,11 +32,7 @@ class BookMenuDelegate extends WatchUi.Menu2InputDelegate {
             return;
         }
         Log.info("Books: chapters of " + id);
-        WatchUi.pushView(
-            new ChapterMenu(id),
-            new ChapterMenuDelegate(id),
-            WatchUi.SLIDE_IMMEDIATE
-        );
+        WatchUi.pushView(new ChapterMenu(id), new ChapterMenuDelegate(id), WatchUi.SLIDE_IMMEDIATE);
     }
 
     function onBack() as Void {
