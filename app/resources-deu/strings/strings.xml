@@ -6,10 +6,15 @@
     <string id="settingProxyTokenTitle">Proxy-Token</string>
     <string id="settingProxyTokenPrompt">Das Token dieser Uhr aus der users.toml des Proxy</string>
 
+    <string id="settingSyncOnPluggedInTitle">Sync beim Laden</string>
+    <string id="settingSyncOnPluggedInPrompt">Bücher laden, wenn die Uhr eine Synchronisation startet, z. B. beim Laden</string>
+    <string id="settingOn">An</string>
+    <string id="settingOff">Aus</string>
+
     <string id="menuSyncTitle">Bücher</string>
-    <string id="syncFromServer">Auf dem Server ausgewählt</string>
+    <string id="syncFromServer">Playlist</string>
     <string id="loading">Lädt…</string>
-    <string id="notConfigured">Proxy-URL und Token zuerst in der Handy-App eintragen</string>
+    <string id="notConfigured">Proxy-URL und Token in den Einstellungen eintragen</string>
     <string id="statusPreparing">wird vorbereitet</string>
     <string id="statusReady">auf der Uhr</string>
     <string id="statusPending">nicht vorbereitet</string>
@@ -23,7 +28,7 @@
     <string id="statusWaitingForSync">bereit, wartet auf Sync</string>
     <string id="sendProgress">Fortschritt synchronisieren</string>
     <string id="noPhone">Keine Telefonverbindung</string>
-    <string id="progressSent">Fortschritt synchronisiert</string>
+    <string id="progressSent">Synchronisiert</string>
     <string id="resetAll">Alles zurücksetzen</string>
     <string id="resetConfirm">Alle Bücher und den Hörfortschritt löschen?</string>
     <string id="menuContinue">Fortsetzen</string>
@@ -31,7 +36,7 @@
     <string id="menuInfo">Info</string>
     <string id="menuSettings">Einstellungen</string>
     <string id="settingNotSet">Nicht gesetzt</string>
-    <string id="menuSync">Bücher herunterladen</string>
+    <string id="menuSync">Bücher laden</string>
     <string id="booksCount">auf der Uhr</string>
     <string id="progressPending">wartend</string>
     <string id="infoBooks">Bücher</string>
@@ -39,7 +44,27 @@
     <string id="infoPending">Wartend</string>
     <string id="infoChecked">Playlist</string>
     <string id="infoNever">nie</string>
-    <string id="infoAgo">her</string>
     <string id="progressNotSent">Fortschritt nicht synchronisiert</string>
     <string id="tries">Versuche</string>
+    <string id="errNotSetUp">Proxy nicht eingerichtet</string>
+    <string id="errNoResponse">Der Server antwortet nicht</string>
+    <string id="errNoConnection">Keine Verbindung</string>
+    <string id="errRejected">Token abgelehnt</string>
+    <string id="errNotFound">Auf dem Server nicht gefunden</string>
+    <string id="errNotReady">Noch nicht bereit</string>
+    <string id="errServer">Serverfehler</string>
+    <string id="errOther">Unerwartete Antwort</string>
+    <string id="errStoreFull">Speicher der Uhr voll</string>
+    <string id="errCleanup">Alte Dateien nicht entfernt</string>
+    <string id="infoAgoMinutes">vor $1$ Min.</string>
+    <string id="infoAgoHours">vor $1$ Std.</string>
+    <string id="infoAgoDays">vor $1$ T.</string>
+    <string id="agoNow">gerade eben</string>
+    <string id="bookProgress">$1$ % · $2$</string>
+    <string id="bookLeftMinutes">$1$ min</string>
+    <string id="bookLeftHours">$1$ h $2$ min</string>
+    <string id="bookFinished">Beendet</string>
+    <string id="syncFailedAgo">$1$ · Fehler</string>
+    <string id="chapterNow">jetzt</string>
+    <string id="menuChapters">Kapitel</string>
 </strings>

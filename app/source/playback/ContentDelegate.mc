@@ -118,7 +118,9 @@ class AbContentDelegate extends Media.ContentDelegate {
             // Count the full duration, or seconds are lost at every chapter change.
             seconds = Store.toNumber(parts[1]);
         }
-        Store.rememberPosition(bookId, Store.toNumber(parts[0]), seconds, Time.now().value());
+        var now = Time.now().value();
+        Store.rememberPosition(bookId, Store.toNumber(parts[0]), seconds, now);
+        Store.notePlayed(bookId, Store.toNumber(parts[0]), seconds, now);
 
         if (songEvent == Media.SONG_EVENT_PAUSE || songEvent == Media.SONG_EVENT_STOP) {
             pushOverPhone();

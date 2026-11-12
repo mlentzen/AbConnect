@@ -7,6 +7,7 @@ import Toybox.WatchUi;
 
 // Symbols, so they never collide with book IDs (always strings).
 const CONTINUE_ITEM = :continuePlayback;
+const CHAPTERS_ITEM = :chapters;
 const BOOKS_ITEM = :books;
 const SERVER_ITEM = :onServer;
 const SYNC_ITEM = :syncNow;
@@ -42,13 +43,24 @@ class MainMenu extends WatchUi.Menu2 {
         return stateWith(Store.playlistCounts());
     }
 
+    //! The chapter the current book stands at, so the Chapters row follows it.
+    private static function chapterKey(bookId as String?) as String {
+        if (bookId == null) {
+            return "";
+        }
+        var position = Store.position(bookId);
+        return (position == null) ? "" : position[0].toString();
+    }
+
     private static function stateWith(counts as Array<Number>) as String {
         var resumable = Store.resumableBook();
         return ((resumable == null) ? "" : resumable)
             + "|" + counts[0].toString()
             + "|" + counts[1].toString()
+            + "|" + chapterKey(resumable)
             + "|" + ProgressPush.pending().toString()
-            + "|" + (Media.getCacheStatistics().size / 1048576).toString();
+            + "|" + (Media.getCacheStatistics().size / 1048576).toString()
+            + "|" + syncLine();
     }
 
     private function build() as Void {
@@ -61,6 +73,15 @@ class MainMenu extends WatchUi.Menu2 {
                 Rez.Strings.menuContinue,
                 MenuText.sublabel(Store.bookInfo(resumable)[0]),
                 $.CONTINUE_ITEM, Rez.Drawables.IconContinue
+            ));
+        }
+
+        if (resumable != null) {
+            var chapter = ChapterMenu.currentTitle(resumable);
+            addItem(row(
+                Rez.Strings.menuChapters,
+                (chapter == null) ? null : MenuText.sublabel(chapter),
+                $.CHAPTERS_ITEM, Rez.Drawables.IconBooks
             ));
         }
 
@@ -77,7 +98,7 @@ class MainMenu extends WatchUi.Menu2 {
         ));
 
         addItem(row(
-            Rez.Strings.menuSync, null,
+            Rez.Strings.menuSync, (syncLine().length() > 0) ? syncLine() : null,
             $.SYNC_ITEM, Rez.Drawables.IconSync
         ));
 
@@ -107,6 +128,21 @@ class MainMenu extends WatchUi.Menu2 {
             new MenuIcon(icon),
             null
         );
+    }
+
+    //! How the last sync that ran to its end went, or null before the first.
+    private static function syncLine() as String {
+        var result = Store.lastSyncResult();
+        if (result == null) {
+            return "";
+        }
+        // The sub-line is cut off on the right. The time comes first and alone
+        // when all went well; only a failure adds a word after it.
+        var ago = Ago.since(result[0] as Number);
+        if (result[1] == null) {
+            return ago;
+        }
+        return Lang.format(WatchUi.loadResource(Rez.Strings.syncFailedAgo) as String, [ago]);
     }
 
     private static function localSubtitle(count as Number) as String {
@@ -186,6 +222,15 @@ class MainMenuDelegate extends WatchUi.Menu2InputDelegate {
             }
             Log.info("Menu: books");
             WatchUi.pushView(new BookMenu(), new BookMenuDelegate(), WatchUi.SLIDE_IMMEDIATE);
+            return;
+        }
+
+        if (id == $.CHAPTERS_ITEM) {
+            var current = Store.resumableBook();
+            if (current != null) {
+                Log.info("Menu: chapters of " + current);
+                WatchUi.pushView(new ChapterMenu(current), new ChapterMenuDelegate(current), WatchUi.SLIDE_IMMEDIATE);
+            }
             return;
         }
 

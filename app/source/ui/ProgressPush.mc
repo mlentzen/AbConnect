@@ -142,7 +142,7 @@ class ProgressPush {
             return;
         }
         Log.errorCode("Push: refused for good", code);
-        finishWith("HTTP " + code.toString());
+        finishWith(Errors.fromCode(code));
     }
 
     private static function retryable(code as Number) as Boolean {

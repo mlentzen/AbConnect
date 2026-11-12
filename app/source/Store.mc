@@ -16,6 +16,7 @@ module Store {
             Application.Storage.clearValues();
             Application.Storage.setValue(Keys.SCHEMA, Keys.SCHEMA_VERSION);
         }
+        Application.Storage.deleteValue(Keys.LEGACY_AUTO_SYNC);
     }
 
     //! Discard everything the app has put on the watch.
@@ -241,6 +242,37 @@ module Store {
         }
     }
 
+    //! One pass over the stored chunks: ref id, segment index, duration, title.
+    //!
+    //! Walking each id through trackInfo() reads the chunks again per segment
+    //! and trips the execution watchdog on a full book. The cached audio has
+    //! to be deleted separately, one file per turn.
+    function localSegmentFacts(bookId as String) as Array<Dictionary> {
+        var facts = [] as Array<Dictionary>;
+        for (var chunk = 0; chunk < MAX_TRACK_CHUNKS; ++chunk) {
+            var stored = readChunk(bookId, chunk);
+            if (stored == null) {
+                break;
+            }
+            var ids = stored.keys();
+            for (var i = 0; i < ids.size(); ++i) {
+                var value = stored[ids[i]];
+                var parts = (value instanceof String) ? split(value, "|") : null;
+                if (parts == null || parts.size() < 3) {
+                    Log.error("Store: unreadable entry for " + Log.describe(ids[i]));
+                    continue;
+                }
+                facts.add({
+                    "ref" => ids[i],
+                    "index" => toNumber(parts[0]),
+                    "duration" => toNumber(parts[1]),
+                    "title" => parts[2]
+                });
+            }
+        }
+        return facts;
+    }
+
     //! [segIdx, duration, title] of a local track, or null.
     function trackInfo(bookId as String, refId as Object) as Array<String>? {
         for (var chunk = 0; chunk < MAX_TRACK_CHUNKS; ++chunk) {
@@ -260,63 +292,53 @@ module Store {
         return null;
     }
 
-    //! The refIds of a book in segment order, gaps left out.
+    //! The segments of a book in segment order, gaps left out. Each is a map
+    //! with "ref", "index", "duration" and "title".
     //!
     //! The Object Store is an unordered map, so entries are placed by their
     //! segment number instead of being sorted. Monkey C has no Array.sort.
     //! Both the player and the chapter menu walk the book in this order; it
     //! lives here so the two can never disagree about what segment 3 is.
-    function orderedRefs(bookId as String) as Array {
-        var refIds = localTracks(bookId).keys();
-        Log.debugCode("Store: entries for the book", refIds.size());
+    //!
+    //! One pass over the stored chunks. Looking each segment up on its own
+    //! reads the chunks again per segment, which grows with the square of the
+    //! book's length and trips the execution watchdog on a long book.
+    function orderedSegments(bookId as String) as Array<Dictionary> {
+        var facts = localSegmentFacts(bookId);
+        Log.debugCode("Store: entries for the book", facts.size());
         var highest = -1;
-        var indices = [] as Array<Number>;
-
-        for (var i = 0; i < refIds.size(); ++i) {
-            var parts = trackInfo(bookId, refIds[i]);
-            var index = (parts == null) ? -1 : toNumber(parts[0]);
-            indices.add(index);
-            // Guarded: Monkey C builds the message even when nothing prints it,
-            // and this loop runs once per segment.
-            if (Log.LEVEL >= Log.DEBUG) {
-                Log.debug(
-                    "store " + Log.describe(refIds[i])
-                        + " segment " + index.toString()
-                        + " duration " + ((parts == null) ? "?" : parts[1]) + " s"
-                        + " title '" + ((parts == null) ? "" : parts[2]) + "'"
-                );
-            }
-            if (parts == null) {
-                Log.error("Store: unreadable entry for " + Log.describe(refIds[i]));
-            }
+        for (var i = 0; i < facts.size(); ++i) {
+            var index = facts[i]["index"] as Number;
             if (index > highest) {
                 highest = index;
             }
         }
 
         var slots = new [highest + 1] as Array;
-        for (var i = 0; i < refIds.size(); ++i) {
-            var slot = indices[i];
+        for (var i = 0; i < facts.size(); ++i) {
+            var slot = facts[i]["index"] as Number;
             if (slot >= 0) {
                 if (slots[slot] != null) {
                     // Two files claim the same segment: the second wins.
                     Log.warn(
                         "Store: segment " + slot.toString() + " claimed twice, "
-                            + Log.describe(slots[slot]) + " replaced by " + Log.describe(refIds[i])
+                            + Log.describe((slots[slot] as Dictionary)["ref"]) + " replaced by "
+                            + Log.describe(facts[i]["ref"])
                     );
                 }
-                slots[slot] = refIds[i];
+                slots[slot] = facts[i];
             }
         }
 
-        var ordered = [] as Array;
+        var ordered = [] as Array<Dictionary>;
         for (var slot = 0; slot < slots.size(); ++slot) {
-            if (slots[slot] == null) {
+            var fact = slots[slot];
+            if (fact == null) {
                 // A hole in the numbering: that segment never made it onto the
                 // watch. Everything after it moves up without a word otherwise.
                 Log.warnCode("Store: no file for segment", slot);
             } else {
-                ordered.add(slots[slot]);
+                ordered.add(fact as Dictionary);
             }
         }
         if (ordered.size() < slots.size()) {
@@ -444,6 +466,61 @@ module Store {
         Application.Storage.setValue(Keys.PROGRESS, all);
     }
 
+    //! Remember that playback just reached this spot, for the rewind on resume.
+    function notePlayed(bookId as String, segment as Number, seconds as Number, timestamp as Number) as Void {
+        Application.Storage.setValue(Keys.LAST_PLAYED, [bookId, timestamp, segment, seconds] as Array);
+    }
+
+    //! Seconds since the book was last played here, or null when that is not
+    //! known, or when the position has been moved since (adopted from the
+    //! server, or reset). Only a stop that is still where the book stands
+    //! counts as a break.
+    function idleSecondsAt(bookId as String, segment as Number, seconds as Number) as Number? {
+        var stored = Application.Storage.getValue(Keys.LAST_PLAYED);
+        if (!(stored instanceof Array) || stored.size() < 4) {
+            return null;
+        }
+        if (!bookId.equals(stored[0]) || stored[2] != segment || stored[3] != seconds) {
+            return null;
+        }
+        var stamp = stored[1];
+        if (!(stamp instanceof Number)) {
+            return null;
+        }
+        var idle = Time.now().value() - stamp;
+        return (idle < 0) ? null : idle;
+    }
+
+    //! Drops the stored positions the server already agrees with (timestamp 0)
+    //! for books that are in neither list (wanted by the playlist, present on the watch). Positions still waiting
+    //! for the server stay, so they are sent on the next push. Returns how many
+    //! entries went.
+    function pruneProgress(wanted as Array<String>, present as Array<String>) as Number {
+        var all = progress();
+        var bookIds = all.keys();
+        var removed = 0;
+        for (var i = 0; i < bookIds.size(); ++i) {
+            var bookId = bookIds[i];
+            if (!(bookId instanceof String)) {
+                continue;
+            }
+            if (wanted.indexOf(bookId) >= 0 || present.indexOf(bookId) >= 0) {
+                continue;
+            }
+            var spot = position(bookId);
+            if (spot != null && spot[2] > 0) {
+                continue;
+            }
+            all.remove(bookId);
+            removed += 1;
+        }
+        if (removed > 0) {
+            Application.Storage.setValue(Keys.PROGRESS, all);
+            Log.code("Store: dropped progress entries", removed);
+        }
+        return removed;
+    }
+
     //! [segIdx, seconds, timestamp] or null.
     function position(bookId as String) as Array<Number>? {
         var stored = progress()[bookId];
@@ -488,8 +565,8 @@ module Store {
     //! startSync() ends the app and relaunches it in sync mode; the ticket is
     //! how isSyncNeeded() can still tell that this sync was asked for by hand.
     //! The relaunch takes seconds, so anything older is a leftover from an
-    //! attempt that never made it into sync mode, and must not bless a later
-    //! sync the system started on its own.
+    //! attempt that never made it into sync mode, and must not let a later
+    //! sync through when the plugged-in setting is off.
     const SYNC_REQUEST_TRUSTED_SECONDS = 120;
 
     //! The Download books row's half of the ticket, stamped just before
@@ -510,6 +587,20 @@ module Store {
             return false;
         }
         return true;
+    }
+
+    //! Remember how the last sync that ran to its end went.
+    function noteSyncResult(error as String?) as Void {
+        Application.Storage.setValue(Keys.LAST_SYNC, [Time.now().value(), error] as Array);
+    }
+
+    //! [timestamp, error or null], or null before the first sync.
+    function lastSyncResult() as Array? {
+        var stored = Application.Storage.getValue(Keys.LAST_SYNC);
+        if (stored instanceof Array && stored.size() >= 2 && stored[0] instanceof Number) {
+            return stored;
+        }
+        return null;
     }
 
     //! Once the sync is actually running the ticket is spent: whatever the
@@ -566,24 +657,6 @@ module Store {
 
     function clearResume() as Void {
         Application.Storage.deleteValue(Keys.SYNC_RESUME);
-    }
-
-    //! A day, for the plugged-in sync. A manual request is not limited by this.
-    const DAY_SECONDS = 86400;
-
-    //! True when no plugged-in sync has started in the last day.
-    function dailySyncDue() as Boolean {
-        var stamped = Application.Storage.getValue(Keys.LAST_AUTO_SYNC);
-        if (!(stamped instanceof Number)) {
-            return true;
-        }
-        return Time.now().value() - stamped >= DAY_SECONDS;
-    }
-
-    //! Called when a plugged-in sync starts, so a later check the same day
-    //! does not start another. A manual sync does not call this.
-    function noteDailySync() as Void {
-        Application.Storage.setValue(Keys.LAST_AUTO_SYNC, Time.now().value());
     }
 
     //! The server now holds this position: keep it, stop reporting it.

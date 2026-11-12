@@ -1,10 +1,6 @@
+import Toybox.Application;
 import Toybox.Lang;
 
-//! Keys and schema of the Object Store.
-//!
-//! Connect IQ limits every stored value to 8 KB. That is why each book has its
-//! own key in the store instead of one global structure, and the values are
-//! flat strings instead of nested maps.
 module Keys {
     //! Array of the book IDs from the most recently read playlist.
     //!
@@ -33,8 +29,20 @@ module Keys {
     //! Dismissing a notification with Back ends the sync session. The restart
     //! is how the download continues, and the count stops a restart loop.
     const SYNC_RESUME = "RSM";
-    //! When a plugged-in sync last started. Manual syncs do not write this.
-    const LAST_AUTO_SYNC = "AUT";
+    //! Written by older versions, which limited the plugged-in sync to once a
+    //! day. Nothing reads it any more; Store.checkSchema() removes it.
+    const LEGACY_AUTO_SYNC = "AUT";
+    //! [timestamp, error or null] of the last sync that ran to its end.
+    //!
+    //! A sync the user stopped is not recorded: it says nothing about the server.
+    const LAST_SYNC = "SRS";
+    //! [bookId, timestamp, segment, seconds] of the last listening on this watch.
+    //!
+    //! The position's own timestamp cannot say when the user last listened:
+    //! it is zeroed once the server agrees. This one is only written by playback,
+    //! and the segment and seconds show whether the position is still where
+    //! that listening ended.
+    const LAST_PLAYED = "LPL";
     //! Last playlist fetched from the proxy: id, status, percent, title.
     //!
     //! Sync configuration is where the simulator shows this list. The watch
@@ -80,4 +88,15 @@ module Keys {
 module Settings {
     const PROXY_URL = "proxyUrl";
     const PROXY_TOKEN = "proxyToken";
+    const SYNC_ON_PLUGGED_IN = "syncOnPluggedIn";
+
+    //! Whether AbConnect joins a sync that the watch started by itself, for
+    //! example while charging. On unless the user turned it off.
+    function syncOnPluggedIn() as Boolean {
+        var value = Application.Properties.getValue(SYNC_ON_PLUGGED_IN);
+        if (value instanceof Boolean) {
+            return value;
+        }
+        return true;
+    }
 }

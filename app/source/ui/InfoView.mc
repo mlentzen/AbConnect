@@ -78,14 +78,6 @@ class InfoView extends WatchUi.View {
         if (stamp == 0) {
             return WatchUi.loadResource(Rez.Strings.infoNever) as String;
         }
-        var ago = WatchUi.loadResource(Rez.Strings.infoAgo) as String;
-        var seconds = Time.now().value() - stamp;
-        if (seconds < 3600) {
-            return (seconds / 60).toString() + " min " + ago;
-        }
-        if (seconds < 86400) {
-            return (seconds / 3600).toString() + " h " + ago;
-        }
-        return (seconds / 86400).toString() + " d " + ago;
+        return Ago.since(stamp);
     }
 }

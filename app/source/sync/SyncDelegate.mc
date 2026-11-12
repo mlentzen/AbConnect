@@ -17,7 +17,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
     const PHASE_PROGRESS_PUSHED = 2;
     const PHASE_PLAYLIST = 3;
     const PHASE_SEGMENTS = 4;
-    //! From here on the downloads count.
+    //! From here on the ring follows bytes, not how many segments are left.
     const PHASE_DOWNLOAD = 5;
 
     //! Which request is in flight, so a cancel can repeat that request.
@@ -30,6 +30,13 @@ class AbSyncDelegate extends Communications.SyncDelegate {
     //! because a segment can take many minutes over Bluetooth.
     const WATCHDOG_TICK_MS = 30000;
     const WATCHDOG_MAX_IDLE_TICKS = 20;
+    //! Gap between two removals of a cached segment. One file per turn: deleting
+    //! a whole re-cut book here trips the execution watchdog.
+    const DROP_YIELD_MS = 50;
+    //! A segment that failed is tried again this many times, after a pause,
+    //! before the sync records the failure and moves on.
+    const SEGMENT_RETRIES = 2;
+    const SEGMENT_RETRY_MS = 3000;
 
     private var _client as ProxyClient;
     private var _bookQueue as Array<String>;
@@ -52,17 +59,44 @@ class AbSyncDelegate extends Communications.SyncDelegate {
     //! Set before notifySyncComplete. Back during a notification calls
     //! onStopSync, and that completion can call onStopSync again.
     private var _finished as Boolean;
+    //! The user stopped the sync, or it was cancelled too often to go on. That
+    //! says nothing about whether the server could be reached.
+    private var _cancelled as Boolean;
     private var _phase as Number;
     private var _reported as Number;
     private var _segmentBytes as Number;
     private var _segmentSize as Number;
+    //! Manifest size of the segment in flight. The byte callback is capped here
+    //! so a long transfer cannot move the ring past that segment.
+    private var _segmentBudget as Number;
+    //! Every segment of the current book, and how many of those bytes are
+    //! already stored or finished this sync. The ring uses the ratio.
+    private var _bookBytesTotal as Float;
+    private var _bookBytesDone as Float;
     private var _watchdog as Timer.Timer?;
     private var _activity as Number;
     private var _idleTicks as Number;
     //! Which request to repeat when Back cancels it.
     private var _step as Number;
-    private var _retry as Timer.Timer?;
+    //! One shared one-shot timer for the short pauses between steps (cancel
+    //! retry, removal of cached files, segment retry). Connect IQ allows only a
+    //! few timers, and a fresh Timer for every step used them up ("Too Many
+    //! Timers"). The three uses never overlap.
+    private var _yield as Timer.Timer?;
+    private var _yieldArmed as Boolean;
     private var _cancelRetries as Number;
+    //! Cached files the current book no longer matches, removed one per turn.
+    private var _staleRefs as Array;
+    private var _staleAt as Number;
+    //! Whose files the removal timer is working through, and whether that book
+    //! is leaving the watch entirely (then the book is forgotten at the end).
+    private var _dropBook as String?;
+    private var _dropWholeBook as Boolean;
+    //! Books no longer in the playlist that still wait to be removed.
+    private var _orphans as Array<String>;
+    //! Failed attempts at the segment in flight, and which segment that is.
+    private var _segmentAttempts as Number;
+    private var _attemptIndex as Number;
     //! Highest notification count seen this session. A drop means one was
     //! dismissed, which is the Back press that should not end the sync.
     private var _notePeak as Number;
@@ -86,56 +120,61 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         _failure = null;
         _stopped = false;
         _finished = false;
+        _cancelled = false;
         _phase = 0;
         _reported = -1;
         _segmentBytes = 0;
         _segmentSize = 0;
+        _segmentBudget = 0;
+        _bookBytesTotal = 0.0;
+        _bookBytesDone = 0.0;
         _watchdog = null;
         _activity = 0;
         _idleTicks = 0;
         _step = 0;
-        _retry = null;
+        _yield = null;
+        _yieldArmed = false;
         _cancelRetries = 0;
+        _staleRefs = [] as Array;
+        _staleAt = 0;
+        _dropBook = null;
+        _dropWholeBook = false;
+        _orphans = [] as Array<String>;
+        _segmentAttempts = 0;
+        _attemptIndex = -1;
         _notePeak = 0;
         _notes = null;
     }
 
-    //! Manual request, or a plugged-in watch that has not synced in a day.
+    //! Whether to take part in a sync the system has started.
     //!
-    //! The system asks on its own when the watch is on the cable. A download
-    //! holds the watch for the whole transfer, so that path runs once a day.
-    //! Anything else, including an old ticket, answers no and onStartSync is
-    //! not called.
+    //! The system decides when a sync begins, for instance with the watch on
+    //! the cable, and only asks this app whether it has anything to do. A hand
+    //! request through the Download books row always counts. Otherwise the
+    //! plugged-in setting decides. There is no extra check of the charger or
+    //! the time of the last sync: either would only second-guess the system.
     function isSyncNeeded() as Boolean {
         if (Store.syncRequested()) {
             Log.info("Sync: needed, requested");
             return true;
         }
-        if (!System.getSystemStats().charging) {
-            Log.debug("Sync: not plugged in");
-            return false;
+        if (Settings.syncOnPluggedIn()) {
+            Log.info("Sync: needed, started by the system");
+            return true;
         }
-        if (!Store.dailySyncDue()) {
-            Log.debug("Sync: plugged in, already synced today");
-            return false;
-        }
-        Log.info("Sync: needed, plugged in");
-        return true;
+        Log.info("Sync: not needed, plugged-in sync is off");
+        return false;
     }
 
     function onStartSync() as Void {
         Log.info("Sync: onStartSync");
-        var manual = Store.syncRequested();
         Store.clearSyncRequest();
-        if (!manual) {
-            Store.noteDailySync();
-        }
         logEnvironment();
         enterPhase(PHASE_START);
         startWatchdog();
         startNoteWatch();
         if (!_client.isConfigured()) {
-            finish("Proxy not configured");
+            finish(Errors.text(Rez.Strings.errNotSetUp));
             return;
         }
         pushProgress();
@@ -155,6 +194,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
             Log.warn("Sync: onStopSync, cancelled");
             Store.clearResume();
             _stopped = true;
+            _cancelled = true;
             Communications.cancelAllRequests();
             finish(null);
             return;
@@ -164,13 +204,14 @@ class AbSyncDelegate extends Communications.SyncDelegate {
             Log.warn("Sync: onStopSync, resume gave up");
             Store.clearResume();
             _stopped = true;
+            _cancelled = true;
             Communications.cancelAllRequests();
             finish(null);
             return;
         }
         Log.warn("Sync: onStopSync, resuming");
-        // The relaunch is a new process. isSyncNeeded() only continues when
-        // this ticket is set, including when the watch is not on the charger.
+        // The relaunch is a new process. The ticket lets isSyncNeeded() answer
+        // yes for it even when the plugged-in setting is off.
         Store.requestSync();
         complete(null);
         Communications.startSync2({
@@ -218,6 +259,9 @@ class AbSyncDelegate extends Communications.SyncDelegate {
             return;
         }
         Store.clearResume();
+        if (!_cancelled) {
+            Store.noteSyncResult(error);
+        }
         if (error == null) {
             Log.info("Sync: end, no error");
         } else {
@@ -236,7 +280,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         _stopped = true;
         stopWatchdog();
         stopNoteWatch();
-        stopRetry();
+        stopYield();
         Communications.notifySyncComplete(error);
     }
 
@@ -305,11 +349,28 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         return 0;
     }
 
-    private function stopRetry() as Void {
-        var timer = _retry;
+    private function stopYield() as Void {
+        var timer = _yield;
         if (timer != null) {
             timer.stop();
-            _retry = null;
+        }
+        _yieldArmed = false;
+    }
+
+    //! Starts the shared timer for one callback. False when no timer could be
+    //! started.
+    private function arm(callback as Method() as Void, ms as Number) as Boolean {
+        try {
+            var timer = _yield;
+            if (timer == null) {
+                timer = new Timer.Timer();
+                _yield = timer;
+            }
+            timer.start(callback, ms, false);
+            _yieldArmed = true;
+            return true;
+        } catch (ex) {
+            return false;
         }
     }
 
@@ -331,7 +392,8 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         }
         _stopped = true;
         Communications.cancelAllRequests();
-        finish("No response in phase " + _phase.toString());
+        Log.error("Sync: no response in phase " + _phase.toString());
+        finish(Errors.text(Rez.Strings.errNoResponse));
     }
 
     //! Any response or received byte counts as activity.
@@ -353,12 +415,32 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         return result;
     }
 
-    private function deleteLocal(bookId as String) as Void {
-        var refIds = Store.localTracks(bookId).keys();
-        for (var i = 0; i < refIds.size(); ++i) {
-            Media.deleteCachedItem(new Media.ContentRef(refIds[i], Media.CONTENT_TYPE_AUDIO));
+    //! Takes the next book that left the playlist off the watch. Its files go
+    //! one per timer turn, like the stale segments of a re-cut book: removing
+    //! them all inside one callback trips the execution watchdog.
+    private function removeNextOrphan() as Void {
+        if (_stopped || _finished) {
+            return;
         }
-        Store.forgetBook(bookId);
+        while (_orphans.size() > 0) {
+            var bookId = _orphans[0];
+            _orphans.remove(bookId);
+            var refIds = Store.localTracks(bookId).keys();
+            if (refIds.size() == 0) {
+                Store.forgetBook(bookId);
+                continue;
+            }
+            _dropBook = bookId;
+            _dropWholeBook = true;
+            _staleRefs = refIds;
+            _staleAt = 0;
+            scheduleStaleDrop();
+            return;
+        }
+        // Listening already agreed with the server is of no use for a book
+        // that is not on the watch and not about to be.
+        Store.pruneProgress(Store.desired(), Store.knownBooks());
+        nextBook();
     }
 
     // --- Phase 1: report listening progress --------------------------------------
@@ -418,26 +500,23 @@ class AbSyncDelegate extends Communications.SyncDelegate {
     //! Repeats the cancelled request after the notification has closed.
     //! Doing it inside the cancel callback is what used to crash.
     private function scheduleRetry() as Void {
-        if (_retry != null || _stopped || _finished) {
+        if (_yieldArmed || _stopped || _finished) {
             return;
         }
-        try {
-            var timer = new Timer.Timer();
-            timer.start(method(:onRetry), 1000, false);
-            _retry = timer;
-        } catch (ex) {
+        if (!arm(method(:onRetry), 1000)) {
             Log.warn("Sync: no retry timer");
         }
     }
 
     function onRetry() as Void {
-        _retry = null;
+        _yieldArmed = false;
         if (_stopped || _finished) {
             return;
         }
         _cancelRetries += 1;
         if (_cancelRetries > 3) {
             Log.warn("Sync: cancelled too often");
+            _cancelled = true;
             finish(null);
             return;
         }
@@ -496,7 +575,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
             return;
         }
         if (code != 200 || !(data instanceof Dictionary)) {
-            finish("HTTP " + code.toString());
+            finish(Errors.fromCode(code));
             return;
         }
 
@@ -510,17 +589,14 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         var wanted = Store.desired();
 
         // Books no longer in the playlist are removed from the watch.
-        var gone = orphans(wanted);
-        for (var i = 0; i < gone.size(); ++i) {
-            deleteLocal(gone[i]);
-        }
+        _orphans = orphans(wanted);
 
         _bookQueue = wanted;
         _booksTotal = _bookQueue.size();
         Log.code("Sync: per playlist", _booksTotal);
-        Log.code("Sync: removed", gone.size());
+        Log.code("Sync: to remove", _orphans.size());
         enterPhase(PHASE_PLAYLIST);
-        nextBook();
+        removeNextOrphan();
     }
 
     // --- Phase 3: fetch the books -----------------------------------------------
@@ -568,7 +644,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         }
         var bookId = _currentBook;
         if (code != 200 || !(data instanceof Dictionary) || bookId == null) {
-            _failure = "HTTP " + code.toString();
+            _failure = Errors.fromCode(code);
             bookDone();
             return;
         }
@@ -602,51 +678,130 @@ class AbSyncDelegate extends Communications.SyncDelegate {
 
         // A re-cut keeps the old index and changes the length. The file on
         // the watch is the previous cut, so it has to go before the download
-        // below treats that index as already present.
-        dropStaleSegments(bookId, segments);
-        var known = knownSegments(bookId);
+        // below treats that index as already present. The removal itself
+        // waits for a timer: doing every file in this callback is what
+        // tripped the execution watchdog.
+        queueSegmentWork(bookId, segments);
+    }
+
+    //! Split the listing into files to delete and files still to download.
+    //!
+    //! Gone means the index is absent, or the duration in whole seconds
+    //! differs. That is the same rounding the store used when it saved the
+    //! track, so an unchanged segment compares equal and stays.
+    private function queueSegmentWork(bookId as String, segments as Array<Dictionary>) as Void {
+        var durations = serverDurations(segments);
+        var facts = Store.localSegmentFacts(bookId);
+        var known = [] as Array<Number>;
+        _staleRefs = [] as Array;
+        _staleAt = 0;
+        _dropBook = bookId;
+        _dropWholeBook = false;
+        for (var i = 0; i < facts.size(); ++i) {
+            var entry = facts[i];
+            if (!(entry instanceof Dictionary)) {
+                continue;
+            }
+            var fact = entry as Dictionary;
+            var index = fact["index"];
+            var duration = fact["duration"];
+            if (index instanceof Number && duration instanceof Number && sameSegment(durations, index, duration)) {
+                known.add(index);
+                continue;
+            }
+            var ref = fact["ref"];
+            if (ref != null) {
+                _staleRefs.add(ref);
+            }
+        }
+
         _downloads = [] as Array<Dictionary>;
+        _bookBytesTotal = 0.0;
+        _bookBytesDone = 0.0;
+        _segmentBudget = 0;
         // segments is Array<Dictionary>: only Dictionaries were accumulated above.
         for (var i = 0; i < segments.size(); ++i) {
             var segment = segments[i];
             var index = segment["index"];
-            if (index instanceof Number && known.indexOf(index) < 0) {
+            if (!(index instanceof Number)) {
+                continue;
+            }
+            var size = numberOf(segment["bytes"]).toFloat();
+            _bookBytesTotal += size;
+            if (known.indexOf(index) >= 0) {
+                _bookBytesDone += size;
+            } else {
                 _downloads.add(segment);
             }
         }
         _downloadsTotal = _downloads.size();
         _downloadsDone = 0;
         Log.debugCode("Sync: segments total", segments.size());
+        Log.code("Sync: stale segments", _staleRefs.size());
         Log.code("Sync: of those to download", _downloadsTotal);
         enterPhase(PHASE_SEGMENTS);
+        if (_staleRefs.size() == 0) {
+            downloadNext();
+            return;
+        }
+        scheduleStaleDrop();
+    }
+
+    //! Removes the next stale file, then waits. One cached file per call.
+    function onStaleDrop() as Void {
+        _yieldArmed = false;
+        if (_stopped || _finished) {
+            return;
+        }
+        var bookId = _dropBook;
+        if (bookId == null || _staleAt >= _staleRefs.size()) {
+            afterDrop();
+            return;
+        }
+        var ref = _staleRefs[_staleAt];
+        _staleAt += 1;
+        if (ref != null) {
+            Media.deleteCachedItem(new Media.ContentRef(ref, Media.CONTENT_TYPE_AUDIO));
+            // A whole book is forgotten in one go at the end; there is no use
+            // in rewriting its track list once per file.
+            if (!_dropWholeBook) {
+                Store.dropLocalTrack(bookId, ref);
+            }
+        }
+        stirred();
+        report();
+        if (_staleAt < _staleRefs.size()) {
+            scheduleStaleDrop();
+            return;
+        }
+        Log.code("Sync: files removed", _staleAt);
+        afterDrop();
+    }
+
+    //! What follows the last removal: the next book that is leaving, or the
+    //! download of the current one.
+    private function afterDrop() as Void {
+        var bookId = _dropBook;
+        _staleRefs = [] as Array;
+        _staleAt = 0;
+        if (_dropWholeBook) {
+            _dropWholeBook = false;
+            if (bookId != null) {
+                Store.forgetBook(bookId);
+            }
+            removeNextOrphan();
+            return;
+        }
         downloadNext();
     }
 
-    //! Remove local segments the server no longer serves in this form.
-    //!
-    //! Gone means the index is absent, or the duration in whole seconds
-    //! differs. That is the same rounding the store used when it saved the
-    //! track, so an unchanged segment compares equal and stays.
-    private function dropStaleSegments(bookId as String, segments as Array<Dictionary>) as Void {
-        var durations = serverDurations(segments);
-        var refIds = Store.localTracks(bookId).keys();
-        var dropped = 0;
-        for (var i = 0; i < refIds.size(); ++i) {
-            var parts = Store.trackInfo(bookId, refIds[i]);
-            if (parts == null) {
-                continue;
-            }
-            var index = Store.toNumber(parts[0]);
-            var duration = Store.toNumber(parts[1]);
-            if (sameSegment(durations, index, duration)) {
-                continue;
-            }
-            Media.deleteCachedItem(new Media.ContentRef(refIds[i], Media.CONTENT_TYPE_AUDIO));
-            Store.dropLocalTrack(bookId, refIds[i]);
-            dropped += 1;
+    private function scheduleStaleDrop() as Void {
+        if (_yieldArmed || _stopped || _finished) {
+            return;
         }
-        if (dropped > 0) {
-            Log.code("Sync: stale segments removed", dropped);
+        if (!arm(method(:onStaleDrop), DROP_YIELD_MS)) {
+            Log.warn("Sync: no timer to remove stale segments");
+            finish(Errors.text(Rez.Strings.errCleanup));
         }
     }
 
@@ -681,18 +836,6 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         return durations;
     }
 
-    private function knownSegments(bookId as String) as Array<Number> {
-        var result = [] as Array<Number>;
-        var refIds = Store.localTracks(bookId).keys();
-        for (var i = 0; i < refIds.size(); ++i) {
-            var parts = Store.trackInfo(bookId, refIds[i]);
-            if (parts != null) {
-                result.add(Store.toNumber(parts[0]));
-            }
-        }
-        return result;
-    }
-
     private function downloadNext() as Void {
         if (_stopped) {
             return;
@@ -705,12 +848,17 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         _downloads.remove(segment);
         var path = segment["url"];
         if (!(path instanceof String)) {
+            _bookBytesTotal -= numberOf(segment["bytes"]).toFloat();
+            if (_bookBytesTotal < _bookBytesDone) {
+                _bookBytesTotal = _bookBytesDone;
+            }
             downloadNext();
             return;
         }
         _pending = segment;
         _segmentBytes = 0;
         _segmentSize = 0;
+        _segmentBudget = numberOf(segment["bytes"]);
         _step = STEP_DOWNLOAD;
         Log.info("Sync: downloading " + path);
         _client.downloadSegment(
@@ -720,7 +868,8 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         );
     }
 
-    //! Byte count during a segment, so the ring moves within a long download.
+    //! Byte count during a segment. The ring is the book's bytes, so this
+    //! moves it inside a long file instead of waiting for the file to finish.
     function onSegmentBytes(transferred as Number, size as Number?) as Void {
         stirred();
         _segmentBytes = transferred;
@@ -752,16 +901,60 @@ class AbSyncDelegate extends Communications.SyncDelegate {
                 numberOf(segment["duration"]),
                 segmentTitle
             )) {
-                _failure = "Store full";
+                _failure = Errors.text(Rez.Strings.errStoreFull);
             }
+            _bookBytesDone += _segmentBudget.toFloat();
         } else {
-            // The next sync only fetches the gap.
-            _failure = "HTTP " + code.toString();
+            if (segment != null && worthRetrying(code) && retrySegmentLater(segment, code)) {
+                return;
+            }
+            // Out of attempts: the next sync only fetches the gap.
+            _failure = Errors.fromCode(code);
         }
         _downloadsDone += 1;
         _segmentBytes = 0;
         _segmentSize = 0;
+        _segmentBudget = 0;
         report();
+        downloadNext();
+    }
+
+    //! A dropped link or a server hiccup is worth another try. A refusal in the
+    //! 4xx range will answer the same way again.
+    private function worthRetrying(code as Number) as Boolean {
+        return code < 400 || code >= 500;
+    }
+
+    //! Puts the failed segment back at the front of the queue and tries it
+    //! again after a pause. Returns false when the attempts are used up, or no
+    //! timer is available, and the caller then records the failure.
+    private function retrySegmentLater(segment as Dictionary, code as Number) as Boolean {
+        var index = numberOf(segment["index"]);
+        if (index != _attemptIndex) {
+            _attemptIndex = index;
+            _segmentAttempts = 0;
+        }
+        if (_segmentAttempts >= SEGMENT_RETRIES || _yieldArmed) {
+            return false;
+        }
+        if (!arm(method(:onSegmentRetry), SEGMENT_RETRY_MS)) {
+            Log.warn("Sync: no timer to try the segment again");
+            return false;
+        }
+        _segmentAttempts += 1;
+        Log.warnCode("Sync: segment failed, will try again, code", code);
+        requeuePending();
+        _segmentBytes = 0;
+        _segmentSize = 0;
+        _segmentBudget = 0;
+        return true;
+    }
+
+    function onSegmentRetry() as Void {
+        _yieldArmed = false;
+        if (_stopped || _finished) {
+            return;
+        }
         downloadNext();
     }
 
@@ -769,8 +962,18 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         _booksDone += 1;
         _downloadsTotal = 0;
         _downloadsDone = 0;
+        _staleRefs = [] as Array;
+        _staleAt = 0;
         _segmentBytes = 0;
         _segmentSize = 0;
+        _segmentBudget = 0;
+        _bookBytesTotal = 0.0;
+        _bookBytesDone = 0.0;
+        // The next book numbers its segments from zero again. The retry count
+        // is only cleared when the index changes, so a leftover count for
+        // segment N would apply to the next book's segment N.
+        _segmentAttempts = 0;
+        _attemptIndex = -1;
         report();
         nextBook();
     }
@@ -784,8 +987,12 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         var percent = _phase;
         if (_booksTotal > 0) {
             var withinBook = 0.0;
-            if (_downloadsTotal > 0) {
-                withinBook = (_downloadsDone.toFloat() + segmentShare()) / _downloadsTotal.toFloat();
+            if (_bookBytesTotal > 0.0) {
+                var done = _bookBytesDone + receivedBytes();
+                if (done > _bookBytesTotal) {
+                    done = _bookBytesTotal;
+                }
+                withinBook = done / _bookBytesTotal;
             }
             var share = (_booksDone.toFloat() + withinBook) / _booksTotal.toFloat();
             if (share > 1.0) {
@@ -801,15 +1008,15 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         Communications.notifySyncProgress(percent);
     }
 
-    //! Share of the segment currently in flight.
-    private function segmentShare() as Float {
-        if (_segmentSize <= 0 || _segmentBytes <= 0) {
+    //! Bytes of the segment in flight, never more than its listed size.
+    private function receivedBytes() as Float {
+        if (_segmentBudget <= 0 || _segmentBytes <= 0) {
             return 0.0;
         }
-        if (_segmentBytes >= _segmentSize) {
-            return 1.0;
+        if (_segmentBytes >= _segmentBudget) {
+            return _segmentBudget.toFloat();
         }
-        return _segmentBytes.toFloat() / _segmentSize.toFloat();
+        return _segmentBytes.toFloat();
     }
 
     static function numberOf(value as Object?) as Number {

@@ -37,6 +37,14 @@ module Progress {
             if (resume instanceof Dictionary) {
                 var segment = resume["segment"];
                 if (segment instanceof Number) {
+                    // Only while the position is still the one that went out.
+                    // Listening done while the request was out is newer than
+                    // anything the server said and stays pending, as in markSynced.
+                    var local = Store.position(bookId);
+                    if (local != null && local[2] != sentStamp(sent, bookId)) {
+                        Log.warn("Progress: kept newer local position for " + bookId);
+                        continue;
+                    }
                     Log.code("Progress: server is ahead in segment", segment);
                     Store.rememberPosition(
                         bookId, segment, AbSyncDelegate.numberOf(resume["offset"]), 0

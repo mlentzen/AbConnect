@@ -7,6 +7,13 @@ class AbContentIterator extends Media.ContentIterator {
     private var _bookId as String;
     private var _refs as Array;
     private var _titles as Array<String>;
+    //! Per playlist position: the segment number and its length in seconds.
+    private var _numbers as Array<Number>;
+    private var _lengths as Array<Number>;
+    //! Where each playlist position starts in the whole book, and the book's
+    //! length, both in seconds. The progress shown beside the author needs them.
+    private var _starts as Array<Number>;
+    private var _total as Number;
     private var _album as String;
     private var _artist as String;
     private var _index as Number;
@@ -21,6 +28,10 @@ class AbContentIterator extends Media.ContentIterator {
         _bookId = bookId;
         _refs = [] as Array;
         _titles = [] as Array<String>;
+        _numbers = [] as Array<Number>;
+        _lengths = [] as Array<Number>;
+        _starts = [] as Array<Number>;
+        _total = 0;
         _index = 0;
         _startPosition = 0;
         _startApplied = false;
@@ -76,10 +87,32 @@ class AbContentIterator extends Media.ContentIterator {
             _index = wanted;
             _startPosition = position[1];
             skipFinishedSegment();
+            if (_index == wanted && _startPosition == position[1]) {
+                rewindAfterBreak(position[0], position[1]);
+            }
         } else {
             // Segment not on the watch: fall back to the start.
             Log.errorCode("Iterator: no local segment numbered", position[0]);
         }
+    }
+
+    //! Steps back after a break, by how long the break was. Stays inside the
+    //! segment: the position never goes below 0.
+    private function rewindAfterBreak(segment as Number, seconds as Number) as Void {
+        if (seconds <= 0) {
+            return;
+        }
+        var idle = Store.idleSecondsAt(_bookId, segment, seconds);
+        if (idle == null) {
+            Log.debug("Iterator: no rewind, the spot was not left by playback here");
+            return;
+        }
+        var back = Rewind.secondsFor(idle);
+        if (back <= 0) {
+            return;
+        }
+        _startPosition = (seconds > back) ? seconds - back : 0;
+        Log.info("Iterator: stepping back " + back.toString() + " s after " + idle.toString() + " s");
     }
 
     //! A reset is the start of the book, including the next time playback opens.
@@ -88,12 +121,7 @@ class AbContentIterator extends Media.ContentIterator {
         if (_refs.size() == 0) {
             return;
         }
-        var parts = Store.trackInfo(_bookId, _refs[0]);
-        if (parts == null) {
-            Log.error("Iterator: the first segment has no store entry");
-            return;
-        }
-        Store.rememberPosition(_bookId, Store.toNumber(parts[0]), 0, Time.now().value());
+        Store.rememberPosition(_bookId, _numbers[0], 0, Time.now().value());
     }
 
     //! A finished segment is not a starting point: its remembered position is
@@ -132,20 +160,20 @@ class AbContentIterator extends Media.ContentIterator {
             Log.errorCode("Iterator: duration asked outside the playlist for", position);
             return 0;
         }
-        var parts = Store.trackInfo(_bookId, _refs[position]);
-        if (parts == null) {
-            Log.error("Iterator: no store entry for " + Log.describe(_refs[position]));
-            return 0;
-        }
-        return Store.toNumber(parts[1]);
+        return _lengths[position];
     }
 
-    //! Ordering lives in Store.orderedRefs(), shared with the chapter menu.
+    //! Ordering lives in Store.orderedSegments(), shared with the chapter menu.
     private function buildPlaylist() as Void {
-        _refs = Store.orderedRefs(_bookId);
-        for (var i = 0; i < _refs.size(); ++i) {
-            var parts = Store.trackInfo(_bookId, _refs[i]);
-            _titles.add((parts == null) ? "" : parts[2]);
+        var segments = Store.orderedSegments(_bookId);
+        for (var i = 0; i < segments.size(); ++i) {
+            var segment = segments[i];
+            _refs.add(segment["ref"]);
+            _titles.add(segment["title"] as String);
+            _numbers.add(segment["index"] as Number);
+            _lengths.add(segment["duration"] as Number);
+            _starts.add(_total);
+            _total += segment["duration"] as Number;
             if (Log.LEVEL >= Log.DEBUG) {
                 Log.debug(
                     "playlist " + i.toString()
@@ -157,9 +185,8 @@ class AbContentIterator extends Media.ContentIterator {
     }
 
     private function indexOfSegment(segment as Number) as Number {
-        for (var i = 0; i < _refs.size(); ++i) {
-            var parts = Store.trackInfo(_bookId, _refs[i]);
-            if (parts != null && Store.toNumber(parts[0]) == segment) {
+        for (var i = 0; i < _numbers.size(); ++i) {
+            if (_numbers[i] == segment) {
                 if (Log.LEVEL >= Log.DEBUG) {
                     Log.debugCode(
                         "Iterator: segment " + segment.toString() + " is playlist position", i
@@ -172,6 +199,25 @@ class AbContentIterator extends Media.ContentIterator {
         return -1;
     }
 
+    //! The author, and how far into the whole book this chapter starts, as one
+    //! short line: the player shows the chapter timer only, which says nothing
+    //! about the book. A resumed chapter counts the part already heard.
+    private function artistLine(position as Number) as String {
+        if (_total <= 0 || position < 0 || position >= _starts.size()) {
+            return _artist;
+        }
+        var seconds = _starts[position];
+        if (position == _index && !_startApplied) {
+            seconds += _startPosition;
+        }
+        var percent = (seconds * 100) / _total;
+        if (percent > 100) {
+            percent = 100;
+        }
+        var text = percent.toString() + " %";
+        return (_artist.length() > 0) ? _artist + " · " + text : text;
+    }
+
     //! Sets our titles on the cache's own metadata object, never a fresh one:
     //! a fresh ContentMetadata drops the protected duration and the player
     //! skips through the book.
@@ -182,7 +228,7 @@ class AbContentIterator extends Media.ContentIterator {
         }
         metadata.title = _titles[position];
         metadata.album = _album;
-        metadata.artist = _artist;
+        metadata.artist = artistLine(position);
         metadata.trackNumber = position + 1;
         content.setMetadata(metadata);
     }

@@ -12,9 +12,12 @@ class BookMenu extends WatchUi.Menu2 {
             // Listed as soon as one segment is on the watch, so the title line
             // can still be missing and the author can be blank.
             var info = Store.bookInfo(books[i]);
+            // How far along the listener is, once they have started; the
+            // author until then.
+            var progress = BookProgress.line(books[i]);
             addItem(new WatchUi.MenuItem(
                 MenuText.label(info[0], books[i]),
-                MenuText.sublabel(info[1]),
+                MenuText.sublabel((progress != null) ? progress : info[1]),
                 books[i],
                 null
             ));

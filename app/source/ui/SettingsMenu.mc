@@ -6,15 +6,27 @@ import Toybox.WatchUi;
 const URL_ITEM = :proxyUrlSetting;
 const TOKEN_ITEM = :proxyTokenSetting;
 const RESET_ITEM = :resetAll;
+const PLUGGED_IN_ITEM = :syncOnPluggedInSetting;
 
-//! URL and token. A side-loaded app has no settings page in Garmin Connect,
-//! so they are edited here and stored as application properties.
+//! URL, token and the plugged-in sync switch. A side-loaded app has no
+//! settings page in Garmin Connect, so they are edited here and stored as
+//! application properties.
 class SettingsMenu extends WatchUi.Menu2 {
 
     function initialize() {
         Menu2.initialize({ :title => Rez.Strings.menuSettings });
         addItem(item($.URL_ITEM, Rez.Strings.settingProxyUrlTitle, urlValue()));
         addItem(item($.TOKEN_ITEM, Rez.Strings.settingProxyTokenTitle, tokenValue()));
+        addItem(new WatchUi.ToggleMenuItem(
+            WatchUi.loadResource(Rez.Strings.settingSyncOnPluggedInTitle) as String,
+            {
+                :enabled => WatchUi.loadResource(Rez.Strings.settingOn) as String,
+                :disabled => WatchUi.loadResource(Rez.Strings.settingOff) as String
+            },
+            $.PLUGGED_IN_ITEM,
+            Settings.syncOnPluggedIn(),
+            null
+        ));
         var stats = Media.getCacheStatistics();
         addItem(new WatchUi.MenuItem(
             WatchUi.loadResource(Rez.Strings.resetAll) as String,
@@ -70,6 +82,12 @@ class SettingsMenuDelegate extends WatchUi.Menu2InputDelegate {
 
     function onSelect(item as WatchUi.MenuItem) as Void {
         var id = item.getId();
+        if (id == $.PLUGGED_IN_ITEM && item instanceof WatchUi.ToggleMenuItem) {
+            // The menu has already flipped the switch; store what it now shows.
+            Application.Properties.setValue(Settings.SYNC_ON_PLUGGED_IN, item.isEnabled());
+            Log.info("Settings: sync on plugged in " + item.isEnabled().toString());
+            return;
+        }
         if (id == $.RESET_ITEM) {
             Log.info("Settings: asking about reset");
             WatchUi.pushView(
