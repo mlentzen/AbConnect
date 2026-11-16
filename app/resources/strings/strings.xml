@@ -6,10 +6,15 @@
     <string id="settingProxyTokenTitle">Proxy token</string>
     <string id="settingProxyTokenPrompt">This watch's token from the proxy's users.toml</string>
 
+    <string id="settingFollowSystemSyncTitle">Follow system sync</string>
+    <string id="settingFollowSystemSyncPrompt">Download books whenever the watch starts a sync</string>
+    <string id="settingOn">On</string>
+    <string id="settingOff">Off</string>
+
     <string id="menuSyncTitle">Books</string>
-    <string id="syncFromServer">Chosen on the server</string>
+    <string id="syncFromServer">Playlist</string>
     <string id="loading">Loading…</string>
-    <string id="notConfigured">Settings needed</string>
+    <string id="notConfigured">Set the proxy URL and token in Settings</string>
     <string id="statusPreparing">preparing</string>
     <string id="statusReady">on watch</string>
     <string id="statusPending">not prepared</string>
@@ -39,7 +44,28 @@
     <string id="infoPending">Waiting</string>
     <string id="infoChecked">Playlist</string>
     <string id="infoNever">never</string>
-    <string id="infoAgo">ago</string>
     <string id="progressNotSent">Progress not synced</string>
     <string id="tries">tries</string>
+    <string id="errNotSetUp">Proxy not set up</string>
+    <string id="errHttpsUrl">The proxy URL must start with https://</string>
+    <string id="errNoResponse">The server did not answer</string>
+    <string id="errNoConnection">No connection</string>
+    <string id="errRejected">Token rejected</string>
+    <string id="errNotFound">Not found on the server</string>
+    <string id="errNotReady">Not ready yet</string>
+    <string id="errServer">Server error</string>
+    <string id="errOther">Unexpected answer</string>
+    <string id="errStoreFull">Watch storage is full</string>
+    <string id="errCleanup">Could not remove old files</string>
+    <string id="infoAgoMinutes">$1$ min ago</string>
+    <string id="infoAgoHours">$1$ h ago</string>
+    <string id="infoAgoDays">$1$ d ago</string>
+    <string id="agoNow">just now</string>
+    <string id="bookProgress">$1$ % · $2$</string>
+    <string id="bookLeftMinutes">$1$ min</string>
+    <string id="bookLeftHours">$1$ h $2$ min</string>
+    <string id="bookFinished">Finished</string>
+    <string id="syncFailedAgo">$1$ · failed</string>
+    <string id="chapterNow">now</string>
+    <string id="menuChapters">Chapters</string>
 </strings>

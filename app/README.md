@@ -71,17 +71,17 @@ the app menu is the library behind those controls.
 ```
 AbConnect
 ├─ Continue              the book that was last playing, one press  (only when there is one)
-├─ Books                 everything playable on the watch → chapters → Resume / From the start
+├─ Books                 everything playable on the watch, with how far along you are → chapters → Resume / From the start
 ├─ Sync progress         positions both ways over the phone, no Wi-Fi, no sync mode
-├─ Download books        Wi-Fi: report progress, read the playlist, mirror it
-├─ Chosen on the server  the playlist and the state of each book
-├─ Settings              proxy URL, token, and Reset everything
+├─ Download books        Wi-Fi: report progress, read the playlist, mirror it; shows how the last sync went
+├─ Server selection      the playlist and the state of each book
+├─ Settings              proxy URL, token, Follow system sync, and Reset everything
 └─ Info                  version, build date, and what is on the watch
 ```
 
-A sync runs only when you ask for it, from **Download books** or from the
+A sync starts when you ask for it, from **Download books** or from the
 system sync configuration for this provider (**Music providers → AbConnect**).
-The request stays fresh for two minutes; after that a sync waits until you ask
-again. The Info screen shows how long ago the playlist was last read.
+
+The Info screen shows how long ago the playlist was last read.
 Downloading uses Wi-Fi and it is recommended to plug in the watch during that time. That same sync
 configuration shows the playlist and the state of each book on the server.

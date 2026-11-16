@@ -3,6 +3,9 @@
         <settingConfig type="alphaNumeric" maxLength="120" required="true"/>
     </setting>
     <setting propertyKey="@Properties.proxyToken" title="@Strings.settingProxyTokenTitle" prompt="@Strings.settingProxyTokenPrompt">
-        <settingConfig type="alphaNumeric" maxLength="120" required="true"/>
+        <settingConfig type="password" maxLength="120" required="true"/>
+    </setting>
+    <setting propertyKey="@Properties.followSystemSync" title="@Strings.settingFollowSystemSyncTitle" prompt="@Strings.settingFollowSystemSyncPrompt">
+        <settingConfig type="boolean"/>
     </setting>
 </settings>

@@ -425,10 +425,9 @@ def _register(app: FastAPI) -> None:
                 stored = await user.abs.get_progress(book_id)
             except AbsError:
                 stored = None
-            if stored and stored.get("currentTime"):
-                spot = progress.position(
-                    manifest["segments"], float(stored["currentTime"])
-                )
+            server_time = progress.server_time(stored, manifest["segments"])
+            if server_time:
+                spot = progress.position(manifest["segments"], server_time)
                 payload["resume"] = {
                     "segment": spot.segment,
                     "offset": spot.offset,
@@ -547,7 +546,7 @@ def _register(app: FastAPI) -> None:
             except AbsError:
                 stored = None
 
-            server_time = float((stored or {}).get("currentTime") or 0.0)
+            server_time = progress.server_time(stored, manifest["segments"])
             server_ts = progress.server_timestamp(stored)
             winner, winning_time = progress.choose(
                 watch_time=watch_time,

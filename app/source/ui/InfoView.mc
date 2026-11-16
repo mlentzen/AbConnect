@@ -22,7 +22,6 @@ class InfoView extends WatchUi.View {
         var left = (width * MARGIN).toNumber();
         var right = width - left;
 
-        // Centred as a block: the top and bottom of a round screen are narrow.
         var rowHeight = dc.getFontHeight(Graphics.FONT_XTINY);
         var titleHeight = dc.getFontHeight(Graphics.FONT_SMALL);
         var blockHeight = titleHeight + rowHeight * 6;
@@ -31,7 +30,7 @@ class InfoView extends WatchUi.View {
         dc.drawText(
             centre, y,
             Graphics.FONT_SMALL,
-            (WatchUi.loadResource(Rez.Strings.AppName) as String) + " " + $.APP_VERSION,
+            Util.text(Rez.Strings.AppName) + " " + $.APP_VERSION,
             Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER
         );
         y += titleHeight / 2 + rowHeight / 2;
@@ -64,7 +63,7 @@ class InfoView extends WatchUi.View {
     ) as Void {
         dc.drawText(
             left, y, Graphics.FONT_XTINY,
-            WatchUi.loadResource(label) as String,
+            Util.text(label),
             Graphics.TEXT_JUSTIFY_LEFT | Graphics.TEXT_JUSTIFY_VCENTER
         );
         dc.drawText(
@@ -76,16 +75,8 @@ class InfoView extends WatchUi.View {
     private static function lastCheck() as String {
         var stamp = Store.lastCheck();
         if (stamp == 0) {
-            return WatchUi.loadResource(Rez.Strings.infoNever) as String;
+            return Util.text(Rez.Strings.infoNever);
         }
-        var ago = WatchUi.loadResource(Rez.Strings.infoAgo) as String;
-        var seconds = Time.now().value() - stamp;
-        if (seconds < 3600) {
-            return (seconds / 60).toString() + " min " + ago;
-        }
-        if (seconds < 86400) {
-            return (seconds / 3600).toString() + " h " + ago;
-        }
-        return (seconds / 86400).toString() + " d " + ago;
+        return Ago.since(stamp);
     }
 }

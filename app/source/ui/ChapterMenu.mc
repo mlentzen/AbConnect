@@ -8,62 +8,68 @@ const FROM_START_ITEM = :fromStart;
 
 class ChapterMenu extends WatchUi.Menu2 {
 
-    function initialize(bookId as String) {
-        var info = Store.bookInfo(bookId);
-        Menu2.initialize({ :title => MenuText.label(info[0], bookId) });
+    private var _focusAt as Number;
 
-        var refs = Store.orderedRefs(bookId);
+    function initialize(bookId as String) {
+        Menu2.initialize({ :title => MenuText.label(Store.bookInfo(bookId)[0], bookId) });
+        _focusAt = 0;
+
+        var segments = Store.orderedSegments(bookId);
+        var starts = Store.segmentStarts(segments);
         var position = Store.position(bookId);
-        Log.debugCode("Chapters: building for segments", refs.size());
+        Log.debugCode("Chapters: building for segments", segments.size());
 
         if (position != null) {
-            addItem(
-                new WatchUi.MenuItem(
-                    WatchUi.loadResource(Rez.Strings.resume) as String,
-                    landingPoint(bookId, refs, position),
-                    $.RESUME_ITEM,
-                    null
-                )
-            );
+            addItem(new WatchUi.MenuItem(
+                Util.text(Rez.Strings.resume), landingPoint(segments, starts, position), $.RESUME_ITEM, null
+            ));
         }
-        addItem(
-            new WatchUi.MenuItem(
-                WatchUi.loadResource(Rez.Strings.fromStart) as String,
-                null,
-                $.FROM_START_ITEM,
-                null
-            )
-        );
+        addItem(new WatchUi.MenuItem(Util.text(Rez.Strings.fromStart), null, $.FROM_START_ITEM, null));
 
-        var start = 0;
-        for (var i = 0; i < refs.size(); ++i) {
-            var parts = Store.trackInfo(bookId, refs[i]);
-            if (parts == null) {
-                continue;
+        var leadingRows = (position == null) ? 1 : 2;
+        var playing = (position == null) ? -1 : position[0];
+        for (var i = 0; i < segments.size(); ++i) {
+            var number = segments[i][Store.SEG_INDEX] as Number;
+            var when = clock(starts[i]);
+            if (number == playing) {
+                when += " · " + Util.text(Rez.Strings.chapterNow);
+                _focusAt = leadingRows + i;
             }
             addItem(new WatchUi.MenuItem(
-                MenuText.label(parts[2], Store.toNumber(parts[0]).toString()),
-                clock(start),
-                Store.toNumber(parts[0]),
-                null
+                MenuText.label(segments[i][Store.SEG_TITLE] as String, number.toString()), when, number, null
             ));
-            start += Store.toNumber(parts[1]);
         }
     }
 
+    function onShow() as Void {
+        Menu2.onShow();
+        if (_focusAt > 0) {
+            setFocus(_focusAt);
+            _focusAt = 0;
+        }
+    }
+
+    static function currentTitle(bookId as String) as String? {
+        var position = Store.position(bookId);
+        if (position == null) {
+            return null;
+        }
+        var segments = Store.orderedSegments(bookId);
+        for (var i = 0; i < segments.size(); ++i) {
+            if ((segments[i][Store.SEG_INDEX] as Number) == position[0]) {
+                return segments[i][Store.SEG_TITLE] as String;
+            }
+        }
+        return null;
+    }
+
     private static function landingPoint(
-        bookId as String, refs as Array, position as Array<Number>
+        segments as Array<Array>, starts as Array<Number>, position as Array<Number>
     ) as String {
-        var start = 0;
-        for (var i = 0; i < refs.size(); ++i) {
-            var parts = Store.trackInfo(bookId, refs[i]);
-            if (parts == null) {
-                continue;
+        for (var i = 0; i < segments.size(); ++i) {
+            if ((segments[i][Store.SEG_INDEX] as Number) == position[0]) {
+                return (segments[i][Store.SEG_TITLE] as String) + " - " + clock(starts[i] + position[1]);
             }
-            if (Store.toNumber(parts[0]) == position[0]) {
-                return parts[2] + " - " + clock(start + position[1]);
-            }
-            start += Store.toNumber(parts[1]);
         }
         return clock(position[1]);
     }
@@ -91,26 +97,20 @@ class ChapterMenuDelegate extends WatchUi.Menu2InputDelegate {
         if (id == $.RESUME_ITEM) {
             Log.info("Chapters: agreeing with the server before playing");
             _push.syncThenPlay(_bookId);
-            return;
-        }
-        if (id == $.FROM_START_ITEM) {
+        } else if (id == $.FROM_START_ITEM) {
             startAt(firstSegment());
-            return;
-        }
-        if (id instanceof Number) {
+        } else if (id instanceof Number) {
             startAt(id);
         }
     }
 
+    function onBack() as Void {
+        WatchUi.popView(WatchUi.SLIDE_IMMEDIATE);
+    }
+
     private function firstSegment() as Number {
-        var refs = Store.orderedRefs(_bookId);
-        for (var i = 0; i < refs.size(); ++i) {
-            var parts = Store.trackInfo(_bookId, refs[i]);
-            if (parts != null) {
-                return Store.toNumber(parts[0]);
-            }
-        }
-        return 0;
+        var segments = Store.orderedSegments(_bookId);
+        return (segments.size() > 0) ? segments[0][Store.SEG_INDEX] as Number : 0;
     }
 
     private function startAt(segment as Number) as Void {
@@ -119,9 +119,5 @@ class ChapterMenuDelegate extends WatchUi.Menu2InputDelegate {
         Current.set(_bookId);
         Log.info("Chapters: startPlayback " + _bookId);
         Media.startPlayback(_bookId);
-    }
-
-    function onBack() as Void {
-        WatchUi.popView(WatchUi.SLIDE_IMMEDIATE);
     }
 }

@@ -432,6 +432,21 @@ class TestSegments:
             "ts": 1_700_000_000.0,
         }
 
+    def test_a_finished_book_resumes_at_its_end(self, config):
+        prepared_book(config)
+        handler = abs_handler(
+            progress_payload={
+                "currentTime": 1799.2,
+                "isFinished": True,
+                "lastUpdate": 1_700_000_000_000,
+            }
+        )
+        with build_client(config, handler) as client:
+            payload = client.get("/v1/books/li_a/segments", headers=HEAD).json()
+
+        assert payload["resume"]["segment"] == 1
+        assert payload["resume"]["offset"] == 900.0
+
     def test_serves_the_segment_file(self, config):
         prepared_book(config)
         with build_client(config) as client:
@@ -784,6 +799,28 @@ class TestProgress:
             ).json()
 
         assert payload["books"][0]["resume"] == {"segment": 1, "offset": 600.0}
+
+    def test_a_finished_book_is_handed_back_at_its_end(self, config):
+        prepared_book(config)
+        handler = abs_handler(
+            progress_payload={
+                "currentTime": 1799.2,
+                "isFinished": True,
+                "lastUpdate": 1_800_000_000_000,
+            }
+        )
+        with build_client(config, handler) as client:
+            payload = client.post(
+                "/v1/progress",
+                headers=HEAD,
+                json={
+                    "entries": [
+                        {"book_id": "li_a", "segment": 1, "offset": 899, "ts": 0}
+                    ]
+                },
+            ).json()
+
+        assert payload["books"][0]["resume"] == {"segment": 1, "offset": 900.0}
 
     def test_a_batch_may_hold_twice_the_books_on_the_watch(self, config):
         def entries(count):

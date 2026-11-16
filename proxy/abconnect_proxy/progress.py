@@ -64,6 +64,27 @@ def position(segments: list[dict], time_in_book: float) -> Position:
     return Position(int(chosen["index"]), round(offset, 3))
 
 
+def server_time(progress: dict | None, segments: list[dict]) -> float:
+    """Read where Audiobookshelf has the listener, in absolute book time.
+
+    A book marked finished stands at the end of its last segment, wherever
+    Audiobookshelf left currentTime.
+
+    Args:
+        progress: JSON from the progress endpoint, or None when there is none.
+        segments: Manifest entries in book order.
+
+    Returns:
+        Absolute book time in seconds, or 0 when there is no position.
+    """
+    if not progress:
+        return 0.0
+    if progress.get("isFinished") and segments:
+        last = segments[-1]
+        return float(last["book_start"]) + float(last["duration"])
+    return float(progress.get("currentTime") or 0.0)
+
+
 def server_timestamp(progress: dict | None) -> float:
     """Read when Audiobookshelf last stored this position.
 
