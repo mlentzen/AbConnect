@@ -26,7 +26,11 @@ class MainMenu extends WatchUi.Menu2 {
 
     function onShow() as Void {
         Menu2.onShow();
-        if (state(Store.playlistCounts()).equals(_state)) {
+        if (state(Store.playlistCounts(), Store.resumableBook()).equals(_state)) {
+            var index = findItemById($.SYNC_ITEM);
+            if (index >= 0) {
+                updateItem(syncRow(), index);
+            }
             return;
         }
         Log.info("Menu: the store changed, rebuilding");
@@ -36,8 +40,7 @@ class MainMenu extends WatchUi.Menu2 {
         setFocus(0);
     }
 
-    private static function state(counts as Array<Number>) as String {
-        var resumable = Store.resumableBook();
+    private static function state(counts as Array<Number>, resumable as String?) as String {
         var chapter = "";
         if (resumable != null) {
             var position = Store.position(resumable);
@@ -51,14 +54,22 @@ class MainMenu extends WatchUi.Menu2 {
             + "|" + chapter
             + "|" + ProgressPush.pending().toString()
             + "|" + (Media.getCacheStatistics().size / 1048576).toString()
-            + "|" + syncLine();
+            + "|" + syncStamp();
+    }
+
+    private static function syncStamp() as String {
+        var result = Store.lastSyncResult();
+        if (result == null) {
+            return "";
+        }
+        return (result[0] as Number).toString() + ((result[1] == null) ? "" : "!");
     }
 
     private function build() as Void {
         var counts = Store.playlistCounts();
-        _state = state(counts);
-
         var resumable = Store.resumableBook();
+        _state = state(counts, resumable);
+
         if (resumable != null) {
             addItem(row(
                 Rez.Strings.menuContinue, MenuText.sublabel(Store.bookInfo(resumable)[0]),
@@ -75,10 +86,14 @@ class MainMenu extends WatchUi.Menu2 {
         Log.debugCode("Menu: playable", books.size());
         addItem(row(Rez.Strings.menuBooks, localSubtitle(books.size()), $.BOOKS_ITEM, Rez.Drawables.IconBooks));
         addItem(row(Rez.Strings.sendProgress, ProgressPush.rowSubtitle(), $.PROGRESS_ITEM, Rez.Drawables.IconSync));
-        addItem(row(Rez.Strings.menuSync, MenuText.sublabel(syncLine()), $.SYNC_ITEM, Rez.Drawables.IconSync));
+        addItem(syncRow());
         addItem(row(Rez.Strings.syncFromServer, serverSubtitle(counts), $.SERVER_ITEM, Rez.Drawables.IconSync));
         addItem(row(Rez.Strings.menuSettings, null, $.SETTINGS_ITEM, Rez.Drawables.IconSettings));
         addItem(row(Rez.Strings.menuInfo, null, $.INFO_ITEM, Rez.Drawables.IconInfo));
+    }
+
+    private static function syncRow() as WatchUi.IconMenuItem {
+        return row(Rez.Strings.menuSync, MenuText.sublabel(syncLine()), $.SYNC_ITEM, Rez.Drawables.IconSync);
     }
 
     private static function row(
@@ -221,11 +236,8 @@ class MainMenuDelegate extends WatchUi.Menu2InputDelegate {
     }
 
     private function refreshCatalog() as Void {
-        var catalog = _catalog;
-        if (catalog == null) {
-            catalog = new ProxyClient();
-            _catalog = catalog;
-        }
+        var catalog = new ProxyClient();
+        _catalog = catalog;
         if (catalog.isConfigured()) {
             catalog.playlist(method(:onCatalog));
         }

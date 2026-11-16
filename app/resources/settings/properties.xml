@@ -1,5 +1,5 @@
 <properties>
     <property id="proxyUrl" type="string"></property>
     <property id="proxyToken" type="string"></property>
-    <property id="syncOnPluggedIn" type="boolean">true</property>
+    <property id="followSystemSync" type="boolean">true</property>
 </properties>

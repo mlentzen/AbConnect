@@ -6,7 +6,7 @@ import Toybox.WatchUi;
 const URL_ITEM = :proxyUrlSetting;
 const TOKEN_ITEM = :proxyTokenSetting;
 const RESET_ITEM = :resetAll;
-const PLUGGED_IN_ITEM = :syncOnPluggedInSetting;
+const FOLLOW_SYNC_ITEM = :followSystemSyncSetting;
 
 class SettingsMenu extends WatchUi.Menu2 {
 
@@ -15,13 +15,13 @@ class SettingsMenu extends WatchUi.Menu2 {
         addItem(textItem($.URL_ITEM));
         addItem(textItem($.TOKEN_ITEM));
         addItem(new WatchUi.ToggleMenuItem(
-            Util.text(Rez.Strings.settingSyncOnPluggedInTitle),
+            Util.text(Rez.Strings.settingFollowSystemSyncTitle),
             {
                 :enabled => Util.text(Rez.Strings.settingOn),
                 :disabled => Util.text(Rez.Strings.settingOff)
             },
-            $.PLUGGED_IN_ITEM,
-            Settings.syncOnPluggedIn(),
+            $.FOLLOW_SYNC_ITEM,
+            Settings.followSystemSync(),
             null
         ));
         addItem(new WatchUi.MenuItem(
@@ -72,9 +72,9 @@ class SettingsMenuDelegate extends WatchUi.Menu2InputDelegate {
 
     function onSelect(item as WatchUi.MenuItem) as Void {
         var id = item.getId();
-        if (id == $.PLUGGED_IN_ITEM && item instanceof WatchUi.ToggleMenuItem) {
-            Application.Properties.setValue(Settings.SYNC_ON_PLUGGED_IN, item.isEnabled());
-            Log.info("Settings: sync on plugged in " + item.isEnabled().toString());
+        if (id == $.FOLLOW_SYNC_ITEM && item instanceof WatchUi.ToggleMenuItem) {
+            Application.Properties.setValue(Settings.FOLLOW_SYSTEM_SYNC, item.isEnabled());
+            Log.info("Settings: follow system sync " + item.isEnabled().toString());
         } else if (id == $.RESET_ITEM) {
             Log.info("Settings: asking about reset");
             WatchUi.pushView(
@@ -86,7 +86,7 @@ class SettingsMenuDelegate extends WatchUi.Menu2InputDelegate {
             id = id as Symbol;
             Log.info("Settings: edit " + SettingsMenu.settingKey(id));
             WatchUi.pushView(
-                new WatchUi.TextPicker(SettingsMenu.settingValue(id)),
+                new WatchUi.TextPicker((id == $.TOKEN_ITEM) ? "" : SettingsMenu.settingValue(id)),
                 new SettingEditDelegate(_menu, id),
                 WatchUi.SLIDE_IMMEDIATE
             );
@@ -112,7 +112,7 @@ class SettingEditDelegate extends WatchUi.TextPickerDelegate {
     }
 
     function onTextEntered(text as String, changed as Boolean) as Boolean {
-        if (!changed) {
+        if (!changed || (_id == $.TOKEN_ITEM && text.length() == 0)) {
             return true;
         }
         var value = text;

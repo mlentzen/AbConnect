@@ -12,19 +12,39 @@ module Store {
     const RESUME_CANCEL_WINDOW_SECONDS = 20;
     const RESUME_ECHO_LIMIT = 2;
 
+    const SEG_REF = 0;
+    const SEG_INDEX = 1;
+    const SEG_DURATION = 2;
+    const SEG_TITLE = 3;
+    const MAX_SEGMENTS = TRACKS_PER_CHUNK * MAX_TRACK_CHUNKS;
+
     function checkSchema() as Void {
         var version = Application.Storage.getValue(Keys.SCHEMA);
         if (!(version instanceof Number) || version != Keys.SCHEMA_VERSION) {
+            try {
+                Media.resetContentCache();
+            } catch (ex) {
+                Log.error("Store: media cache could not be reset");
+            }
             Application.Storage.clearValues();
             Application.Storage.setValue(Keys.SCHEMA, Keys.SCHEMA_VERSION);
         }
-        Application.Storage.deleteValue(Keys.LEGACY_AUTO_SYNC);
     }
 
     function reset() as Void {
         Media.resetContentCache();
         Application.Storage.clearValues();
         Application.Storage.setValue(Keys.SCHEMA, Keys.SCHEMA_VERSION);
+    }
+
+    function put(key as String, value as Application.PersistableType) as Boolean {
+        try {
+            Application.Storage.setValue(key, value);
+            return true;
+        } catch (ex) {
+            Log.error("Store: write refused for " + key);
+            return false;
+        }
     }
 
     function now() as Number {
@@ -52,21 +72,21 @@ module Store {
                 continue;
             }
             var id = book["id"];
-            if (!(id instanceof String)) {
+            if (!(id instanceof String) || !Util.isSafeId(id)) {
                 continue;
             }
             var percent = book["percent"];
             rows.add(
                 id
-                    + "|" + Util.stringOr(book["status"], "")
+                    + "|" + Util.withoutSeparator(Util.stringOr(book["status"], ""))
                     + "|" + ((percent instanceof Number) ? percent.toString() : "")
                     + "|" + Util.stringOr(book["title"], "")
             );
             ids.add(id);
         }
-        Application.Storage.setValue(Keys.PLAYLIST, rows);
-        Application.Storage.setValue(Keys.DESIRED, ids);
-        Application.Storage.setValue(Keys.LAST_CHECK, now());
+        put(Keys.PLAYLIST, rows);
+        put(Keys.DESIRED, ids);
+        put(Keys.LAST_CHECK, now());
     }
 
     function playlistEntry(row as String) as Array<String> {
@@ -139,6 +159,19 @@ module Store {
         return chunks;
     }
 
+    function hasTracks(bookId as String) as Boolean {
+        for (var chunk = 0; chunk < MAX_TRACK_CHUNKS; ++chunk) {
+            var stored = readChunk(bookId, chunk);
+            if (stored == null) {
+                return false;
+            }
+            if (stored.size() > 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     function localTracks(bookId as String) as Dictionary {
         var merged = {};
         var chunks = allChunks(bookId);
@@ -155,7 +188,7 @@ module Store {
         bookId as String, refId as Object, segment as Number, duration as Number, title as String
     ) as Boolean {
         remember(bookId);
-        var record = segment.toString() + "|" + duration.toString() + "|" + title;
+        var record = segment.toString() + "|" + duration.toString() + "|" + Util.withoutSeparator(title);
         var open = -1;
         var openTracks = {};
         for (var chunk = 0; chunk < MAX_TRACK_CHUNKS; ++chunk) {
@@ -197,8 +230,8 @@ module Store {
         }
     }
 
-    function localSegmentFacts(bookId as String) as Array<Dictionary> {
-        var facts = [] as Array<Dictionary>;
+    function localSegmentFacts(bookId as String) as Array<Array> {
+        var facts = [] as Array<Array>;
         var chunks = allChunks(bookId);
         for (var c = 0; c < chunks.size(); ++c) {
             var ids = chunks[c].keys();
@@ -209,12 +242,7 @@ module Store {
                     Log.error("Store: unreadable entry for " + Log.describe(ids[i]));
                     continue;
                 }
-                facts.add({
-                    "ref" => ids[i],
-                    "index" => Util.toNumber(parts[0]),
-                    "duration" => Util.toNumber(parts[1]),
-                    "title" => parts[2]
-                });
+                facts.add([ids[i], Util.toNumber(parts[0]), Util.toNumber(parts[1]), parts[2]] as Array);
             }
         }
         return facts;
@@ -235,26 +263,70 @@ module Store {
         return null;
     }
 
-    function orderedSegments(bookId as String) as Array<Dictionary> {
+    function segmentTimes(bookId as String, segment as Number) as Array<Number> {
+        var before = 0;
+        var total = 0;
+        for (var chunk = 0; chunk < MAX_TRACK_CHUNKS; ++chunk) {
+            var stored = readChunk(bookId, chunk);
+            if (stored == null) {
+                break;
+            }
+            var records = stored.values();
+            for (var i = 0; i < records.size(); ++i) {
+                var record = records[i];
+                if (!(record instanceof String)) {
+                    continue;
+                }
+                var first = record.find("|");
+                if (first == null) {
+                    continue;
+                }
+                var rest = record.substring(first + 1, record.length()) as String;
+                var second = rest.find("|");
+                if (second == null) {
+                    continue;
+                }
+                var duration = Util.toNumber(rest.substring(0, second) as String);
+                total += duration;
+                if (Util.toNumber(record.substring(0, first) as String) < segment) {
+                    before += duration;
+                }
+            }
+        }
+        return [before, total] as Array<Number>;
+    }
+
+    function segmentStarts(segments as Array<Array>) as Array<Number> {
+        var starts = [] as Array<Number>;
+        var total = 0;
+        for (var i = 0; i < segments.size(); ++i) {
+            starts.add(total);
+            total += segments[i][SEG_DURATION] as Number;
+        }
+        starts.add(total);
+        return starts;
+    }
+
+    function orderedSegments(bookId as String) as Array<Array> {
         var facts = localSegmentFacts(bookId);
         var highest = -1;
         for (var i = 0; i < facts.size(); ++i) {
-            var index = facts[i]["index"] as Number;
-            if (index > highest) {
+            var index = facts[i][SEG_INDEX] as Number;
+            if (index > highest && index < MAX_SEGMENTS) {
                 highest = index;
             }
         }
         var slots = new [highest + 1] as Array;
         for (var i = 0; i < facts.size(); ++i) {
-            var slot = facts[i]["index"] as Number;
-            if (slot >= 0) {
+            var slot = facts[i][SEG_INDEX] as Number;
+            if (slot >= 0 && slot < slots.size()) {
                 slots[slot] = facts[i];
             }
         }
-        var ordered = [] as Array<Dictionary>;
+        var ordered = [] as Array<Array>;
         for (var slot = 0; slot < slots.size(); ++slot) {
             if (slots[slot] != null) {
-                ordered.add(slots[slot] as Dictionary);
+                ordered.add(slots[slot] as Array);
             }
         }
         if (ordered.size() < slots.size()) {
@@ -276,10 +348,13 @@ module Store {
             }
         }
         Application.Storage.deleteValue(Keys.book(bookId));
+        if (bookId.equals(Current.bookId())) {
+            Current.clear();
+        }
         var known = knownBooks();
         if (known.indexOf(bookId) >= 0) {
             known.remove(bookId);
-            Application.Storage.setValue(Keys.KNOWN, known);
+            put(Keys.KNOWN, known);
         }
     }
 
@@ -291,12 +366,15 @@ module Store {
         var known = knownBooks();
         if (known.indexOf(bookId) < 0) {
             known.add(bookId);
-            Application.Storage.setValue(Keys.KNOWN, known);
+            put(Keys.KNOWN, known);
         }
     }
 
     function setBookInfo(bookId as String, title as String, author as String, segments as Number) as Void {
-        Application.Storage.setValue(Keys.book(bookId), title + "|" + author + "|" + segments.toString());
+        put(
+            Keys.book(bookId),
+            Util.withoutSeparator(title) + "|" + Util.withoutSeparator(author) + "|" + segments.toString()
+        );
     }
 
     function bookInfo(bookId as String) as Array<String> {
@@ -351,7 +429,7 @@ module Store {
     function rememberPosition(bookId as String, segment as Number, seconds as Number, timestamp as Number) as Void {
         var all = progress();
         all[bookId] = segment.toString() + "|" + seconds.toString() + "|" + timestamp.toString();
-        Application.Storage.setValue(Keys.PROGRESS, all);
+        put(Keys.PROGRESS, all);
     }
 
     function position(bookId as String) as Array<Number>? {
@@ -367,7 +445,7 @@ module Store {
     }
 
     function notePlayed(bookId as String, segment as Number, seconds as Number, timestamp as Number) as Void {
-        Application.Storage.setValue(Keys.LAST_PLAYED, [bookId, timestamp, segment, seconds] as Array);
+        put(Keys.LAST_PLAYED, [bookId, timestamp, segment, seconds] as Array);
     }
 
     function idleSecondsAt(bookId as String, segment as Number, seconds as Number) as Number? {
@@ -411,7 +489,7 @@ module Store {
             removed += 1;
         }
         if (removed > 0) {
-            Application.Storage.setValue(Keys.PROGRESS, all);
+            put(Keys.PROGRESS, all);
             Log.code("Store: dropped progress entries", removed);
         }
     }
@@ -460,15 +538,15 @@ module Store {
 
     function resumableBook() as String? {
         var current = Current.bookId();
-        if (current != null && localTracks(current).size() > 0) {
+        if (current != null && hasTracks(current)) {
             return current;
         }
         var best = null as String?;
-        var bestStamp = 0;
+        var bestStamp = -1;
         var bookIds = progress().keys();
         for (var i = 0; i < bookIds.size(); ++i) {
             var bookId = bookIds[i];
-            if (!(bookId instanceof String) || localTracks(bookId).size() == 0) {
+            if (!(bookId instanceof String) || !hasTracks(bookId)) {
                 continue;
             }
             var spot = position(bookId);
@@ -481,7 +559,7 @@ module Store {
     }
 
     function requestSync() as Void {
-        Application.Storage.setValue(Keys.SYNC_REQUEST, now());
+        put(Keys.SYNC_REQUEST, now());
     }
 
     function syncRequested() as Boolean {
@@ -502,7 +580,7 @@ module Store {
     }
 
     function noteSyncResult(error as String?) as Void {
-        Application.Storage.setValue(Keys.LAST_SYNC, [now(), error] as Array);
+        put(Keys.LAST_SYNC, [now(), error] as Array);
     }
 
     function lastSyncResult() as Array? {
@@ -556,6 +634,10 @@ module Current {
     }
 
     function set(bookId as String) as Void {
-        Application.Storage.setValue(Keys.CURRENT, bookId);
+        Store.put(Keys.CURRENT, bookId);
+    }
+
+    function clear() as Void {
+        Application.Storage.deleteValue(Keys.CURRENT);
     }
 }

@@ -71,9 +71,10 @@ class ProgressPush {
     private function begin() as Void {
         _entries = null;
         _loading = null;
+        _client = new ProxyClient();
         if (!_client.isConfigured()) {
             Log.error("Push: not configured");
-            finish(Rez.Strings.notConfigured);
+            finish(_client.setupProblem(Rez.Strings.notConfigured));
             return;
         }
         _startedMs = System.getTimer();

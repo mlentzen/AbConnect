@@ -110,11 +110,11 @@ class AbSyncDelegate extends Communications.SyncDelegate {
             Log.info("Sync: needed, requested");
             return true;
         }
-        if (Settings.syncOnPluggedIn()) {
+        if (Settings.followSystemSync()) {
             Log.info("Sync: needed, started by the system");
             return true;
         }
-        Log.info("Sync: not needed, plugged-in sync is off");
+        Log.info("Sync: not needed, system sync is off");
         return false;
     }
 
@@ -126,7 +126,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         startWatchdog();
         startNotificationWatch();
         if (!_client.isConfigured()) {
-            finish(Util.text(Rez.Strings.errNotSetUp));
+            finish(Util.text(_client.setupProblem(Rez.Strings.errNotSetUp)));
             return;
         }
         pushProgress();
@@ -434,6 +434,10 @@ class AbSyncDelegate extends Communications.SyncDelegate {
             finish(null);
             return;
         }
+        if (books.size() == 0) {
+            finish(Util.text(Rez.Strings.playlistEmpty));
+            return;
+        }
         Store.rememberPlaylist(books as Array);
         var wanted = Store.desired();
         _orphans = booksNotIn(wanted);
@@ -526,12 +530,12 @@ class AbSyncDelegate extends Communications.SyncDelegate {
             return;
         }
         for (var i = 0; i < page.size(); ++i) {
-            if (page[i] instanceof Dictionary) {
+            if (page[i] instanceof Dictionary && inRange((page[i] as Dictionary)["index"])) {
                 _segmentsAccum.add(page[i] as Dictionary);
             }
         }
         var next = data["next"];
-        if (next instanceof Number) {
+        if (next instanceof Number && next > _segmentsAfter && _segmentsAccum.size() < Store.MAX_SEGMENTS) {
             _segmentsAfter = next;
             fetchSegmentsPage();
             return;
@@ -546,6 +550,10 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         queueSegmentWork(bookId, segments);
     }
 
+    private function inRange(index as Object?) as Boolean {
+        return index instanceof Number && index >= 0 && index < Store.MAX_SEGMENTS;
+    }
+
     private function queueSegmentWork(bookId as String, segments as Array<Dictionary>) as Void {
         var durations = serverDurations(segments);
         var facts = Store.localSegmentFacts(bookId);
@@ -553,12 +561,12 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         startDropping(bookId, [] as Array, false);
         for (var i = 0; i < facts.size(); ++i) {
             var fact = facts[i];
-            var index = fact["index"];
-            var duration = fact["duration"];
+            var index = fact[Store.SEG_INDEX];
+            var duration = fact[Store.SEG_DURATION];
             if (index instanceof Number && duration instanceof Number && sameSegment(durations, index, duration)) {
                 kept.add(index);
-            } else if (fact["ref"] != null) {
-                _staleRefs.add(fact["ref"]);
+            } else if (fact[Store.SEG_REF] != null) {
+                _staleRefs.add(fact[Store.SEG_REF]);
             }
         }
 
@@ -651,9 +659,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         _staleAt += 1;
         if (ref != null) {
             Media.deleteCachedItem(new Media.ContentRef(ref, Media.CONTENT_TYPE_AUDIO));
-            if (!_dropWholeBook) {
-                Store.dropLocalTrack(bookId, ref);
-            }
+            Store.dropLocalTrack(bookId, ref);
         }
         markActivity();
         report();
@@ -691,7 +697,7 @@ class AbSyncDelegate extends Communications.SyncDelegate {
         var segment = _downloads[0];
         _downloads.remove(segment);
         var path = segment["url"];
-        if (!(path instanceof String)) {
+        if (!(path instanceof String) || path.find("/") != 0) {
             _bookBytesTotal -= Util.numberOf(segment["bytes"]).toFloat();
             if (_bookBytesTotal < _bookBytesDone) {
                 _bookBytesTotal = _bookBytesDone;
@@ -727,6 +733,8 @@ class AbSyncDelegate extends Communications.SyncDelegate {
             var title = Util.stringOr(segment["title"], index.toString());
             if (!Store.addLocalTrack(bookId, data.getId(), index, Util.numberOf(segment["duration"]), title)) {
                 _failure = Util.text(Rez.Strings.errStoreFull);
+                Media.deleteCachedItem(data);
+                _downloads = [] as Array<Dictionary>;
             }
             _bookBytesDone += _segmentBudget.toFloat();
         } else {
@@ -734,6 +742,11 @@ class AbSyncDelegate extends Communications.SyncDelegate {
                 return;
             }
             _failure = Errors.fromCode(code);
+            if (code == Communications.STORAGE_FULL) {
+                Log.error("Sync: media cache is full, nothing more to fetch");
+                _downloads = [] as Array<Dictionary>;
+                _bookQueue = [] as Array<String>;
+            }
         }
         clearSegmentProgress();
         report();
@@ -741,6 +754,12 @@ class AbSyncDelegate extends Communications.SyncDelegate {
     }
 
     private function worthRetrying(code as Number) as Boolean {
+        if (code == Communications.STORAGE_FULL
+            || code == Communications.SECURE_CONNECTION_REQUIRED
+            || code == Communications.UNSUPPORTED_CONTENT_TYPE_IN_RESPONSE
+            || code == Communications.UNABLE_TO_PROCESS_MEDIA) {
+            return false;
+        }
         return code < 400 || code >= 500;
     }
 

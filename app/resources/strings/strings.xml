@@ -6,8 +6,8 @@
     <string id="settingProxyTokenTitle">Proxy token</string>
     <string id="settingProxyTokenPrompt">This watch's token from the proxy's users.toml</string>
 
-    <string id="settingSyncOnPluggedInTitle">Sync on plugged in</string>
-    <string id="settingSyncOnPluggedInPrompt">Download books when the watch starts a sync, for example while charging</string>
+    <string id="settingFollowSystemSyncTitle">Follow system sync</string>
+    <string id="settingFollowSystemSyncPrompt">Download books whenever the watch starts a sync</string>
     <string id="settingOn">On</string>
     <string id="settingOff">Off</string>
 
@@ -47,6 +47,7 @@
     <string id="progressNotSent">Progress not synced</string>
     <string id="tries">tries</string>
     <string id="errNotSetUp">Proxy not set up</string>
+    <string id="errHttpsUrl">The proxy URL must start with https://</string>
     <string id="errNoResponse">The server did not answer</string>
     <string id="errNoConnection">No connection</string>
     <string id="errRejected">Token rejected</string>

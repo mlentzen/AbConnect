@@ -29,6 +29,26 @@ module Util {
         return (number == null) ? 0 : number;
     }
 
+    function withoutSeparator(value as String) as String {
+        if (value.find("|") == null) {
+            return value;
+        }
+        var parts = split(value, "|");
+        var result = parts[0];
+        for (var i = 1; i < parts.size(); ++i) {
+            result += "/" + parts[i];
+        }
+        return result;
+    }
+
+    function isSafeId(value as String) as Boolean {
+        return value.length() > 0
+            && value.find("/") == null
+            && value.find("?") == null
+            && value.find("#") == null
+            && value.find("|") == null;
+    }
+
     function split(value as String, separator as String) as Array<String> {
         var parts = [] as Array<String>;
         var rest = value;

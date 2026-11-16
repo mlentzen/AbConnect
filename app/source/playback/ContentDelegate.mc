@@ -79,8 +79,11 @@ class AbContentDelegate extends Media.ContentDelegate {
             seconds = Util.toNumber(parts[1]);
         }
         var now = Time.now().value();
-        Store.rememberPosition(bookId, segment, seconds, now);
-        Store.notePlayed(bookId, segment, seconds, now);
+        var stored = Store.position(bookId);
+        if (stored == null || stored[0] != segment || stored[1] != seconds) {
+            Store.rememberPosition(bookId, segment, seconds, now);
+            Store.notePlayed(bookId, segment, seconds, now);
+        }
 
         if (songEvent == Media.SONG_EVENT_PAUSE || songEvent == Media.SONG_EVENT_STOP) {
             pushOverPhone();

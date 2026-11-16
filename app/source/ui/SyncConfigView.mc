@@ -21,7 +21,7 @@ class SyncConfigView extends WatchUi.View {
             return;
         }
         if (!_client.isConfigured()) {
-            MessageView.show(Util.text(Rez.Strings.notConfigured));
+            MessageView.show(Util.text(_client.setupProblem(Rez.Strings.notConfigured)));
             return;
         }
         Log.info("Config: fetching playlist");
@@ -140,7 +140,7 @@ class PlaylistMenuDelegate extends WatchUi.Menu2InputDelegate {
 
     function onSelect(item as WatchUi.MenuItem) as Void {
         var bookId = item.getId();
-        if (!(bookId instanceof String) || Store.localTracks(bookId).size() == 0) {
+        if (!(bookId instanceof String) || !Store.hasTracks(bookId)) {
             return;
         }
         Log.info("Playlist: open " + bookId);
@@ -157,15 +157,22 @@ class PlaylistFetchView extends WatchUi.View {
     private var _client as ProxyClient;
     private var _started as Boolean;
     private var _opened as Boolean;
+    private var _visible as Boolean;
 
     function initialize() {
         View.initialize();
         _client = new ProxyClient();
         _started = false;
         _opened = false;
+        _visible = false;
+    }
+
+    function onHide() as Void {
+        _visible = false;
     }
 
     function onShow() as Void {
+        _visible = true;
         if (_opened) {
             WatchUi.popView(WatchUi.SLIDE_IMMEDIATE);
             return;
@@ -175,7 +182,7 @@ class PlaylistFetchView extends WatchUi.View {
         }
         _started = true;
         if (!_client.isConfigured()) {
-            MessageView.show(Util.text(Rez.Strings.notConfigured));
+            MessageView.show(Util.text(_client.setupProblem(Rez.Strings.notConfigured)));
             return;
         }
         Log.info("Playlist: fetching");
@@ -188,6 +195,10 @@ class PlaylistFetchView extends WatchUi.View {
 
     function onPlaylist(code as Number, data as Dictionary or String or Null) as Void {
         Log.response("Playlist: fetched", code);
+        if (!_visible) {
+            Log.info("Playlist: answer after the view was left");
+            return;
+        }
         if (SyncConfigView.showReply(code, data, true)) {
             _opened = true;
         }

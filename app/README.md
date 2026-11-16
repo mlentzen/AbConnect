@@ -75,7 +75,7 @@ AbConnect
 ├─ Sync progress         positions both ways over the phone, no Wi-Fi, no sync mode
 ├─ Download books        Wi-Fi: report progress, read the playlist, mirror it; shows how the last sync went
 ├─ Server selection      the playlist and the state of each book
-├─ Settings              proxy URL, token, Sync on plugged in, and Reset everything
+├─ Settings              proxy URL, token, Follow system sync, and Reset everything
 └─ Info                  version, build date, and what is on the watch
 ```
 

@@ -56,14 +56,13 @@ class AbContentIterator extends Media.ContentIterator {
         var segments = Store.orderedSegments(_bookId);
         for (var i = 0; i < segments.size(); ++i) {
             var segment = segments[i];
-            var duration = segment["duration"] as Number;
-            _refs.add(segment["ref"]);
-            _titles.add(segment["title"] as String);
-            _numbers.add(segment["index"] as Number);
-            _lengths.add(duration);
-            _starts.add(_total);
-            _total += duration;
+            _refs.add(segment[Store.SEG_REF]);
+            _titles.add(segment[Store.SEG_TITLE] as String);
+            _numbers.add(segment[Store.SEG_INDEX] as Number);
+            _lengths.add(segment[Store.SEG_DURATION] as Number);
         }
+        _starts = Store.segmentStarts(segments);
+        _total = _starts[segments.size()];
     }
 
     private function applyStoredPosition() as Void {

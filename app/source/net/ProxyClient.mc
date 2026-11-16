@@ -41,7 +41,14 @@ class ProxyClient {
     }
 
     function isConfigured() as Boolean {
-        return _base.length() > 0 && _token.length() > 0;
+        return _base.find("https://") == 0 && _token.length() > 0;
+    }
+
+    function setupProblem(notSetUp as Lang.ResourceId) as Lang.ResourceId {
+        if (_base.find("http://") == 0) {
+            return Rez.Strings.errHttpsUrl;
+        }
+        return notSetUp;
     }
 
     function playlist(callback as Method) as Void {

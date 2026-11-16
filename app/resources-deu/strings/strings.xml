@@ -6,8 +6,8 @@
     <string id="settingProxyTokenTitle">Proxy-Token</string>
     <string id="settingProxyTokenPrompt">Das Token dieser Uhr aus der users.toml des Proxy</string>
 
-    <string id="settingSyncOnPluggedInTitle">Sync beim Laden</string>
-    <string id="settingSyncOnPluggedInPrompt">Bücher laden, wenn die Uhr eine Synchronisation startet, z. B. beim Laden</string>
+    <string id="settingFollowSystemSyncTitle">System-Sync folgen</string>
+    <string id="settingFollowSystemSyncPrompt">Bücher laden, sobald die Uhr eine Synchronisierung startet</string>
     <string id="settingOn">An</string>
     <string id="settingOff">Aus</string>
 
@@ -47,6 +47,7 @@
     <string id="progressNotSent">Fortschritt nicht synchronisiert</string>
     <string id="tries">Versuche</string>
     <string id="errNotSetUp">Proxy nicht eingerichtet</string>
+    <string id="errHttpsUrl">Die Proxy-URL muss mit https:// beginnen</string>
     <string id="errNoResponse">Der Server antwortet nicht</string>
     <string id="errNoConnection">Keine Verbindung</string>
     <string id="errRejected">Token abgelehnt</string>

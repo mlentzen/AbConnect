@@ -5,6 +5,7 @@ from abconnect_proxy.progress import (
     book_time,
     choose,
     position,
+    server_time,
     server_timestamp,
 )
 
@@ -37,6 +38,18 @@ class TestMapping:
 
     def test_empty_plan_yields_the_start(self):
         assert position([], 500) == Position(0, 0.0)
+
+
+class TestServerTime:
+    def test_reads_the_current_time(self):
+        assert server_time({"currentTime": 1020.5}, SEGMENTS) == 1020.5
+
+    def test_a_finished_book_stands_at_its_end(self):
+        stored = {"currentTime": 2399.2, "isFinished": True}
+        assert server_time(stored, SEGMENTS) == 2400.0
+
+    def test_nothing_stored_means_zero(self):
+        assert server_time(None, SEGMENTS) == 0.0
 
 
 class TestServerTimestamp:

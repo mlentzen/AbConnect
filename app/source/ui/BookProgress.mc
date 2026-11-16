@@ -7,17 +7,9 @@ module BookProgress {
         if (spot == null) {
             return null;
         }
-        var facts = Store.localSegmentFacts(bookId);
-        var total = 0;
-        var before = 0;
-        for (var i = 0; i < facts.size(); ++i) {
-            var duration = facts[i]["duration"] as Number;
-            total += duration;
-            if ((facts[i]["index"] as Number) < spot[0]) {
-                before += duration;
-            }
-        }
-        var done = before + spot[1];
+        var times = Store.segmentTimes(bookId, spot[0]);
+        var total = times[1];
+        var done = times[0] + spot[1];
         if (total <= 0 || done <= 0) {
             return null;
         }

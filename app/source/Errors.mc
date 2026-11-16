@@ -1,10 +1,17 @@
+import Toybox.Communications;
 import Toybox.Lang;
 
 module Errors {
 
     function fromCode(code as Number) as String {
         var resource = Rez.Strings.errOther;
-        if (code <= 0) {
+        if (code == Communications.STORAGE_FULL) {
+            resource = Rez.Strings.errStoreFull;
+        } else if (code == Communications.SECURE_CONNECTION_REQUIRED
+            || code == Communications.UNSUPPORTED_CONTENT_TYPE_IN_RESPONSE
+            || code == Communications.UNABLE_TO_PROCESS_MEDIA) {
+            resource = Rez.Strings.errOther;
+        } else if (code <= 0) {
             resource = Rez.Strings.errNoConnection;
         } else if (code == 401 || code == 403) {
             resource = Rez.Strings.errRejected;

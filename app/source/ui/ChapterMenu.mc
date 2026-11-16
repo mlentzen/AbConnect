@@ -15,30 +15,29 @@ class ChapterMenu extends WatchUi.Menu2 {
         _focusAt = 0;
 
         var segments = Store.orderedSegments(bookId);
+        var starts = Store.segmentStarts(segments);
         var position = Store.position(bookId);
         Log.debugCode("Chapters: building for segments", segments.size());
 
         if (position != null) {
             addItem(new WatchUi.MenuItem(
-                Util.text(Rez.Strings.resume), landingPoint(segments, position), $.RESUME_ITEM, null
+                Util.text(Rez.Strings.resume), landingPoint(segments, starts, position), $.RESUME_ITEM, null
             ));
         }
         addItem(new WatchUi.MenuItem(Util.text(Rez.Strings.fromStart), null, $.FROM_START_ITEM, null));
 
         var leadingRows = (position == null) ? 1 : 2;
         var playing = (position == null) ? -1 : position[0];
-        var start = 0;
         for (var i = 0; i < segments.size(); ++i) {
-            var number = segments[i]["index"] as Number;
-            var when = clock(start);
+            var number = segments[i][Store.SEG_INDEX] as Number;
+            var when = clock(starts[i]);
             if (number == playing) {
                 when += " · " + Util.text(Rez.Strings.chapterNow);
                 _focusAt = leadingRows + i;
             }
             addItem(new WatchUi.MenuItem(
-                MenuText.label(segments[i]["title"] as String, number.toString()), when, number, null
+                MenuText.label(segments[i][Store.SEG_TITLE] as String, number.toString()), when, number, null
             ));
-            start += segments[i]["duration"] as Number;
         }
     }
 
@@ -57,20 +56,20 @@ class ChapterMenu extends WatchUi.Menu2 {
         }
         var segments = Store.orderedSegments(bookId);
         for (var i = 0; i < segments.size(); ++i) {
-            if ((segments[i]["index"] as Number) == position[0]) {
-                return segments[i]["title"] as String;
+            if ((segments[i][Store.SEG_INDEX] as Number) == position[0]) {
+                return segments[i][Store.SEG_TITLE] as String;
             }
         }
         return null;
     }
 
-    private static function landingPoint(segments as Array<Dictionary>, position as Array<Number>) as String {
-        var start = 0;
+    private static function landingPoint(
+        segments as Array<Array>, starts as Array<Number>, position as Array<Number>
+    ) as String {
         for (var i = 0; i < segments.size(); ++i) {
-            if ((segments[i]["index"] as Number) == position[0]) {
-                return (segments[i]["title"] as String) + " - " + clock(start + position[1]);
+            if ((segments[i][Store.SEG_INDEX] as Number) == position[0]) {
+                return (segments[i][Store.SEG_TITLE] as String) + " - " + clock(starts[i] + position[1]);
             }
-            start += segments[i]["duration"] as Number;
         }
         return clock(position[1]);
     }
@@ -111,7 +110,7 @@ class ChapterMenuDelegate extends WatchUi.Menu2InputDelegate {
 
     private function firstSegment() as Number {
         var segments = Store.orderedSegments(_bookId);
-        return (segments.size() > 0) ? segments[0]["index"] as Number : 0;
+        return (segments.size() > 0) ? segments[0][Store.SEG_INDEX] as Number : 0;
     }
 
     private function startAt(segment as Number) as Void {

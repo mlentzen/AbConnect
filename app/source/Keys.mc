@@ -9,7 +9,6 @@ module Keys {
     const CURRENT = "CUR";
     const SYNC_REQUEST = "SYN";
     const SYNC_RESUME = "RSM";
-    const LEGACY_AUTO_SYNC = "AUT";
     const LAST_SYNC = "SRS";
     const LAST_PLAYED = "LPL";
     const PLAYLIST = "PLS";
@@ -34,10 +33,10 @@ module Keys {
 module Settings {
     const PROXY_URL = "proxyUrl";
     const PROXY_TOKEN = "proxyToken";
-    const SYNC_ON_PLUGGED_IN = "syncOnPluggedIn";
+    const FOLLOW_SYSTEM_SYNC = "followSystemSync";
 
-    function syncOnPluggedIn() as Boolean {
-        var value = Application.Properties.getValue(SYNC_ON_PLUGGED_IN);
+    function followSystemSync() as Boolean {
+        var value = Application.Properties.getValue(FOLLOW_SYSTEM_SYNC);
         return (value instanceof Boolean) ? value : true;
     }
 }
